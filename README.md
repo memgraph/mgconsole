@@ -36,6 +36,7 @@ this location, use `-DCMAKE_INSTALL_PREFIX` option when running CMake.
 ## Example usage
 
 ```
+$ mgconsole --host 127.0.0.1 --port 7687 --use-ssl=false
 mgconsole 0.1
 Type :help for shell usage
 Quit the shell by typing Ctrl-D(eof) or :quit
