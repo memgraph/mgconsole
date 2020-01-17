@@ -69,4 +69,7 @@ target_link_libraries(mgconsole ${MGCLIENT_LIBRARY} ${GFLAGS_LIBRARY}
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
         "${CMAKE_CURRENT_BINARY_DIR}/version.hpp")
 
-install(TARGETS mgconsole)
+include(GNUInstallDirs)
+
+install(TARGETS mgconsole
+       RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
