@@ -15,23 +15,43 @@ To build and install mgconsole from source you will need:
   - [readline](https://tiswww.case.edu/php/chet/readline/rltop.html) library
     and headers
 
-Once everything is in place, create a build directory inside the source directory and configure the build by running CMake from it:
+To install compile dependencies on Debian / Ubuntu:
 
 ```
-$ mkdir build
-$ cd build
-$ cmake ..
+apt-get install -y git cmake make gcc g++ libssl-dev libreadline-dev
 ```
 
-After running CMake, you should see a Makefile in the build directory. Then you can build the project by running:
+On RedHat / CentOS / Fedora:
+
+```
+yum install -y git cmake make gcc gcc-c++ openssl-devel readline-devel
+```
+
+Once everything is in place (please make sure `mgclient` is installed), create
+a build directory inside the source directory and configure the build by
+running CMake from it:
+
+```
+mkdir build
+cd build
+cmake ..
+```
+
+After running CMake, you should see a Makefile in the build directory. Then you
+can build the project by running:
 
 ```
 make
 ```
 
-This will build the `mgconsole` binary. To install it, run `make install`. This
-will install to system default installation directory. If you want to change
-this location, use `-DCMAKE_INSTALL_PREFIX` option when running CMake.
+This will build the `mgconsole` binary. To install it, run:
+
+```
+make install
+```
+
+This will install to system default installation directory. If you want to
+change this location, use `-DCMAKE_INSTALL_PREFIX` option when running CMake.
 
 ## Example usage
 
