@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # mgconsole - console client for Memgraph database
-# Copyright (C) 2016-2019 Memgraph Ltd. [https://memgraph.com]
+# Copyright (C) 2016-2020 Memgraph Ltd. [https://memgraph.com]
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -83,14 +83,15 @@ fi
 
 # Start the memgraph process and wait for it to start.
 echo_info "Starting memgraph"
-$memgraph_binary --port 7687 \
-        --cert-file=$cert_file \
-        --key-file=$key_file \
-        --durability-directory=$tmpdir \
-        --db-recover-on-startup=false \
-        --durability-enabled=false \
-        --properties-on-disk='' \
-        --snapshot-on-exit=false \
+$memgraph_binary --bolt-port 7687 \
+        --bolt-cert-file=$cert_file \
+        --bolt-key-file=$key_file \
+        --data-directory=$tmpdir \
+        --storage-properties-on-edges=true \
+        --storage-snapshot-interval-sec=0 \
+        --storage-wal-enabled=false \
+        --storage-recover-on-startup=false \
+        --storage-snapshot-on-exit=false \
         --telemetry-enabled=false \
         --log-file='' &
 

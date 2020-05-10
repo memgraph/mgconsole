@@ -1,3 +1,5 @@
+[![Actions Status](https://github.com/memgraph/mgconsole/workflows/CI/badge.svg)](https://github.com/memgraph/mgconsole/actions)
+
 # mgconsole
 
 mgconsole is a command line interface for [Memgraph](https://memgraph.com)
