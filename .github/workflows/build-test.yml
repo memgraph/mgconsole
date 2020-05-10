@@ -1,0 +1,42 @@
+name: build-test
+
+on: [push]
+
+jobs:
+  build_and_test:
+    strategy:
+     matrix:
+        platform: [ubuntu-18.04]
+    runs-on: ${{ matrix.platform }}
+    steps:
+    - name: Install system dependencies
+      if: matrix.platform == 'ubuntu-18.04'
+      run: sudo apt-get install -y git cmake make gcc g++ libssl-dev libreadline-dev
+
+    - name: Download and install memgraph
+      if: matrix.platform == 'ubuntu-18.04'
+      run: |
+        curl https://memgraph.com/download/memgraph/v1.0.0/ubuntu-18.04/memgraph_1.0.0-community-1_amd64.deb > ~/memgraph/memgraph_1.0.0-community-1_amd64.deb
+        sudo dpkg -i ~/memgraph/memgraph_1.0.0-community-1_amd64.deb
+
+    - name: Download mgclient
+      uses: actions/checkout@master
+      with:
+        repository: memgraph/mgclient
+    - name: Install mgclient
+      run: |
+        mkdir build
+        cd build
+        cmake ..
+        make
+        sudo make install
+
+    - uses: actions/checkout@v1
+    - name: Install and test mgconsole
+      run: |
+        mkdir build
+        cd build
+        cmake ..
+        make
+        sudo make install
+        ctest
