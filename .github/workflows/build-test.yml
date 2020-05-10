@@ -16,7 +16,7 @@ jobs:
     - name: Download and install memgraph
       if: matrix.platform == 'ubuntu-18.04'
       run: |
-        curl https://memgraph.com/download/memgraph/v1.0.0/ubuntu-18.04/memgraph_1.0.0-community-1_amd64.deb > ~/memgraph/memgraph_1.0.0-community-1_amd64.deb
+        curl -L https://memgraph.com/download/memgraph/v1.0.0/ubuntu-18.04/memgraph_1.0.0-community-1_amd64.deb > ~/memgraph/memgraph_1.0.0-community-1_amd64.deb
         sudo dpkg -i ~/memgraph/memgraph_1.0.0-community-1_amd64.deb
 
     - name: Download mgclient
