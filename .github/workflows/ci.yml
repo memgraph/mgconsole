@@ -19,6 +19,7 @@ jobs:
         mkdir ~/memgraph
         curl -L https://memgraph.com/download/memgraph/v1.0.0/ubuntu-18.04/memgraph_1.0.0-community-1_amd64.deb > ~/memgraph/memgraph_1.0.0-community-1_amd64.deb
         sudo dpkg -i ~/memgraph/memgraph_1.0.0-community-1_amd64.deb
+        sudo systemctl disable memgraph
 
     - name: Download mgclient
       uses: actions/checkout@master

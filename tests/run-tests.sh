@@ -84,13 +84,13 @@ fi
 # Start the memgraph process and wait for it to start.
 echo_info "Starting memgraph"
 $memgraph_binary --port 7687 \
-        --cert-file=$cert_file \
-        --key-file=$key_file \
-        --durability-directory=$tmpdir \
-        --db-recover-on-startup=false \
-        --durability-enabled=false \
-        --properties-on-disk='' \
-        --snapshot-on-exit=false \
+        --bolt-cert-file=$cert_file \
+        --bolt-key-file=$key_file \
+        --data-directory=$tmpdir \
+        --storage-properties-on-edges=true \
+        --storage-snapshot-interval-sec=0 \
+        --storage-recover-on-startup=false \
+        --storage-snapshot-on-exit=false \
         --telemetry-enabled=false \
         --log-file='' &
 
