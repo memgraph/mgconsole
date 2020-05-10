@@ -1,4 +1,4 @@
-[![Actions Status](https://github.com/memgraph/mgconsole/workflows/ci/badge.svg)](https://github.com/memgraph/mgconsole/actions)
+[![Actions Status](https://github.com/memgraph/mgconsole/workflows/CI/badge.svg)](https://github.com/memgraph/mgconsole/actions)
 
 # mgconsole
 
