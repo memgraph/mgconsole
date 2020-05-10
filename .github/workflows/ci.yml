@@ -6,20 +6,9 @@ jobs:
   build_and_test:
     strategy:
      matrix:
-        platform: [ubuntu-16.04, ubuntu-18.04]
+        platform: [ubuntu-18.04]
     runs-on: ${{ matrix.platform }}
     steps:
-    - name: Install dependencies (Ubuntu 16.04)
-      if: matrix.platform == 'ubuntu-16.04'
-      run: |
-        sudo apt install -y git cmake make gcc g++ libssl-dev libreadline-dev # mgconsole deps
-        sudo apt install -y python3-pip # memgraph deps
-        sudo pip3 install networkx
-        mkdir ~/memgraph
-        curl -L https://memgraph.com/download/memgraph/v1.0.0/ubuntu-16.04/memgraph_1.0.0-community-1_amd64.deb > ~/memgraph/memgraph_1.0.0-community-1_amd64.deb
-        sudo dpkg -i ~/memgraph/memgraph_1.0.0-community-1_amd64.deb
-        sudo systemctl stop memgraph && sudo systemctl disable memgraph
-
     - name: Install dependencies (Ubuntu 18.04)
       if: matrix.platform == 'ubuntu-18.04'
       run: |
