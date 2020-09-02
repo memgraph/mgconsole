@@ -627,7 +627,7 @@ static std::experimental::optional<std::string> GetQuery() {
       char_count += 1;  // ';' sign
     } else {
       // Query is multiline so append whitespace.
-      query << " ";
+      query << "\n";
     }
     if (char_count < line->size()) {
       default_text = utils::Trim(line->substr(char_count));
