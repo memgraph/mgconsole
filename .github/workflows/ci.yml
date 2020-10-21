@@ -14,16 +14,16 @@ jobs:
       run: |
         sudo apt install -y git cmake make gcc g++ libssl-dev libreadline-dev # mgconsole deps
         sudo apt install -y libpython3.7 python3-pip # memgraph deps
-        sudo pip3 install networkx
         mkdir ~/memgraph
-        curl -L https://memgraph.com/download/memgraph/v1.0.0/ubuntu-18.04/memgraph_1.0.0-community-1_amd64.deb > ~/memgraph/memgraph_1.0.0-community-1_amd64.deb
-        sudo dpkg -i ~/memgraph/memgraph_1.0.0-community-1_amd64.deb
+        curl -L https://memgraph.com/download/memgraph/v1.2.0/ubuntu-18.04/memgraph_1.2.0-community-1_amd64.deb > ~/memgraph/memgraph_1.2.0-community-1_amd64.deb
+        sudo dpkg -i ~/memgraph/memgraph_1.2.0-community-1_amd64.deb
         sudo systemctl stop memgraph && sudo systemctl disable memgraph
 
     - name: Download mgclient
       uses: actions/checkout@master
       with:
         repository: memgraph/mgclient
+        ref: '5ae69ea4774e9b525a2be0c9fc25fb83490f13bb' # Prior to Bolt v4.
     - name: Install mgclient
       run: |
         mkdir build
