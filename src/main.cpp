@@ -67,7 +67,7 @@ DEFINE_string(host, "127.0.0.1",
 DEFINE_int32(port, 7687, "Server port");
 DEFINE_string(username, "", "Username for the database");
 DEFINE_string(password, "", "Password for the database");
-DEFINE_bool(use_ssl, true, "Use SSL when connecting to the server.");
+DEFINE_bool(use_ssl, false, "Use SSL when connecting to the server.");
 DEFINE_bool(fit_to_screen, false, "Fit output width to screen width.");
 DEFINE_string(output_format, "tabular",
               "Query output format. Can be csv/tabular. If output format is "
