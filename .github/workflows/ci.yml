@@ -23,7 +23,7 @@ jobs:
       uses: actions/checkout@master
       with:
         repository: memgraph/mgclient
-        ref: '5ae69ea4774e9b525a2be0c9fc25fb83490f13bb' # Prior to Bolt v4.
+        ref: 'release/1.0'
     - name: Install mgclient
       run: |
         mkdir build
