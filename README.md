@@ -13,7 +13,7 @@ To build and install mgconsole from source you will need:
   - C compiler supporting C11
   - C++ compiler supporting C++14 with support for Filesystem TS (at least
     experimental)
-  - [mgclient v1.0](https://github.com/memgraph/mgclient/tree/release/1.0) library and headers
+  - [mgclient == 1.0](https://github.com/memgraph/mgclient/releases/tag/v1.0.0) library and headers, [install instructions](https://github.com/memgraph/mgclient/tree/release/1.0)
   - [readline](https://tiswww.case.edu/php/chet/readline/rltop.html) library
     and headers
 
