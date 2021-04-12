@@ -16,6 +16,7 @@
 
 include(ExternalProject)
 
+find_package(Threads REQUIRED)
 if(APPLE)
   set(CMAKE_THREAD_LIBS_INIT "-lpthread")
   set(CMAKE_HAVE_THREADS_LIBRARY 1)
@@ -23,7 +24,6 @@ if(APPLE)
   set(CMAKE_USE_PTHREADS_INIT 1)
   set(THREADS_PREFER_PTHREAD_FLAG ON)
 endif()
-find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Readline REQUIRED)
 
