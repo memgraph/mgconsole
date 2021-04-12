@@ -3,7 +3,7 @@ name: CI
 on: [push]
 
 jobs:
-  build_and_test:
+  build_and_test_linux:
     strategy:
      matrix:
         platform: [ubuntu-18.04]
@@ -41,3 +41,34 @@ jobs:
         make
         sudo make install
         ctest
+
+  build_apple:
+    strategy:
+      matrix:
+        platform: [macos-10.15]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Download mgclient
+        uses: actions/checkout@master
+        with:
+          repository: memgraph/mgclient
+          ref: 'v1.2.0'
+
+      - name: Install mgclient
+        run: |
+          mkdir build
+          cd build
+          cmake -DOPENSSL_ROOT_DIR=/usr/local/Cellar/openssl@1.1/1.1.1i ..
+          make
+          sudo make install
+
+      - name: Set-up mgconsole
+        uses: actions/checkout@v2
+
+      - name: Build mgconsole
+        run: |
+          mkdir build
+          cd build
+          cmake ..
+          make
+          sudo make install
