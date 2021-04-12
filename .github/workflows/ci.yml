@@ -58,7 +58,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake -DOPENSSL_ROOT_DIR="$(ls -td -- /usr/local/Cellar/openssl@1.1/* | head -n 1)" ..
+          cmake -DOPENSSL_ROOT_DIR="$(ls -td -- /usr/local/Cellar/openssl@1.1/* | head -n 1)" -DCMAKE_INSTALL_PREFIX=/usr/local ..
           make
           sudo make install
 
