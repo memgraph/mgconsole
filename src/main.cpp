@@ -44,19 +44,28 @@ static const std::string kUsage =
     "Memgraph bolt client.\n"
     "The client can be run in interactive or non-interactive mode.\n";
 static const std::string kInteractiveUsage =
-    "In interactive mode, user can enter cypher queries and supported "
+    "In interactive mode, users can enter Cypher queries and supported "
     "commands.\n\n"
     "Cypher queries can span through multiple lines and conclude with a\n"
     "semi-colon (;). Each query is executed in the database and the results\n"
     "are printed out.\n\n"
     "The following interactive commands are supported:\n\n"
     "\t:help\t Print out usage for interactive mode\n"
-    "\t:quit\t Exit the shell\n";
+    "\t:docs\t Print a list of recommended resources\n"
+    "\t:quit\t Exit the shell\n\n"
+    "Official mgconsole documentation available on: https://memgr.ph/mgconsole\n";
+static const std::string kDocs =
+    "If you are new to Memgraph or the Cypher query language, check out these resources:\n\n"
+    "\tQuerying with Cypher:  https://memgr.ph/querying\n"
+    "\tImporting data:  https://memgr.ph/importing-data\n"
+    "\tDatabase configuration:  https://memgr.ph/configuration\n\n"
+    "Official mgconsole documentation available on: https://memgr.ph/mgconsole\n";
 
 // Supported commands.
 // Maybe also add reconnect?
 static const std::string kCommandQuit = ":quit";
 static const std::string kCommandHelp = ":help";
+static const std::string kCommandDocs = ":docs";
 
 // Supported formats.
 static const std::string kCsvFormat = "csv";
@@ -123,6 +132,7 @@ static const std::string kPrompt = "memgraph> ";
 static const std::string kMultilinePrompt = "       -> ";
 
 static void PrintHelp() { std::cout << kInteractiveUsage << std::endl; }
+static void PrintDocs() { std::cout << kDocs << std::endl; }
 
 namespace wrap {
 /// Unique pointers with custom deleters for automatic memory management of
@@ -610,6 +620,9 @@ static std::experimental::optional<std::string> GetQuery() {
         } else if (trimmed_line == kCommandHelp) {
           PrintHelp();
           return "";
+        } else if (trimmed_line == kCommandDocs) {
+          PrintDocs();
+          return "";
         } else {
           EchoFailure("Unsupported command", trimmed_line);
           PrintHelp();
@@ -1012,10 +1025,11 @@ int main(int argc, char **argv) {
   }
 
   EchoInfo("mgconsole "s + gflags::VersionString());
+  EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" +
+           std::to_string(FLAGS_port) + "'\n");
   EchoInfo("Type :help for shell usage");
   EchoInfo("Quit the shell by typing Ctrl-D(eof) or :quit");
-  EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" +
-           std::to_string(FLAGS_port) + "'");
+
   int num_retries = 3;
   while (true) {
     auto query = GetQuery();
