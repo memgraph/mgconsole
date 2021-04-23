@@ -20,6 +20,9 @@ find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Readline REQUIRED)
 
+# Create compile_commands.json
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Setup GFlags
 ExternalProject_Add(gflags-proj
         PREFIX            gflags
@@ -56,14 +59,19 @@ else()
   message(FATAL_ERROR "Could not find mgclient")
 endif()
 
+# Set up utils
+add_subdirectory(utils)
+set(UTILS_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/utils)
+
 add_compile_options(-Wall -Wextra -pedantic -Werror)
 
 add_executable(mgconsole main.cpp)
 target_include_directories(mgconsole PRIVATE
         ${GFLAGS_INCLUDE_DIRS}
         ${MGCLIENT_INCLUDE_DIRS}
+        ${UTILS_INCLUDE_DIR}
         ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(mgconsole ${MGCLIENT_LIBRARY} ${GFLAGS_LIBRARY}
+target_link_libraries(mgconsole ${MGCLIENT_LIBRARY} ${GFLAGS_LIBRARY} utils
         ${READLINE_LIBRARY} stdc++fs)
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
