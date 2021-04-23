@@ -839,8 +839,17 @@ struct QueryData {
 };
 
 QueryData ExecuteQuery(mg_session *session, const std::string &query) {
-  int status = mg_session_run(session, query.c_str(), nullptr, nullptr);
+  int status = mg_session_run(session, query.c_str(), nullptr, nullptr, nullptr, nullptr);
   auto start = std::chrono::system_clock::now();
+  if (status != 0) {
+    if (mg_session_status(session) == MG_SESSION_BAD) {
+      throw utils::ClientFatalException(mg_session_error(session));
+    } else {
+      throw utils::ClientQueryException(mg_session_error(session));
+    }
+  }
+
+  status = mg_session_pull(session, nullptr);
   if (status != 0) {
     if (mg_session_status(session) == MG_SESSION_BAD) {
       throw utils::ClientFatalException(mg_session_error(session));
@@ -851,7 +860,7 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
 
   QueryData ret;
   mg_result *result;
-  while ((status = mg_session_pull(session, &result)) == 1) {
+  while ((status = mg_session_fetch(session, &result)) == 1) {
     ret.records.push_back(
         wrap::MakeCustomUnique<mg_list>(mg_list_copy(mg_result_row(result))));
     if (!ret.records.back()) {
@@ -859,7 +868,6 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
       std::abort();
     }
   }
-
   if (status != 0) {
     if (mg_session_status(session) == MG_SESSION_BAD) {
       throw utils::ClientFatalException(mg_session_error(session));
@@ -996,7 +1004,7 @@ int main(int argc, char **argv) {
     mg_session_params_set_username(params.get(), FLAGS_username.c_str());
     mg_session_params_set_password(params.get(), password.c_str());
   }
-  mg_session_params_set_client_name(params.get(), bolt_client_version.c_str());
+  mg_session_params_set_user_agent(params.get(), bolt_client_version.c_str());
   mg_session_params_set_sslmode(
       params.get(), FLAGS_use_ssl ? MG_SSLMODE_REQUIRE : MG_SSLMODE_DISABLE);
 
