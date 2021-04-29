@@ -15,9 +15,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <algorithm>
-#include <experimental/filesystem>
-#include <experimental/optional>
 #include <iostream>
+#include <optional>
 #include <thread>
 
 #include <pwd.h>
@@ -26,15 +25,13 @@
 #include <unistd.h>
 
 #include <gflags/gflags.h>
-#include <readline/history.h>
-#include <readline/readline.h>
+
+#include "replxx.h"
 
 #include "mgclient.h"
 #include "version.hpp"
 #include "utils/utils.hpp"
 #include "utils/constants.hpp"
-
-namespace fs = std::experimental::filesystem;
 
 using namespace std::string_literals;
 
@@ -84,53 +81,6 @@ DEFINE_bool(no_history, false, "Do not save history.");
 
 DECLARE_int32(min_log_level);
 
-static char *CompletionGenerator(const char *text, int state) {
-  // This function is called with state=0 the first time; subsequent calls
-  // are with a nonzero state. state=0 can be used to perform one-time
-  // initialization for this completion session.
-  static std::vector<std::string> matches;
-  static size_t match_index = 0;
-
-  if (state == 0) {
-    // During initialization, compute the actual matches for 'text' and
-    // keep them in a static vector.
-    matches.clear();
-    match_index = 0;
-
-    // Collect a vector of matches: vocabulary words that begin with text.
-    std::string text_str = utils::ToUpperCase(std::string(text));
-    for (auto word : constants::kCypherKeywords) {
-      if (word.size() >= text_str.size() &&
-          word.compare(0, text_str.size(), text_str) == 0) {
-        matches.push_back(word);
-      }
-    }
-    for (auto word : constants::kMemgraphKeywords) {
-      if (word.size() >= text_str.size() &&
-          word.compare(0, text_str.size(), text_str) == 0) {
-        matches.push_back(word);
-      }
-    }
-  }
-
-  if (match_index >= matches.size()) {
-    // We return nullptr to notify the caller no more matches are available.
-    return nullptr;
-  } else {
-    // Return a malloc'd char* for the match. The caller frees it.
-    return strdup(matches[match_index++].c_str());
-  }
-}
-
-static char **Completer(const char *text, int, int) {
-  // Don't do filename completion even if our generator finds no matches.
-  rl_attempted_completion_over = 1;
-  // Note: returning nullptr here will make readline use the default filename
-  // completer. This note is copied from examples - I think because
-  // rl_attempted_completion_over is set to 1, filename completer won't be
-  // used.
-  return rl_completion_matches(text, CompletionGenerator);
-}
 
 int main(int argc, char **argv) {
   gflags::SetVersionString(version_string);
@@ -148,11 +98,14 @@ int main(int argc, char **argv) {
         "Run '" + std::string(argv[0]) + " --help' for usage.");
     return 1;
   }
+
+  Replxx *replxx_instance = InitAndSetupReplxx();
+
   auto password = FLAGS_password;
   if (isatty(STDIN_FILENO) && FLAGS_username.size() > 0 &&
       password.size() == 0) {
     console::SetStdinEcho(false);
-    auto password_optional = console::ReadLine("Password: ");
+    auto password_optional = console::ReadLine(replxx_instance, "Password: ");
     std::cout << std::endl;
     if (password_optional) {
       password = *password_optional;
@@ -165,9 +118,6 @@ int main(int argc, char **argv) {
   }
 
 
-  using_history();
-  int history_len = 0;
-  rl_attempted_completion_function = Completer;
   fs::path history_dir = FLAGS_history;
   if (FLAGS_history ==
       (constants::kDefaultHistoryBaseDir + "/" + constants::kDefaultHistoryMemgraphDir)) {
@@ -183,31 +133,26 @@ int main(int argc, char **argv) {
   fs::path history_file = history_dir / constants::kHistoryFilename;
   // Read history file.
   if (fs::exists(history_file)) {
-    auto ret = read_history(history_file.string().c_str());
+    auto ret =
+        replxx_history_load(replxx_instance, history_file.string().c_str());
     if (ret != 0) {
       console::EchoFailure("Unable to read history file", history_file);
       // Should program exit here or just continue with warning message?
       return 1;
     }
-    history_len = history_length;
   }
 
   // Save history function. Used to save readline history after each query.
-  auto save_history = [&history_len, history_file] {
+  auto save_history = [history_file, replxx_instance] {
     if (!FLAGS_no_history) {
-      int ret = 0;
       // If there was no history, create history file.
       // Otherwise, append to existing history.
-      if (history_len == 0) {
-        ret = write_history(history_file.string().c_str());
-      } else {
-        ret = append_history(1, history_file.string().c_str());
-      }
+      auto ret =
+          replxx_history_save(replxx_instance, history_file.string().c_str());
       if (ret != 0) {
         console::EchoFailure("Unable to save history to file", history_file);
         return 1;
       }
-      ++history_len;
     }
     return 0;
   };
@@ -267,7 +212,7 @@ int main(int argc, char **argv) {
            std::to_string(FLAGS_port) + "'");
   int num_retries = 3;
   while (true) {
-    auto query = query::GetQuery();
+    auto query = query::GetQuery(replxx_instance);
     if (!query) {
       console::EchoInfo("Bye");
       break;

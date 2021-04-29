@@ -59,9 +59,8 @@ else()
   message(FATAL_ERROR "Could not find mgclient")
 endif()
 
-# Set up utils
+
 add_subdirectory(utils)
-set(UTILS_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/utils)
 
 add_compile_options(-Wall -Wextra -pedantic -Werror)
 
@@ -69,9 +68,9 @@ add_executable(mgconsole main.cpp)
 target_include_directories(mgconsole PRIVATE
         ${GFLAGS_INCLUDE_DIRS}
         ${MGCLIENT_INCLUDE_DIRS}
-        ${UTILS_INCLUDE_DIR}
+        ${REPLXX_INCLUDE_DIRS}
         ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(mgconsole ${MGCLIENT_LIBRARY} ${GFLAGS_LIBRARY} utils
+      target_link_libraries(mgconsole ${MGCLIENT_LIBRARY} ${GFLAGS_LIBRARY} replxx utils
         ${READLINE_LIBRARY} stdc++fs)
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"

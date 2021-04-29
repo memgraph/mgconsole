@@ -1,12 +1,12 @@
 #include <algorithm>
 #include <iostream>
 
+#include <string.h>
 #include <sys/ioctl.h>
-#include <unistd.h>
 #include <termios.h>
+#include <unistd.h>
 
-#include <readline/history.h>
-#include <readline/readline.h>
+#include "replxx.h"
 
 #include "constants.hpp"
 #include "utils.hpp"
@@ -237,23 +237,24 @@ void SetStdinEcho(bool enable = true) {
   tcsetattr(STDIN_FILENO, TCSANOW, &tty);
 }
 
-int SetDefaultText() {
-  rl_insert_text(default_text.c_str());
-  default_text = "";
-  rl_startup_hook = (rl_hook_func_t *)NULL;
-  return 0;
-}
+/*
+ *int SetDefaultText() {
+ *  rl_insert_text(default_text.c_str());
+ *  default_text = "";
+ *  rl_startup_hook = (rl_hook_func_t *)NULL;
+ *  return 0;
+ *}
+ */
 
-
-std::experimental::optional<std::string> GetLine() {
+std::optional<std::string> GetLine() {
   std::string line;
   std::getline(std::cin, line);
-  if (std::cin.eof()) return std::experimental::nullopt;
+  if (std::cin.eof())
+    return std::nullopt;
   line = default_text + line;
   default_text = "";
   return line;
 }
-
 
 std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, bool *escaped) {
   // Parse line.
@@ -279,17 +280,23 @@ std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, boo
   return std::make_pair(parsed_line.str(), is_done);
 }
 
-std::experimental::optional<std::string> ReadLine(const std::string &prompt) {
-  if (default_text.size() > 0) {
-    // Initialize text with remainder of previous query.
-    rl_startup_hook = SetDefaultText;
+std::optional<std::string> ReadLine(Replxx *replxx_instance,
+                                    const std::string &prompt) {
+  /*
+   *if (default_text.size() > 0) {
+   *  // Initialize text with remainder of previous query.
+   *  rl_startup_hook = SetDefaultText;
+   *}
+   */
+
+  const char *line = replxx_input(replxx_instance, prompt.c_str());
+  if (!line) {
+    return std::nullopt;
   }
-  char *line = readline(prompt.c_str());
-  if (!line) return std::experimental::nullopt;
 
   std::string r_val(line);
-  if (!utils::Trim(r_val).empty()) add_history(line);
-  free(line);
+  if (!utils::Trim(r_val).empty())
+    replxx_history_add(replxx_instance, line);
   return r_val;
 }
 
@@ -298,7 +305,7 @@ std::experimental::optional<std::string> ReadLine(const std::string &prompt) {
 
 namespace query {
 
-std::experimental::optional<std::string> GetQuery() {
+std::optional<std::string> GetQuery(Replxx *replxx_instance) {
   char quote = '\0';
   bool escaped = false;
   auto ret = console::ParseLine(default_text, &quote, &escaped);
@@ -308,18 +315,20 @@ std::experimental::optional<std::string> GetQuery() {
     return ret.first;
   }
   std::stringstream query;
-  std::experimental::optional<std::string> line;
+  std::optional<std::string> line;
   int line_cnt = 0;
   auto is_done = false;
   while (!is_done) {
     if (!isatty(STDIN_FILENO)) {
       line = console::GetLine();
     } else {
-      line = console::ReadLine(line_cnt == 0 ? constants::kPrompt : constants::kMultilinePrompt);
+      line = console::ReadLine(replxx_instance,
+                               line_cnt == 0 ? constants::kPrompt
+                                             : constants::kMultilinePrompt);
       if (line_cnt == 0 && line && line->size() > 0 && (*line)[0] == ':') {
         auto trimmed_line = utils::Trim(*line);
         if (trimmed_line == constants::kCommandQuit) {
-          return std::experimental::nullopt;
+          return std::nullopt;
         } else if (trimmed_line == constants::kCommandHelp) {
           console::PrintHelp();
           return "";
@@ -330,7 +339,8 @@ std::experimental::optional<std::string> GetQuery() {
         }
       }
     }
-    if (!line) return std::experimental::nullopt;
+    if (!line)
+      return std::nullopt;
     if (line->empty()) continue;
     auto ret = console::ParseLine(*line, &quote, &escaped);
     query << ret.first;
@@ -349,7 +359,6 @@ std::experimental::optional<std::string> GetQuery() {
   }
   return query.str();
 }
-
 
 QueryData ExecuteQuery(mg_session *session, const std::string &query) {
   int status = mg_session_run(session, query.c_str(), nullptr, nullptr, nullptr, nullptr);
@@ -608,3 +617,85 @@ void Output(const std::vector<std::string> &header,
 }
 
 }  // namespace format
+
+namespace {
+
+std::vector<std::string> GetCompletions(const char *text) {
+  std::vector<std::string> matches;
+
+  // Collect a vector of matches: vocabulary words that begin with text.
+  std::string text_str = utils::ToUpperCase(std::string(text));
+  for (auto word : constants::kCypherKeywords) {
+    if (word.size() >= text_str.size() &&
+        word.compare(0, text_str.size(), text_str) == 0) {
+      matches.push_back(word);
+    }
+  }
+  for (auto word : constants::kMemgraphKeywords) {
+    if (word.size() >= text_str.size() &&
+        word.compare(0, text_str.size(), text_str) == 0) {
+      matches.push_back(word);
+    }
+  }
+
+  return matches;
+}
+
+void AddCompletions(replxx_completions *completions, const char *text) {
+  auto text_completions = GetCompletions(text);
+  for (const auto &completion : text_completions) {
+    replxx_add_completion(completions, strdup(completion.c_str()));
+  }
+}
+
+void CompletionHook(const char *input, replxx_completions *completions,
+                    int *contextLen, void *) {
+  // taken from the replxx example.c (correct handling of UTF-8)
+  auto utf8str_codepoint_length = [](char const *s, int utf8len) {
+    int codepointLen = 0;
+    unsigned char m4 = 128 + 64 + 32 + 16;
+    unsigned char m3 = 128 + 64 + 32;
+    unsigned char m2 = 128 + 64;
+    for (int i = 0; i < utf8len; ++i, ++codepointLen) {
+      char c = s[i];
+      if ((c & m4) == m4) {
+        i += 3;
+      } else if ((c & m3) == m3) {
+        i += 2;
+      } else if ((c & m2) == m2) {
+        i += 1;
+      }
+    }
+    return codepointLen;
+  };
+
+  auto context_length = [](char const *prefix) {
+    // word boundary chars
+    char const wb[] = " \t\n\r\v\f-=+*&^%$#@!,./?<>;:`~'\"[]{}()\\|";
+    int i = (int)strlen(prefix) - 1;
+    int cl = 0;
+    while (i >= 0) {
+      if (strchr(wb, prefix[i]) != NULL) {
+        break;
+      }
+      ++cl;
+      --i;
+    }
+    return cl;
+  };
+
+  int utf8_context_len = context_length(input);
+  int prefix_len = (int)strlen(input) - utf8_context_len;
+  *contextLen = utf8str_codepoint_length(input + prefix_len, utf8_context_len);
+
+  AddCompletions(completions, input + prefix_len);
+}
+
+} // namespace
+
+Replxx *InitAndSetupReplxx() {
+  Replxx *replxx_instance = replxx_init();
+  replxx_set_unique_history(replxx_instance, 1);
+  replxx_set_completion_callback(replxx_instance, CompletionHook, nullptr);
+  return replxx_instance;
+}

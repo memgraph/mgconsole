@@ -5,7 +5,13 @@
 #include <experimental/filesystem>
 #include <experimental/optional>
 
+#include <filesystem>
+#include <optional>
+
 #include "mgclient.h"
+#include "replxx.h"
+
+namespace fs = std::filesystem;
 
 namespace mg_memory {
 /// Unique pointers with custom deleters for automatic memory management of
@@ -69,7 +75,6 @@ class ClientQueryException : public std::exception {
   std::string what_;
 };
 
-namespace fs = std::experimental::filesystem;
 
 bool EnsureDir(const fs::path &dir) noexcept;
 
@@ -156,7 +161,7 @@ int SetDefaultText();
 
 void SetStdinEcho(bool enable);
 
-std::experimental::optional<std::string> GetLine();
+std::optional<std::string> GetLine();
 
 /// Helper function that parses user line input.
 /// @param line user input line.
@@ -171,7 +176,8 @@ std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, boo
 /// Adds support for history and reverse-search.
 /// @param prompt The prompt to display.
 /// @return  User input line, or nullopt on EOF.
-std::experimental::optional<std::string> ReadLine(const std::string &prompt);
+std::optional<std::string> ReadLine(Replxx *replxx_instance,
+                                    const std::string &prompt);
 
 }  // namespace console
 
@@ -183,7 +189,7 @@ struct QueryData {
   std::chrono::duration<double> wall_time;
 };
 
-std::experimental::optional<std::string> GetQuery();
+std::optional<std::string> GetQuery(Replxx *replxx_instance);
 
 QueryData ExecuteQuery(mg_session *session, const std::string &query);
 
@@ -249,3 +255,5 @@ void Output(const std::vector<std::string> &header,
             const OutputOptions &out_opts,
             const CsvOptions &csv_opts);
 }  // namespace format
+
+Replxx *InitAndSetupReplxx();
