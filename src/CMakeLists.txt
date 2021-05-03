@@ -69,6 +69,8 @@ set_target_properties(${MGCLIENT_LIBRARY} PROPERTIES
         INTERFACE_LINK_LIBRARIES ${CMAKE_THREAD_LIBS_INIT})
       add_dependencies(${MGCLIENT_LIBRARY} gflags-proj)
 
+include_directories(${MGCLIENT_INCLUDE_DIRS})
+
 add_subdirectory(utils)
 
 add_compile_options(-Wall -Wextra -pedantic -Werror)
