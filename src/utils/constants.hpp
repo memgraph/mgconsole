@@ -37,15 +37,17 @@ static const std::string kPrompt = "memgraph> ";
 static const std::string kMultilinePrompt = "       -> ";
 
 /// Memgraph and OpenCypher keywords.
-//  ToDo(the-joksim):
-//    - add all the missing keywords
 static const std::vector<std::string> kMemgraphKeywords{
-    "ALTER",      "AUTH",     "BATCH",   "BATCHES", "CLEAR", "DATA",
-    "DENY",       "DROP",     "FOR",     "FROM",    "GRANT", "INFO",
-    "IDENTIFIED", "INTERVAL", "K_TEST",  "KAFKA",   "LOAD",  "PASSWORD",
-    "PRIVILEGES", "REVOKE",   "ROLE",    "ROLES",   "SIZE",  "START",
-    "STOP",       "STREAM",   "STREAMS", "TO",      "TOPIC", "TRANSFORM",
-    "USER",       "USERS"};
+    "ALTER",      "ASYNC",   "AUTH",       "BATCH",       "BATCHES",
+    "CLEAR",      "CSV",     "DATA",       "DELIMITER",   "DENY",
+    "DROP",       "FOR",     "FREE",       "FROM",        "GRANT",
+    "HEADER",     "INFO",    "IDENTIFIED", "INTERVAL",    "K_TEST",
+    "KAFKA",      "LOAD",    "LOCK",       "MAIN",        "MODE",
+    "PASSWORD",   "REPLICA", "REPLICAS",   "REPLICATION", "PORT",
+    "PRIVILEGES", "QUOTE",   "REVOKE",     "ROLE",        "ROLES",
+    "SIZE",       "START",   "STATS",      "STOP",        "STREAM",
+    "STREAMS",    "SYNC",    "TIMEOUT",    "TO",          "TOPIC",
+    "TRANSFORM",  "UNLOCK",  "USER",       "USERS"};
 
 static const std::vector<std::string> kCypherKeywords{
     "ALL",        "AND",    "ANY",    "AS",         "ASC",      "ASCENDING",
