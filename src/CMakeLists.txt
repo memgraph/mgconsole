@@ -18,7 +18,6 @@ include(ExternalProject)
 
 find_package(Threads REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(Readline REQUIRED)
 
 # Create compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -70,8 +69,7 @@ target_include_directories(mgconsole PRIVATE
         ${MGCLIENT_INCLUDE_DIRS}
         ${REPLXX_INCLUDE_DIRS}
         ${CMAKE_CURRENT_BINARY_DIR})
-      target_link_libraries(mgconsole ${MGCLIENT_LIBRARY} ${GFLAGS_LIBRARY} replxx utils
-        ${READLINE_LIBRARY} stdc++fs)
+target_link_libraries(mgconsole ${MGCLIENT_LIBRARY} ${GFLAGS_LIBRARY} utils stdc++fs)
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
         "${CMAKE_CURRENT_BINARY_DIR}/version.hpp")

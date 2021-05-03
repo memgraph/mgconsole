@@ -237,15 +237,6 @@ void SetStdinEcho(bool enable = true) {
   tcsetattr(STDIN_FILENO, TCSANOW, &tty);
 }
 
-/*
- *int SetDefaultText() {
- *  rl_insert_text(default_text.c_str());
- *  default_text = "";
- *  rl_startup_hook = (rl_hook_func_t *)NULL;
- *  return 0;
- *}
- */
-
 std::optional<std::string> GetLine() {
   std::string line;
   std::getline(std::cin, line);
@@ -282,13 +273,6 @@ std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, boo
 
 std::optional<std::string> ReadLine(Replxx *replxx_instance,
                                     const std::string &prompt) {
-  /*
-   *if (default_text.size() > 0) {
-   *  // Initialize text with remainder of previous query.
-   *  rl_startup_hook = SetDefaultText;
-   *}
-   */
-
   const char *line = replxx_input(replxx_instance, prompt.c_str());
   if (!line) {
     return std::nullopt;

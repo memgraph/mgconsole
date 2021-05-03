@@ -17,7 +17,7 @@ add_library(${REPLXX_LIBRARY} STATIC IMPORTED GLOBAL)
 set_target_properties(${REPLXX_LIBRARY} PROPERTIES
         IMPORTED_LOCATION ${REPLXX_LIBRARY_PATH}
         IMPORTED_LOCATION_DEBUG ${REPLXX_DEBUG_LIBRARY_PATH})
-      add_dependencies(${REPLXX_LIBRARY} replxx-proj)
+add_dependencies(${REPLXX_LIBRARY} replxx-proj)
 
 add_library(utils utils.cpp)
 target_include_directories(utils PUBLIC ${REPLXX_INCLUDE_DIRS})
