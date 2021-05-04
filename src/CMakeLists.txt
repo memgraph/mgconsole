@@ -20,6 +20,19 @@ find_package(OpenSSL REQUIRED)
 # Create compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if (${CMAKE_SYSTEM_NAME} MATCHES "Windows")
+  set(MGCONSOLE_ON_WINDOWS TRUE)
+elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+  set(MGCONSOLE_ON_LINUX TRUE)
+elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+  set(MGCONSOLE_ON_OSX TRUE)
+endif()
+
+# Handle platform lib prefixes
+if (MGCONSOLE_ON_WINDOWS)
+  set(GFLAGS_WIN_LIB_SUFFIX "_static")
+endif()
+
 # Setup GFlags
 ExternalProject_Add(gflags-proj
         PREFIX            gflags
@@ -31,57 +44,79 @@ ExternalProject_Add(gflags-proj
 
 ExternalProject_Get_Property(gflags-proj install_dir)
 set(GFLAGS_ROOT ${install_dir})
-
 set(GFLAGS_INCLUDE_DIRS ${GFLAGS_ROOT}/include
         CACHE INTERNAL "Path to gflags include directory")
-
-set(GFLAGS_LIBRARY_PATH ${GFLAGS_ROOT}/lib/${CMAKE_FIND_LIBRARY_PREFIXES}gflags.a)
-set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/${CMAKE_FIND_LIBRARY_PREFIXES}gflags_debug.a)
+set(GFLAGS_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags${GFLAGS_WIN_LIB_SUFFIX}.a)
+set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags_debug.a)
 set(GFLAGS_LIBRARY gflags)
+
 add_library(${GFLAGS_LIBRARY} STATIC IMPORTED)
+target_compile_definitions(${GFLAGS_LIBRARY} INTERFACE GFLAGS_IS_A_DLL=0)
+
+
 set_target_properties(${GFLAGS_LIBRARY} PROPERTIES
         IMPORTED_LOCATION ${GFLAGS_LIBRARY_PATH}
         IMPORTED_LOCATION_DEBUG ${GFLAGS_DEBUG_LIBRARY_PATH}
-        INTERFACE_LINK_LIBRARIES ${CMAKE_THREAD_LIBS_INIT})
+        INTERFACE_LINK_LIBRARIES Threads::Threads)
+
 add_dependencies(${GFLAGS_LIBRARY} gflags-proj)
 
 ExternalProject_Add(mgclient-proj
-        PREFIX            gflags
+        PREFIX            mgclient
         GIT_REPOSITORY    https://github.com/memgraph/mgclient.git
-        GIT_TAG           master
+        GIT_TAG           v1.2.0
         CMAKE_ARGS        "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
                           "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
         INSTALL_DIR       "${PROJECT_BINARY_DIR}/mgclient")
 
 ExternalProject_Get_Property(mgclient-proj install_dir)
 set(MGCLIENT_ROOT ${install_dir})
-
 set(MGCLIENT_INCLUDE_DIRS ${MGCLIENT_ROOT}/include
         CACHE INTERNAL "Path to mgclient include directory")
-
-set(MGCLIENT_LIBRARY_PATH ${MGCLIENT_ROOT}/lib/${CMAKE_FIND_LIBRARY_PREFIXES}mgclient.a)
-set(MGCLIENT_DEBUG_LIBRARY_PATH ${MGCLIENT_ROOT}/lib/${CMAKE_FIND_LIBRARY_PREFIXES}mgclient_debug.a)
+set(MGCLIENT_LIBRARY_PATH ${MGCLIENT_ROOT}/lib/libmgclient.a)
 set(MGCLIENT_LIBRARY mgclient)
+
 add_library(${MGCLIENT_LIBRARY} STATIC IMPORTED)
+
 set_target_properties(${MGCLIENT_LIBRARY} PROPERTIES
   IMPORTED_LOCATION ${MGCLIENT_LIBRARY_PATH}
-  IMPORTED_LOCATION_DEBUG ${MGCLIENT_DEBUG_LIBRARY_PATH}
-        INTERFACE_LINK_LIBRARIES ${CMAKE_THREAD_LIBS_INIT})
-      add_dependencies(${MGCLIENT_LIBRARY} gflags-proj)
+  INTERFACE_LINK_LIBRARIES Threads::Threads)
+
+add_dependencies(${MGCLIENT_LIBRARY} mgclient-proj)
 
 include_directories(${MGCLIENT_INCLUDE_DIRS})
 
 add_subdirectory(utils)
+add_dependencies(utils replxx mgclient)
+
 
 add_compile_options(-Wall -Wextra -pedantic -Werror)
 
+# replxx performs narrowing conversion on Windows
+if (MGCONSOLE_ON_WINDOWS) 
+  add_compile_options(-Wno-narrowing)
+endif()
+
 add_executable(mgconsole main.cpp)
-target_include_directories(mgconsole PRIVATE
+target_compile_definitions(mgconsole PRIVATE MGCLIENT_STATIC_DEFINE)
+target_include_directories(mgconsole
+        PRIVATE
         ${GFLAGS_INCLUDE_DIRS}
         ${MGCLIENT_INCLUDE_DIRS}
         ${REPLXX_INCLUDE_DIRS}
         ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(mgconsole PRIVATE ${MGCLIENT_LIBRARY} ${GFLAGS_LIBRARY} ${OPENSSL_LIBRARIES} utils stdc++fs)
+
+target_link_libraries(mgconsole
+        PRIVATE
+        ${GFLAGS_LIBRARY}
+        utils
+        ${MGCLIENT_LIBRARY}
+        ${OPENSSL_LIBRARIES}
+        stdc++fs)
+
+if (MGCONSOLE_ON_WINDOWS) 
+  target_link_libraries(mgconsole PRIVATE ws2_32 shlwapi) 
+endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
         "${CMAKE_CURRENT_BINARY_DIR}/version.hpp")

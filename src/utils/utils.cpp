@@ -2,9 +2,23 @@
 #include <iostream>
 
 #include <string.h>
+
+#ifdef _WIN32
+
+#include <io.h>
+#include <stdlib.h>
+#include <windows.h>
+#define isatty _isatty
+#define STDIN_FILENO 0
+
+#else /* _WIN32 */
+
+#include <pwd.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
+
+#endif /* _WIN32 */
 
 #include "replxx.h"
 
@@ -17,6 +31,17 @@ bool EnsureDir(const fs::path &dir) noexcept {
   std::error_code error_code;  // for exception suppression.
   if (fs::exists(dir, error_code)) return fs::is_directory(dir, error_code);
   return fs::create_directories(dir, error_code);
+}
+
+fs::path GetUserHomeDir() {
+  char *home_dir;
+#ifdef _WIN32
+  home_dir = getenv("USERPROFILE");
+#else /* _WIN32 */
+  struct passwd *pw = getpwuid(getuid());
+  home_dir = pw->pw_dir;
+#endif /* _WIN32 */
+  return fs::path(home_dir);
 }
 
 std::string ToUpperCase(std::string s) {
@@ -208,10 +233,32 @@ void PrintValue(std::ostream &os, const mg_value *value) {
 
 namespace console {
 
+// lifted from replxx io.cxx
+bool is_a_tty(int fd) {
+  bool aTTY(isatty(fd) != 0);
+#ifdef _WIN32
+  do {
+    if (aTTY) {
+      break;
+    }
+    HANDLE h((HANDLE)_get_osfhandle(fd));
+    if (h == INVALID_HANDLE_VALUE) {
+      break;
+    }
+    DWORD st(0);
+    if (!GetConsoleMode(h, &st)) {
+      break;
+    }
+    aTTY = true;
+  } while (false);
+#endif
+  return (aTTY);
+}
+
 void PrintHelp() { std::cout << constants::kInteractiveUsage << std::endl; }
 
 void EchoFailure(const std::string &failure_msg, const std::string &explanation) {
-  if (isatty(STDIN_FILENO)) {
+  if (is_a_tty(STDIN_FILENO)) {
     std::cout << "\033[1;31m" << failure_msg << ": \033[0m";
     std::cout << explanation << std::endl;
   } else {
@@ -221,12 +268,26 @@ void EchoFailure(const std::string &failure_msg, const std::string &explanation)
 }
 
 void EchoInfo(const std::string &message) {
-  if (isatty(STDIN_FILENO)) {
+  if (is_a_tty(STDIN_FILENO)) {
     std::cout << message << std::endl;
   }
 }
 
 void SetStdinEcho(bool enable = true) {
+#ifdef _WIN32
+  // from https://stackoverflow.com/questions/9217908/how-to-disable-echo-in-windows-console
+  HANDLE h;
+  DWORD mode;
+  h = GetStdHandle(STD_INPUT_HANDLE);
+  if (GetConsoleMode(h, &mode)) {
+    if (!enable) {
+      mode &= ~ENABLE_ECHO_INPUT;
+    } else {
+      mode |= ENABLE_ECHO_INPUT;
+    }
+    SetConsoleMode(h, mode);
+  }
+#else /* _WIN32 */
   struct termios tty;
   tcgetattr(STDIN_FILENO, &tty);
   if (!enable) {
@@ -235,6 +296,7 @@ void SetStdinEcho(bool enable = true) {
     tty.c_lflag |= ECHO;
   }
   tcsetattr(STDIN_FILENO, TCSANOW, &tty);
+#endif /* _WIN32 */
 }
 
 std::optional<std::string> GetLine() {
@@ -277,6 +339,7 @@ std::optional<std::string> ReadLine(Replxx *replxx_instance,
     replxx_set_preload_buffer(replxx_instance, default_text.c_str());
   }
   const char *line = replxx_input(replxx_instance, prompt.c_str());
+  default_text = "";
   if (!line) {
     return std::nullopt;
   }
@@ -306,7 +369,7 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
   int line_cnt = 0;
   auto is_done = false;
   while (!is_done) {
-    if (!isatty(STDIN_FILENO)) {
+    if (!console::is_a_tty(STDIN_FILENO)) {
       line = console::GetLine();
     } else {
       line = console::ReadLine(replxx_instance,
@@ -484,8 +547,24 @@ void PrintRowTabular(const mg_memory::MgListPtr &data, int total_width,
 
 void PrintTabular(const std::vector<std::string> &header,
                   const std::vector<mg_memory::MgListPtr> &records, const bool fit_to_screen) {
-  struct winsize w;
-  ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+  // lifted from replxx io.cxx
+  auto get_screen_columns = []() {
+    int cols(0);
+#ifdef _WIN32
+    HANDLE console_out = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO inf;
+    GetConsoleScreenBufferInfo(console_out, &inf);
+    cols = inf.dwSize.X;
+#else
+    struct winsize ws;
+    cols = (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) ? 80 : ws.ws_col;
+#endif
+    // cols is 0 in certain circumstances like inside debugger, which creates
+    // further issues
+    return (cols > 0) ? cols : 80;
+  };
+
+  auto window_columns = get_screen_columns();
   bool all_columns_fit = true;
 
   auto num_columns = header.size();
@@ -498,14 +577,14 @@ void PrintTabular(const std::vector<std::string> &header,
   auto total_width = column_width * num_columns + 1;
 
   // Fit to screen width.
-  if (fit_to_screen && total_width > w.ws_col) {
+  if (fit_to_screen && total_width > window_columns) {
     uint64_t lo = 5;
     uint64_t hi = column_width;
     uint64_t last = 5;
     while (lo < hi) {
       uint64_t mid = lo + (hi - lo) / 2;
       uint64_t width = mid * num_columns + 1;
-      if (width <= w.ws_col) {
+      if (width <= window_columns) {
         last = mid;
         lo = mid + 1;
       } else {
@@ -515,7 +594,7 @@ void PrintTabular(const std::vector<std::string> &header,
     column_width = last;
     total_width = column_width * num_columns + 1;
     // All columns do not fit on screen.
-    while (total_width > w.ws_col && num_columns > 1) {
+    while (total_width > window_columns && num_columns > 1) {
       num_columns -= 1;
       total_width = column_width * num_columns + 1;
       all_columns_fit = false;

@@ -76,6 +76,8 @@ class ClientQueryException : public std::exception {
 
 bool EnsureDir(const fs::path &dir) noexcept;
 
+fs::path GetUserHomeDir();
+
 /**
  * return string with all uppercased characters (locale independent).
  */
@@ -147,6 +149,8 @@ void PrintValue(std::ostream &os, const mg_value *value);
 static std::string default_text;
 
 namespace console {
+
+bool is_a_tty(int fd);
 
 void PrintHelp();
 

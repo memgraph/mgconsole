@@ -19,10 +19,19 @@
 #include <optional>
 #include <thread>
 
-#include <pwd.h>
 #include <signal.h>
+
+#ifdef _WIN32
+
+#include <cstdlib>
+
+#else /* _WIN32 */
+
+#include <pwd.h>
 #include <termios.h>
 #include <unistd.h>
+
+#endif /* _WIN32 */
 
 #include <gflags/gflags.h>
 
@@ -102,7 +111,7 @@ int main(int argc, char **argv) {
   Replxx *replxx_instance = InitAndSetupReplxx();
 
   auto password = FLAGS_password;
-  if (isatty(STDIN_FILENO) && FLAGS_username.size() > 0 &&
+  if (console::is_a_tty(STDIN_FILENO) && FLAGS_username.size() > 0 &&
       password.size() == 0) {
     console::SetStdinEcho(false);
     auto password_optional = console::ReadLine(replxx_instance, "Password: ");
@@ -117,16 +126,16 @@ int main(int argc, char **argv) {
     console::SetStdinEcho(true);
   }
 
-
   fs::path history_dir = FLAGS_history;
   if (FLAGS_history ==
       (constants::kDefaultHistoryBaseDir + "/" + constants::kDefaultHistoryMemgraphDir)) {
     // Fetch home dir for user.
-    struct passwd *pw = getpwuid(getuid());
-    history_dir = fs::path(pw->pw_dir) / constants::kDefaultHistoryMemgraphDir;
+    history_dir =
+        utils::GetUserHomeDir() / constants::kDefaultHistoryMemgraphDir;
   }
   if (!utils::EnsureDir(history_dir)) {
-    console::EchoFailure("History directory doesn't exist", history_dir);
+    console::EchoFailure("History directory doesn't exist",
+                         history_dir.string());
     // Should program exit here or just continue with warning message?
     return 1;
   }
@@ -136,7 +145,8 @@ int main(int argc, char **argv) {
     auto ret =
         replxx_history_load(replxx_instance, history_file.string().c_str());
     if (ret != 0) {
-      console::EchoFailure("Unable to read history file", history_file);
+      console::EchoFailure("Unable to read history file",
+                           history_file.string());
       // Should program exit here or just continue with warning message?
       return 1;
     }
@@ -150,19 +160,26 @@ int main(int argc, char **argv) {
       auto ret =
           replxx_history_save(replxx_instance, history_file.string().c_str());
       if (ret != 0) {
-        console::EchoFailure("Unable to save history to file", history_file);
+        console::EchoFailure("Unable to save history to file",
+                             history_file.string());
         return 1;
       }
     }
     return 0;
   };
 
+
+#ifdef _WIN32
+// ToDo(the-joksim):
+//  - how to handle shutdown inside a shutdown on Windows?
+#else /* _WIN32 */
+
   auto shutdown = [](int exit_code = 0) {
-    if (is_shutting_down) return;
+    if (is_shutting_down)
+      return;
     is_shutting_down = 1;
     std::quick_exit(exit_code);
   };
-
   struct sigaction action;
   action.sa_sigaction = nullptr;
   action.sa_handler = shutdown;
@@ -175,6 +192,8 @@ int main(int argc, char **argv) {
   action.sa_flags = SA_RESTART;
   sigaction(SIGTERM, &action, nullptr);
   sigaction(SIGINT, &action, nullptr);
+
+#endif /* _WIN32 */
 
   std::string bolt_client_version = "mg/"s + gflags::VersionString();
 
@@ -221,7 +240,7 @@ int main(int argc, char **argv) {
     try {
       auto ret = query::ExecuteQuery(session.get(), *query);
       if (ret.records.size() > 0) Output(ret.header, ret.records, output_opts, csv_opts);
-      if (isatty(STDIN_FILENO)) {
+      if (console::is_a_tty(STDIN_FILENO)) {
         std::string summary;
         if (ret.records.size() == 0) {
           summary = "Empty set";
@@ -235,11 +254,11 @@ int main(int argc, char **argv) {
         if (history_ret != 0) return history_ret;
       }
     } catch (const utils::ClientQueryException &e) {
-      if (!isatty(STDIN_FILENO)) {
+      if (!console::is_a_tty(STDIN_FILENO)) {
         console::EchoFailure("Failed query", *query);
       }
       console::EchoFailure("Client received exception", e.what());
-      if (!isatty(STDIN_FILENO)) {
+      if (!console::is_a_tty(STDIN_FILENO)) {
         return 1;
       }
     } catch (const utils::ClientFatalException &e) {
