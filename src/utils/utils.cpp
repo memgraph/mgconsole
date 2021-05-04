@@ -273,6 +273,9 @@ std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, boo
 
 std::optional<std::string> ReadLine(Replxx *replxx_instance,
                                     const std::string &prompt) {
+  if (!default_text.empty()) {
+    replxx_set_preload_buffer(replxx_instance, default_text.c_str());
+  }
   const char *line = replxx_input(replxx_instance, prompt.c_str());
   if (!line) {
     return std::nullopt;
