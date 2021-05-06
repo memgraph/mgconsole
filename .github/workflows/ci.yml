@@ -84,4 +84,10 @@ jobs:
           cmake -G "MinGW Makefiles" ..
           make
           make install
-          ctest
+          #ctest
+
+      - name: Save mgconsole Windows build
+        uses: actions/upload-artifact@v2
+        with:
+          name: "MGConsole Windows build"
+          path: build/src/mgconsole.exe
