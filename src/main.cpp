@@ -108,7 +108,11 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  mg_init();
+  if (mg_init() != 0) {
+    console::EchoFailure("Internal error",
+                         "Couldn't initialize all the resources");
+    return 1;
+  }
   Replxx *replxx_instance = InitAndSetupReplxx();
 
   auto cleanup_resources = [replxx_instance]() {
