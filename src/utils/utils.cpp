@@ -259,7 +259,11 @@ void PrintHelp() { std::cout << constants::kInteractiveUsage << std::endl; }
 
 void EchoFailure(const std::string &failure_msg, const std::string &explanation) {
   if (is_a_tty(STDIN_FILENO)) {
+#ifdef _WIN32
+    std::cout << "\033[31m" << failure_msg << ": \033[0m";
+#else /* _WIN32 */
     std::cout << "\033[1;31m" << failure_msg << ": \033[0m";
+#endif /* _WIN32 */
     std::cout << explanation << std::endl;
   } else {
     std::cerr << failure_msg << ": ";

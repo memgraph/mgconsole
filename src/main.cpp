@@ -108,7 +108,13 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  mg_init();
   Replxx *replxx_instance = InitAndSetupReplxx();
+
+  auto cleanup_resources = [replxx_instance]() {
+    replxx_end(replxx_instance);
+    mg_finalize();
+  };
 
   auto password = FLAGS_password;
   if (console::is_a_tty(STDIN_FILENO) && FLAGS_username.size() > 0 &&
@@ -121,6 +127,7 @@ int main(int argc, char **argv) {
     } else {
       console::EchoFailure("Password not submitted",
                   "Requested password for username " + FLAGS_username);
+      cleanup_resources();
       return 1;
     }
     console::SetStdinEcho(true);
@@ -137,6 +144,7 @@ int main(int argc, char **argv) {
     console::EchoFailure("History directory doesn't exist",
                          history_dir.string());
     // Should program exit here or just continue with warning message?
+    cleanup_resources();
     return 1;
   }
   fs::path history_file = history_dir / constants::kHistoryFilename;
@@ -148,12 +156,13 @@ int main(int argc, char **argv) {
       console::EchoFailure("Unable to read history file",
                            history_file.string());
       // Should program exit here or just continue with warning message?
+      cleanup_resources();
       return 1;
     }
   }
 
   // Save history function. Used to save readline history after each query.
-  auto save_history = [history_file, replxx_instance] {
+  auto save_history = [history_file, replxx_instance, cleanup_resources] {
     if (!FLAGS_no_history) {
       // If there was no history, create history file.
       // Otherwise, append to existing history.
@@ -162,12 +171,12 @@ int main(int argc, char **argv) {
       if (ret != 0) {
         console::EchoFailure("Unable to save history to file",
                              history_file.string());
+        cleanup_resources();
         return 1;
       }
     }
     return 0;
   };
-
 
 #ifdef _WIN32
 // ToDo(the-joksim):
@@ -220,6 +229,7 @@ int main(int argc, char **argv) {
     session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
     if (status != 0) {
       console::EchoFailure("Connection failure", mg_session_error(session.get()));
+      cleanup_resources();
       return 1;
     }
   }
@@ -251,7 +261,10 @@ int main(int argc, char **argv) {
         }
         std::printf("%s (%.3lf sec)\n", summary.c_str(), ret.wall_time.count());
         auto history_ret = save_history();
-        if (history_ret != 0) return history_ret;
+        if (history_ret != 0) {
+          cleanup_resources();
+          return history_ret;
+        }
       }
     } catch (const utils::ClientQueryException &e) {
       if (!console::is_a_tty(STDIN_FILENO)) {
@@ -259,6 +272,7 @@ int main(int argc, char **argv) {
       }
       console::EchoFailure("Client received exception", e.what());
       if (!console::is_a_tty(STDIN_FILENO)) {
+        cleanup_resources();
         return 1;
       }
     } catch (const utils::ClientFatalException &e) {
@@ -288,9 +302,11 @@ int main(int argc, char **argv) {
         console::EchoFailure("Couldn't connect to", "'memgraph://" + FLAGS_host + ":" +
                                                std::to_string(FLAGS_port) +
                                                "'");
+        cleanup_resources();
         return 1;
       }
     }
   }
+  cleanup_resources();
   return 0;
 }
