@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include <windows.h>
 #define isatty _isatty
-#define STDIN_FILENO 0
 
 #else /* _WIN32 */
 

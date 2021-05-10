@@ -6,6 +6,10 @@
 #include <filesystem>
 #include <optional>
 
+#ifdef _WIN32
+#define STDIN_FILENO 0
+#endif /* _WIN32 */
+
 #include "mgclient.h"
 #include "replxx.h"
 

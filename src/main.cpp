@@ -90,7 +90,6 @@ DEFINE_bool(no_history, false, "Do not save history.");
 
 DECLARE_int32(min_log_level);
 
-
 int main(int argc, char **argv) {
   gflags::SetVersionString(version_string);
   gflags::SetUsageMessage(constants::kUsage);
@@ -115,9 +114,12 @@ int main(int argc, char **argv) {
   }
   Replxx *replxx_instance = InitAndSetupReplxx();
 
-  auto cleanup_resources = [replxx_instance]() {
-    replxx_end(replxx_instance);
-    mg_finalize();
+  bool resources_cleaned_up = false;
+  auto cleanup_resources = [replxx_instance, &resources_cleaned_up]() {
+    if (!resources_cleaned_up) {
+      replxx_end(replxx_instance);
+      resources_cleaned_up = true;
+    }
   };
 
   auto password = FLAGS_password;
@@ -184,7 +186,8 @@ int main(int argc, char **argv) {
 
 #ifdef _WIN32
 // ToDo(the-joksim):
-//  - how to handle shutdown inside a shutdown on Windows?
+//  - How to handle shutdown inside a shutdown on Windows? (Windows uses messages
+//  instead of signals.)
 #else /* _WIN32 */
 
   auto shutdown = [](int exit_code = 0) {

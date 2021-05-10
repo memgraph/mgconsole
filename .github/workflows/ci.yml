@@ -89,5 +89,5 @@ jobs:
       - name: Save mgconsole Windows build
         uses: actions/upload-artifact@v2
         with:
-          name: "MGConsole Windows build"
+          name: "mgconsole Windows build"
           path: build/src/mgconsole.exe
