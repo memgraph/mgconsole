@@ -15,6 +15,10 @@
 include(ExternalProject)
 
 find_package(Threads REQUIRED)
+set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
+set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+
+set(OPENSSL_USE_STATIC_LIBS TRUE)
 find_package(OpenSSL REQUIRED)
 
 # Create compile_commands.json
@@ -33,6 +37,9 @@ if (MGCONSOLE_ON_WINDOWS)
   set(GFLAGS_WIN_LIB_SUFFIX "_static")
 endif()
 
+if (MGCONSOLE_ON_WINDOWS)
+  set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++ ${CMAKE_EXE_LINKER_FLAGS}")
+endif()
 # Setup GFlags
 ExternalProject_Add(gflags-proj
         PREFIX            gflags
@@ -115,7 +122,7 @@ target_link_libraries(mgconsole
         stdc++fs)
 
 if (MGCONSOLE_ON_WINDOWS) 
-  target_link_libraries(mgconsole PRIVATE ws2_32 shlwapi) 
+  target_link_libraries(mgconsole PRIVATE ws2_32 shlwapi)
 endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"

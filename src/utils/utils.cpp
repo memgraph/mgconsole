@@ -32,7 +32,6 @@ bool EnsureDir(const fs::path &dir) noexcept {
   if (fs::exists(dir, error_code)) return fs::is_directory(dir, error_code);
   return fs::create_directories(dir, error_code);
 }
-
 fs::path GetUserHomeDir() {
   char *home_dir;
 #ifdef _WIN32
@@ -260,7 +259,22 @@ void PrintHelp() { std::cout << constants::kInteractiveUsage << std::endl; }
 void EchoFailure(const std::string &failure_msg, const std::string &explanation) {
   if (is_a_tty(STDIN_FILENO)) {
 #ifdef _WIN32
-    std::cout << "\033[31m" << failure_msg << ": \033[0m";
+    HANDLE  hConsole;
+    WORD original_console_attr;
+    CONSOLE_SCREEN_BUFFER_INFO   csbi;
+
+    hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
+      std::cout << failure_msg << ": ";
+    }
+
+    original_console_attr = csbi.wAttributes;
+    FlushConsoleInputBuffer(hConsole);
+    SetConsoleTextAttribute(hConsole,  FOREGROUND_RED | FOREGROUND_INTENSITY);
+
+    std::cout << failure_msg << ":";
+    SetConsoleTextAttribute(hConsole, original_console_attr);
+    std::cout << " ";
 #else /* _WIN32 */
     std::cout << "\033[1;31m" << failure_msg << ": \033[0m";
 #endif /* _WIN32 */

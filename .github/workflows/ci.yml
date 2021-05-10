@@ -77,7 +77,7 @@ jobs:
           #dpkg -i ~/memgraph/memgraph-community.deb
 
       - uses: actions/checkout@v1
-      - name: Install and test mgconsole
+      - name: Install mgconsole
         run: |
           mkdir build
           cd build
