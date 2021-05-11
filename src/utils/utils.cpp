@@ -787,10 +787,17 @@ ReplxxColor GetWordColor(const std::string_view word) {
       std::find(constants::kMemgraphKeywords.begin(),
                 constants::kMemgraphKeywords.end(),
                 word_uppercase) != constants::kMemgraphKeywords.end();
+  bool is_awesome_function =
+      std::find(constants::kAwesomeFunctions.begin(),
+                constants::kAwesomeFunctions.end(),
+                word_uppercase) != constants::kAwesomeFunctions.end();
   if (is_cypher_keyword || is_memgraph_keyword) {
+    return REPLXX_COLOR_CYAN;
+  } else if (is_awesome_function) {
     return REPLXX_COLOR_MAGENTA;
+  } else {
+    return REPLXX_COLOR_DEFAULT;
   }
-  return REPLXX_COLOR_DEFAULT;
 }
 
 void SetWordColor(std::string_view word, ReplxxColor *colors,
