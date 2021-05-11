@@ -811,12 +811,24 @@ void ColorHook(const char *input, ReplxxColor *colors, int size, void *) {
 
   auto input_size = strlen(input);
   for (int i = 0; i < input_size; i++) {
+    // word boundary
     if (strchr(wb, input[i]) != NULL) {
       SetWordColor(std::string_view(word_begin, word_size), colors,
                    &colors_offset);
-      word_begin = input + i + 1;
-      word_size = 0;
+      // if the boundary is not the last char in input, advance the
+      // next word ptr and reset word size
+      if (i != (input_size - 1)) {
+        word_begin = input + i + 1;
+        word_size = 0;
+      }
+      // end of input
+    } else if (i == (input_size - 1)) {
+      // regular char encountered as the last char of input
+      word_size++;
+      SetWordColor(std::string_view(word_begin, word_size), colors,
+                   &colors_offset);
     } else {
+      // regular char encountered - advance
       word_size++;
     }
   }
@@ -826,8 +838,10 @@ void ColorHook(const char *input, ReplxxColor *colors, int size, void *) {
 
 Replxx *InitAndSetupReplxx() {
   Replxx *replxx_instance = replxx_init();
+
   replxx_set_unique_history(replxx_instance, 1);
   replxx_set_completion_callback(replxx_instance, CompletionHook, nullptr);
   replxx_set_highlighter_callback(replxx_instance, ColorHook, nullptr);
+
   return replxx_instance;
 }
