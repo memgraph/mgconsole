@@ -2,6 +2,7 @@
 #include <iostream>
 
 #include <string.h>
+#include <string_view>
 
 #ifdef _WIN32
 
@@ -731,41 +732,43 @@ void AddCompletions(replxx_completions *completions, const char *text) {
   }
 }
 
+// taken from the replxx example.c (correct handling of UTF-8)
+int utf8str_codepoint_length(char const *s, int utf8len) {
+  int codepointLen = 0;
+  unsigned char m4 = 128 + 64 + 32 + 16;
+  unsigned char m3 = 128 + 64 + 32;
+  unsigned char m2 = 128 + 64;
+  for (int i = 0; i < utf8len; ++i, ++codepointLen) {
+    char c = s[i];
+    if ((c & m4) == m4) {
+      i += 3;
+    } else if ((c & m3) == m3) {
+      i += 2;
+    } else if ((c & m2) == m2) {
+      i += 1;
+    }
+  }
+  return codepointLen;
+};
+
+static char const wb[] = " \t\n\r\v\f-=+*&^%$#@!,./?<>;:`~'\"[]{}()\\|";
+
+int context_length(char const *prefix) {
+  // word boundary chars
+  int i = (int)strlen(prefix) - 1;
+  int cl = 0;
+  while (i >= 0) {
+    if (strchr(wb, prefix[i]) != NULL) {
+      break;
+    }
+    ++cl;
+    --i;
+  }
+  return cl;
+};
+
 void CompletionHook(const char *input, replxx_completions *completions,
                     int *contextLen, void *) {
-  // taken from the replxx example.c (correct handling of UTF-8)
-  auto utf8str_codepoint_length = [](char const *s, int utf8len) {
-    int codepointLen = 0;
-    unsigned char m4 = 128 + 64 + 32 + 16;
-    unsigned char m3 = 128 + 64 + 32;
-    unsigned char m2 = 128 + 64;
-    for (int i = 0; i < utf8len; ++i, ++codepointLen) {
-      char c = s[i];
-      if ((c & m4) == m4) {
-        i += 3;
-      } else if ((c & m3) == m3) {
-        i += 2;
-      } else if ((c & m2) == m2) {
-        i += 1;
-      }
-    }
-    return codepointLen;
-  };
-
-  auto context_length = [](char const *prefix) {
-    // word boundary chars
-    char const wb[] = " \t\n\r\v\f-=+*&^%$#@!,./?<>;:`~'\"[]{}()\\|";
-    int i = (int)strlen(prefix) - 1;
-    int cl = 0;
-    while (i >= 0) {
-      if (strchr(wb, prefix[i]) != NULL) {
-        break;
-      }
-      ++cl;
-      --i;
-    }
-    return cl;
-  };
 
   int utf8_context_len = context_length(input);
   int prefix_len = (int)strlen(input) - utf8_context_len;
@@ -774,11 +777,57 @@ void CompletionHook(const char *input, replxx_completions *completions,
   AddCompletions(completions, input + prefix_len);
 }
 
+ReplxxColor GetWordColor(const std::string_view word) {
+  auto word_uppercase = utils::ToUpperCase(std::string(word));
+  bool is_cypher_keyword =
+      std::find(constants::kCypherKeywords.begin(),
+                constants::kCypherKeywords.end(),
+                word_uppercase) != constants::kCypherKeywords.end();
+  bool is_memgraph_keyword =
+      std::find(constants::kMemgraphKeywords.begin(),
+                constants::kMemgraphKeywords.end(),
+                word_uppercase) != constants::kMemgraphKeywords.end();
+  if (is_cypher_keyword || is_memgraph_keyword) {
+    return REPLXX_COLOR_MAGENTA;
+  }
+  return REPLXX_COLOR_DEFAULT;
+}
+
+void SetWordColor(std::string_view word, ReplxxColor *colors,
+                  int *colors_offset) {
+  auto color = GetWordColor(word);
+  auto word_codepoint_len = utf8str_codepoint_length(word.data(), word.size());
+  for (int i = *colors_offset; i < *colors_offset + word_codepoint_len; i++) {
+    colors[i] = color;
+  }
+  // +1 for the word boundary char (we don't want to color it)
+  *colors_offset = *colors_offset + word_codepoint_len + 1;
+}
+
+void ColorHook(const char *input, ReplxxColor *colors, int size, void *) {
+  auto *word_begin = input;
+  size_t word_size = 0;
+  int colors_offset = 0;
+
+  auto input_size = strlen(input);
+  for (int i = 0; i < input_size; i++) {
+    if (strchr(wb, input[i]) != NULL) {
+      SetWordColor(std::string_view(word_begin, word_size), colors,
+                   &colors_offset);
+      word_begin = input + i + 1;
+      word_size = 0;
+    } else {
+      word_size++;
+    }
+  }
+}
+
 } // namespace
 
 Replxx *InitAndSetupReplxx() {
   Replxx *replxx_instance = replxx_init();
   replxx_set_unique_history(replxx_instance, 1);
   replxx_set_completion_callback(replxx_instance, CompletionHook, nullptr);
+  replxx_set_highlighter_callback(replxx_instance, ColorHook, nullptr);
   return replxx_instance;
 }
