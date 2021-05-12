@@ -31,25 +31,16 @@ jobs:
 
   build_windows:
     runs-on: windows-latest
-    strategy:
-      matrix:
-        arch:
-          - { mingw: "64", msys: x86_64, python: "x64"}
-        python_version:
-          - 3.6
-          - 3.9
-        mgversion:
-          - 1.4.0
     steps:
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW${{ matrix.arch.mingw }}
+          msystem: MINGW64
           update: true
-          install: git mingw-w64-${{ matrix.arch.msys }}-toolchain mingw-w64-${{ matrix.arch.msys }}-cmake mingw-w64-${{ matrix.arch.msys }}-openssl
-      - name: Add mingw${{ matrix.arch.mingw }} to PATH
+          install: git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl
+      - name: Add mingw64 to PATH
         run: |
           # First make sure python would resolve to the windows native python, not mingw one
-          echo "C:/msys64/mingw${{ matrix.arch.mingw }}/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+          echo "C:/msys64/mingw64/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
           echo "${{ env.pythonLocation }}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
       - uses: actions/checkout@v1
       - name: Install mgconsole
