@@ -34,7 +34,6 @@ bool EnsureDir(const fs::path &dir) noexcept {
 }
 
 fs::path GetUserHomeDir() {
-  char *home_dir;
 #ifdef _WIN32
   return getenv("USERPROFILE");
 #else /* _WIN32 */

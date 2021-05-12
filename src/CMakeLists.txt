@@ -35,9 +35,6 @@ endif()
 # Handle platform lib prefixes
 if (MGCONSOLE_ON_WINDOWS)
   set(GFLAGS_WIN_LIB_SUFFIX "_static")
-endif()
-
-if (MGCONSOLE_ON_WINDOWS)
   set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++ ${CMAKE_EXE_LINKER_FLAGS}")
 endif()
 
@@ -52,56 +49,45 @@ ExternalProject_Add(gflags-proj
 
 ExternalProject_Get_Property(gflags-proj install_dir)
 set(GFLAGS_ROOT ${install_dir})
-set(GFLAGS_INCLUDE_DIRS ${GFLAGS_ROOT}/include
-        CACHE INTERNAL "Path to gflags include directory")
+set(GFLAGS_INCLUDE_DIRS ${GFLAGS_ROOT}/include)
 set(GFLAGS_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags${GFLAGS_WIN_LIB_SUFFIX}.a)
 set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags_debug.a)
 set(GFLAGS_LIBRARY gflags)
 
 add_library(${GFLAGS_LIBRARY} STATIC IMPORTED)
 target_compile_definitions(${GFLAGS_LIBRARY} INTERFACE GFLAGS_IS_A_DLL=0)
-
-
 set_target_properties(${GFLAGS_LIBRARY} PROPERTIES
         IMPORTED_LOCATION ${GFLAGS_LIBRARY_PATH}
         IMPORTED_LOCATION_DEBUG ${GFLAGS_DEBUG_LIBRARY_PATH}
         INTERFACE_LINK_LIBRARIES Threads::Threads)
-
 add_dependencies(${GFLAGS_LIBRARY} gflags-proj)
 
 ExternalProject_Add(mgclient-proj
         PREFIX            mgclient
         GIT_REPOSITORY    https://github.com/memgraph/mgclient.git
-        GIT_TAG           master
+        GIT_TAG           v1.2.1
         CMAKE_ARGS        "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
                           "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
         INSTALL_DIR       "${PROJECT_BINARY_DIR}/mgclient")
 
 ExternalProject_Get_Property(mgclient-proj install_dir)
 set(MGCLIENT_ROOT ${install_dir})
-set(MGCLIENT_INCLUDE_DIRS ${MGCLIENT_ROOT}/include
-        CACHE INTERNAL "Path to mgclient include directory")
+set(MGCLIENT_INCLUDE_DIRS ${MGCLIENT_ROOT}/include)
 set(MGCLIENT_LIBRARY_PATH ${MGCLIENT_ROOT}/lib/libmgclient.a)
 set(MGCLIENT_LIBRARY mgclient)
 
 add_library(${MGCLIENT_LIBRARY} STATIC IMPORTED)
-
 set_target_properties(${MGCLIENT_LIBRARY} PROPERTIES
   IMPORTED_LOCATION ${MGCLIENT_LIBRARY_PATH}
   INTERFACE_LINK_LIBRARIES Threads::Threads)
-
 add_dependencies(${MGCLIENT_LIBRARY} mgclient-proj)
 
-include_directories(${MGCLIENT_INCLUDE_DIRS})
-
 add_subdirectory(utils)
-add_dependencies(utils replxx mgclient)
-
 
 add_compile_options(-Wall -Wextra -pedantic -Werror)
 
 # replxx performs narrowing conversion on Windows
-if (MGCONSOLE_ON_WINDOWS) 
+if (MGCONSOLE_ON_WINDOWS)
   add_compile_options(-Wno-narrowing)
 endif()
 

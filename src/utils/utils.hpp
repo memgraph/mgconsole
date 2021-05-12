@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <optional>
+#include <vector>
 
 #ifdef _WIN32
 #define STDIN_FILENO 0

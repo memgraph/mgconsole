@@ -8,8 +8,7 @@ ExternalProject_Add(replxx-proj
 
 ExternalProject_Get_Property(replxx-proj install_dir)
 set(REPLXX_ROOT ${install_dir})
-set(REPLXX_INCLUDE_DIRS ${REPLXX_ROOT}/include
-        CACHE INTERNAL "Path to replxx include directory")
+set(REPLXX_INCLUDE_DIRS ${REPLXX_ROOT}/include)
 set(REPLXX_LIBRARY_PATH ${REPLXX_ROOT}/lib/libreplxx.a)
 set(REPLXX_LIBRARY replxx)
 
@@ -19,8 +18,8 @@ set_target_properties(${REPLXX_LIBRARY} PROPERTIES
         IMPORTED_LOCATION ${REPLXX_LIBRARY_PATH})
 
 add_dependencies(${REPLXX_LIBRARY} replxx-proj)
-
 add_library(utils STATIC utils.cpp)
+add_dependencies(utils replxx mgclient)
 target_compile_definitions(utils PUBLIC MGCLIENT_STATIC_DEFINE)
-target_include_directories(utils PUBLIC ${REPLXX_INCLUDE_DIRS})
+target_include_directories(utils PUBLIC ${REPLXX_INCLUDE_DIRS} ${MGCLIENT_INCLUDE_DIRS})
 target_link_libraries(utils ${REPLXX_LIBRARY})
