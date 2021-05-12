@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace constants {
@@ -37,7 +38,7 @@ static const std::string kPrompt = "memgraph> ";
 static const std::string kMultilinePrompt = "       -> ";
 
 /// Memgraph and OpenCypher keywords.
-static const std::vector<std::string> kMemgraphKeywords{
+static const std::vector<std::string_view> kMemgraphKeywords{
     "ALTER",      "ASYNC",   "AUTH",       "BATCH",       "BATCHES",
     "CLEAR",      "CSV",     "DATA",       "DELIMITER",   "DENY",
     "DROP",       "FOR",     "FREE",       "FROM",        "GRANT",
@@ -49,7 +50,7 @@ static const std::vector<std::string> kMemgraphKeywords{
     "STREAMS",    "SYNC",    "TIMEOUT",    "TO",          "TOPIC",
     "TRANSFORM",  "UNLOCK",  "USER",       "USERS"};
 
-static const std::vector<std::string> kCypherKeywords{
+static const std::vector<std::string_view> kCypherKeywords{
     "ALL",        "AND",    "ANY",    "AS",         "ASC",      "ASCENDING",
     "BFS",        "BY",     "CASE",   "CONTAINS",   "COUNT",    "CREATE",
     "CYPHERNULL", "DELETE", "DESC",   "DESCENDING", "DETACH",   "DISTINCT",
@@ -60,7 +61,7 @@ static const std::vector<std::string> kCypherKeywords{
     "SINGLE",     "STARTS", "THEN",   "TRUE",       "UNION",    "UNWIND",
     "WHEN",       "WHERE",  "WITH",   "WSHORTEST",  "XOR"};
 
-static const std::vector<std::string> kAwesomeFunctions{
+static const std::vector<std::string_view> kAwesomeFunctions{
     "DEGREE",        "INDEGREE",  "OUTDEGREE",     "ENDNODE",
     "HEAD",          "ID",        "LAST",          "PROPERTIES",
     "SIZE",          "STARTNODE", "TIMESTAMP",     "TOBOOLEAN",

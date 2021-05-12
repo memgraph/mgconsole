@@ -713,19 +713,19 @@ std::vector<std::string> GetCompletions(const char *text) {
   for (auto word : constants::kCypherKeywords) {
     if (word.size() >= text_str.size() &&
         word.compare(0, text_str.size(), text_str) == 0) {
-      matches.push_back(word);
+      matches.emplace_back(word);
     }
   }
   for (auto word : constants::kMemgraphKeywords) {
     if (word.size() >= text_str.size() &&
         word.compare(0, text_str.size(), text_str) == 0) {
-      matches.push_back(word);
+      matches.emplace_back(word);
     }
   }
   for (auto word : constants::kAwesomeFunctions) {
     if (word.size() >= text_str.size() &&
         word.compare(0, text_str.size(), text_str) == 0) {
-      matches.push_back(word);
+      matches.emplace_back(word);
     }
   }
 
