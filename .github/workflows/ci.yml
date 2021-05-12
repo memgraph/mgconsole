@@ -61,21 +61,6 @@ jobs:
           # First make sure python would resolve to the windows native python, not mingw one
           echo "C:/msys64/mingw${{ matrix.arch.mingw }}/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
           echo "${{ env.pythonLocation }}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
-
-      #- uses: Vampire/setup-wsl@v1
-        #with:
-            #distribution: Ubuntu-20.04
-      #- name: Download and install Memgraph under WSL
-        #shell: wsl-bash {0} # root shell
-        #run: |
-          #sudo apt update
-          #sudo apt upgrade -y
-          #sudo apt install -y libpython3.8 python3-pip # memgraph deps
-          #mkdir ~/memgraph
-          #curl -L https://download.memgraph.com/memgraph/v${{matrix.mgversion}}/ubuntu-20.04/memgraph_${{matrix.mgversion}}-community-1_amd64.deb --output ~/memgraph/memgraph-community.deb
-          #sudo systemctl mask memgraph
-          #dpkg -i ~/memgraph/memgraph-community.deb
-
       - uses: actions/checkout@v1
       - name: Install mgconsole
         run: |
@@ -84,10 +69,10 @@ jobs:
           cmake -G "MinGW Makefiles" ..
           make
           make install
-          #ctest
-
       - name: Save mgconsole Windows build
         uses: actions/upload-artifact@v2
         with:
           name: "mgconsole Windows build"
           path: build/src/mgconsole.exe
+          #ToDo(the-joksim):
+          #  - add Windows e2e test

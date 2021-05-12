@@ -40,6 +40,7 @@ endif()
 if (MGCONSOLE_ON_WINDOWS)
   set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++ ${CMAKE_EXE_LINKER_FLAGS}")
 endif()
+
 # Setup GFlags
 ExternalProject_Add(gflags-proj
         PREFIX            gflags
@@ -121,7 +122,7 @@ target_link_libraries(mgconsole
         ${OPENSSL_LIBRARIES}
         stdc++fs)
 
-if (MGCONSOLE_ON_WINDOWS) 
+if (MGCONSOLE_ON_WINDOWS)
   target_link_libraries(mgconsole PRIVATE ws2_32 shlwapi)
 endif()
 
