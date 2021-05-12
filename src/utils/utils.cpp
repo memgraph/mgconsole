@@ -703,6 +703,7 @@ void Output(const std::vector<std::string> &header,
 }  // namespace format
 
 namespace {
+// Completion and syntax highlighting support
 
 std::vector<std::string> GetCompletions(const char *text) {
   std::vector<std::string> matches;
@@ -792,9 +793,9 @@ ReplxxColor GetWordColor(const std::string_view word) {
                 constants::kAwesomeFunctions.end(),
                 word_uppercase) != constants::kAwesomeFunctions.end();
   if (is_cypher_keyword || is_memgraph_keyword) {
-    return REPLXX_COLOR_CYAN;
+    return REPLXX_COLOR_YELLOW;
   } else if (is_awesome_function) {
-    return REPLXX_COLOR_MAGENTA;
+    return REPLXX_COLOR_BRIGHTRED;
   } else {
     return REPLXX_COLOR_DEFAULT;
   }
@@ -835,7 +836,7 @@ void ColorHook(const char *input, ReplxxColor *colors, int size, void *) {
       SetWordColor(std::string_view(word_begin, word_size), colors,
                    &colors_offset);
     } else {
-      // regular char encountered - advance
+      // regular char encountered, but not the end of input - advance
       word_size++;
     }
   }
@@ -848,7 +849,12 @@ Replxx *InitAndSetupReplxx() {
 
   replxx_set_unique_history(replxx_instance, 1);
   replxx_set_completion_callback(replxx_instance, CompletionHook, nullptr);
-  replxx_set_highlighter_callback(replxx_instance, ColorHook, nullptr);
+
+  // ToDo(the-joksim):
+  //   - syntax highlighting disabled for now - figure out a smarter way of
+  //     picking the right colors depending on the user's terminal settings
+  //   - currently, the color scheme for highlighting is hardcoded
+  //replxx_set_highlighter_callback(replxx_instance, ColorHook, nullptr);
 
   return replxx_instance;
 }
