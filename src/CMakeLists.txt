@@ -24,11 +24,11 @@ find_package(OpenSSL REQUIRED)
 # Create compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if (${CMAKE_SYSTEM_NAME} MATCHES "Windows")
+if (WIN32)
   set(MGCONSOLE_ON_WINDOWS TRUE)
-elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+elseif(UNIX AND NOT APPLE)
   set(MGCONSOLE_ON_LINUX TRUE)
-elseif(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+elseif(APPLE)
   set(MGCONSOLE_ON_OSX TRUE)
 endif()
 

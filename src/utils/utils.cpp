@@ -32,15 +32,15 @@ bool EnsureDir(const fs::path &dir) noexcept {
   if (fs::exists(dir, error_code)) return fs::is_directory(dir, error_code);
   return fs::create_directories(dir, error_code);
 }
+
 fs::path GetUserHomeDir() {
   char *home_dir;
 #ifdef _WIN32
-  home_dir = getenv("USERPROFILE");
+  return getenv("USERPROFILE");
 #else /* _WIN32 */
   struct passwd *pw = getpwuid(getuid());
-  home_dir = pw->pw_dir;
+  return pw->pw_dir;
 #endif /* _WIN32 */
-  return fs::path(home_dir);
 }
 
 std::string ToUpperCase(std::string s) {
@@ -722,6 +722,12 @@ std::vector<std::string> GetCompletions(const char *text) {
       matches.push_back(word);
     }
   }
+  for (auto word : constants::kAwesomeFunctions) {
+    if (word.size() >= text_str.size() &&
+        word.compare(0, text_str.size(), text_str) == 0) {
+      matches.push_back(word);
+    }
+  }
 
   return matches;
 }
@@ -770,7 +776,6 @@ int context_length(char const *prefix) {
 
 void CompletionHook(const char *input, replxx_completions *completions,
                     int *contextLen, void *) {
-
   int utf8_context_len = context_length(input);
   int prefix_len = (int)strlen(input) - utf8_context_len;
   *contextLen = utf8str_codepoint_length(input + prefix_len, utf8_context_len);
