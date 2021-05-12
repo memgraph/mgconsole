@@ -26,10 +26,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if (WIN32)
   set(MGCONSOLE_ON_WINDOWS TRUE)
-elseif(UNIX AND NOT APPLE)
-  set(MGCONSOLE_ON_LINUX TRUE)
 elseif(APPLE)
   set(MGCONSOLE_ON_OSX TRUE)
+elseif(UNIX)
+  set(MGCONSOLE_ON_LINUX TRUE)
 endif()
 
 # Handle platform lib prefixes
