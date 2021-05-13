@@ -200,8 +200,18 @@ int main(int argc, char **argv) {
     if (is_shutting_down)
       return;
     is_shutting_down = 1;
+
+#ifdef __APPLE__
+
+    std::exit(exit_code);
+
+#else /* __APPLE__ */
+
     std::quick_exit(exit_code);
+
+#endif /*__APPLE__*/
   };
+
   struct sigaction action;
   action.sa_sigaction = nullptr;
   action.sa_handler = shutdown;
