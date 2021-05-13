@@ -20,7 +20,7 @@
 
 #endif /* _WIN32 */
 
-#include "replxx.h"
+#include <replxx.h>
 
 #include "constants.hpp"
 #include "utils.hpp"
