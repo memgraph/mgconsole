@@ -43,7 +43,7 @@ jobs:
           echo "C:/msys64/mingw64/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
           echo "${{ env.pythonLocation }}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
       - uses: actions/checkout@v1
-      - name: Install mgconsole
+      - name: Build and install mgconsole
         run: |
           mkdir build
           cd build
@@ -68,11 +68,11 @@ jobs:
         uses: actions/checkout@v2
       # NOTE: CI can't execute end2end tests because there is no way to run
       #       Memgraph on CI MacOS machines.
-      - name: Build and test mgclient
+      - name: Build and test mgconsole
         run: |
           mkdir build
           cd build
-          cmake -DOPENSSL_ROOT_DIR="$(ls -rd -- /usr/local/Cellar/openssl@1.1/* | head -n 1)"
+          cmake -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" ..
           make
           ctest
           sudo make install

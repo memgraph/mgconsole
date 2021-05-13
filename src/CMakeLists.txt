@@ -14,12 +14,6 @@
 
 include(ExternalProject)
 
-find_package(Threads REQUIRED)
-set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
-set(THREADS_PREFER_PTHREAD_FLAG TRUE)
-
-set(OPENSSL_USE_STATIC_LIBS TRUE)
-find_package(OpenSSL REQUIRED)
 
 # Create compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -30,6 +24,17 @@ elseif(APPLE)
   set(MGCONSOLE_ON_OSX TRUE)
 elseif(UNIX)
   set(MGCONSOLE_ON_LINUX TRUE)
+endif()
+
+find_package(Threads REQUIRED)
+set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
+set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+
+set(OPENSSL_USE_STATIC_LIBS TRUE)
+find_package(OpenSSL REQUIRED)
+
+if (MGCONSOLE_ON_OSX)
+  set(MACOSX_OPENSSL_ROOTDIR_FLAG "-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}")
 endif()
 
 # Handle platform lib prefixes
@@ -68,6 +73,7 @@ ExternalProject_Add(mgclient-proj
         GIT_TAG           v1.2.1
         CMAKE_ARGS        "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
                           "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+                          ${MACOSX_OPENSSL_ROOTDIR_FLAG}
         INSTALL_DIR       "${PROJECT_BINARY_DIR}/mgclient")
 
 ExternalProject_Get_Property(mgclient-proj install_dir)
@@ -105,8 +111,8 @@ target_link_libraries(mgconsole
         ${GFLAGS_LIBRARY}
         utils
         ${MGCLIENT_LIBRARY}
-        ${OPENSSL_LIBRARIES}
-        stdc++fs)
+        ${OPENSSL_LIBRARIES})
+        #stdc++fs)
 
 if (MGCONSOLE_ON_WINDOWS)
   target_link_libraries(mgconsole PRIVATE ws2_32 shlwapi)
