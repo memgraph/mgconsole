@@ -186,8 +186,14 @@ int main(int argc, char **argv) {
 
 #ifdef _WIN32
 // ToDo(the-joksim):
-//  - How to handle shutdown inside a shutdown on Windows? (Windows uses messages
-//  instead of signals.)
+//  - How to handle shutdown inside a shutdown on Windows? (Windows uses
+//  messages instead of signals.)
+//  - the double shutdown (a second signal being sent to the process while the
+//  first
+//    signal is being handled, both signals causing process termination) should
+//    be a rare event (SIGTERM might be sent from other processes, such as
+//    daemons/services, e.g. when the system is shutting down). What behavior
+//    does the double shutdown cause, and what's the benefit in handling it?
 #else /* _WIN32 */
 
   auto shutdown = [](int exit_code = 0) {
