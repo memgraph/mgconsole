@@ -31,10 +31,14 @@ On MacOS, first make sure you have [XCode](https://developer.apple.com/xcode/) a
 brew install git cmake make openssl
 ```
 
-On Windows, you need to install the MSYS2. Just follow the [instructions](https://www.msys2.org),
-up to step 6. Then, you'll need to install the dependencies using the MSYS2 MINGW64 terminal,
-which should be available from your Start menu. Just run the following command inside the MSYS2
-MINGW64 terminal:
+On Windows, you need to install the MSYS2. Just follow the [instructions](https://www.msys2.org), up to step 6.
+In addition, OpenSSL must be installed. You can easily install it with an
+[installer](https://slproweb.com/products/Win32OpenSSL.html). The Win64
+version is required, although the "Light" version is enough. Both EXE and MSI
+variants should work.
+Then, you'll need to install the dependencies using the MSYS2 MINGW64 terminal,
+which should be available from your Start menu. Just run the following command
+inside the MSYS2 MINGW64 terminal:
 
 ```
 pacman -Syu --needed base-devel git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl
