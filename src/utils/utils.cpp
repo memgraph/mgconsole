@@ -5,7 +5,9 @@
 #include <string_view>
 
 #ifdef __APPLE__
+
 #include <sstream>
+
 #endif /* __APPLE__ */
 
 #ifdef _WIN32
@@ -24,7 +26,7 @@
 
 #endif /* _WIN32 */
 
-#include "replxx.h"
+#include <replxx.h>
 
 #include "constants.hpp"
 #include "utils.hpp"
@@ -535,6 +537,7 @@ uint64_t GetMaxColumnWidth(const mg_memory::MgListPtr &data, int margin = 1) {
 uint64_t GetMaxColumnWidth(const std::vector<std::string> &data, int margin = 1) {
   uint64_t column_width = 0;
   for (const auto &field : data) {
+
     column_width = std::max(column_width,
                             static_cast<uint64_t>(field.size() + 2 * margin));
   }

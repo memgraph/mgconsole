@@ -55,7 +55,7 @@ ExternalProject_Get_Property(gflags-proj install_dir)
 set(GFLAGS_ROOT ${install_dir})
 set(GFLAGS_INCLUDE_DIRS ${GFLAGS_ROOT}/include)
 set(GFLAGS_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags${GFLAGS_WIN_LIB_SUFFIX}.a)
-set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags_debug.a)
+set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags${GFLAGS_WIN_LIB_SUFFIX}_debug.a)
 set(GFLAGS_LIBRARY gflags)
 
 add_library(${GFLAGS_LIBRARY} STATIC IMPORTED)

@@ -34,10 +34,9 @@
 #endif /* _WIN32 */
 
 #include <gflags/gflags.h>
+#include <mgclient.h>
+#include <replxx.h>
 
-#include "replxx.h"
-
-#include "mgclient.h"
 #include "version.hpp"
 #include "utils/utils.hpp"
 #include "utils/constants.hpp"
@@ -167,8 +166,8 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Save history function. Used to save readline history after each query.
-  auto save_history = [history_file, replxx_instance, cleanup_resources] {
+  // Save history function. Used to save replxx history after each query.
+  auto save_history = [&history_file, replxx_instance, &cleanup_resources] {
     if (!FLAGS_no_history) {
       // If there was no history, create history file.
       // Otherwise, append to existing history.
@@ -211,7 +210,6 @@ int main(int argc, char **argv) {
 
 #endif /*__APPLE__*/
   };
-
   struct sigaction action;
   action.sa_sigaction = nullptr;
   action.sa_handler = shutdown;

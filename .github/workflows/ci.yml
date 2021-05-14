@@ -43,11 +43,11 @@ jobs:
           echo "C:/msys64/mingw64/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
           echo "${{ env.pythonLocation }}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
       - uses: actions/checkout@v1
-      - name: Build and install mgconsole
+      - name: Install mgconsole
         run: |
           mkdir build
           cd build
-          cmake -G "MinGW Makefiles" ..
+          cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
           make
           make install
       - name: Save mgconsole Windows build
@@ -72,7 +72,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" ..
+          cmake -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release ..
           make
       - name: Save mgconsole MacOS build
         uses: actions/upload-artifact@v2
