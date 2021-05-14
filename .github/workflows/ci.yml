@@ -78,4 +78,5 @@ jobs:
         uses: actions/upload-artifact@v2
         with:
           name: "mgconsole MacOS build"
-          path: build/src/mgconsole*
+          path: build/src/mgconsole
+
