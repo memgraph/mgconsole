@@ -57,3 +57,25 @@ jobs:
           path: build/src/mgconsole.exe
           #ToDo(the-joksim):
           #  - add Windows e2e test
+
+  build_apple:
+    strategy:
+      matrix:
+        platform: [macos-10.15]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Set-up repository
+        uses: actions/checkout@v2
+      # NOTE: CI can't execute end2end tests because there is no way to run
+      #       Memgraph on CI MacOS machines.
+      - name: Build mgconsole
+        run: |
+          mkdir build
+          cd build
+          cmake -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release ..
+          make
+      - name: Save mgconsole MacOS build
+        uses: actions/upload-artifact@v2
+        with:
+          name: "mgconsole MacOS build"
+          path: build/src/mgconsole*
