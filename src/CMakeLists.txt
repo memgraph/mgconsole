@@ -39,7 +39,8 @@ endif()
 # Handle platform lib prefixes
 if (MGCONSOLE_ON_WINDOWS)
   set(GFLAGS_WIN_LIB_SUFFIX "_static")
-  set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++ ${CMAKE_EXE_LINKER_FLAGS}")
+  set(CMAKE_CXX_STANDARD_LIBRARIES "-static-libgcc -static-libstdc++ -lws2_32")
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive")
 endif()
 
 # Setup GFlags
@@ -113,7 +114,7 @@ target_link_libraries(mgconsole
         ${OPENSSL_LIBRARIES})
 
 if (MGCONSOLE_ON_WINDOWS)
-  target_link_libraries(mgconsole PRIVATE ws2_32 shlwapi)
+  target_link_libraries(mgconsole PRIVATE shlwapi)
 endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
