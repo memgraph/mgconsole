@@ -14,7 +14,6 @@
 
 include(ExternalProject)
 
-
 # Create compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -112,7 +111,6 @@ target_link_libraries(mgconsole
         utils
         ${MGCLIENT_LIBRARY}
         ${OPENSSL_LIBRARIES})
-        #stdc++fs)
 
 if (MGCONSOLE_ON_WINDOWS)
   target_link_libraries(mgconsole PRIVATE ws2_32 shlwapi)
