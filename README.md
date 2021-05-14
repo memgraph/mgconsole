@@ -11,27 +11,23 @@ To build and install mgconsole from source you will need:
   - CMake version >= 3.4
   - OpenSSL version >= 1.0.2
   - C compiler supporting C11
-  - C++ compiler supporting C++14 with support for Filesystem TS (at least
-    experimental)
+  - C++ compiler supporting C++17
   - [mgclient == 1.2](https://github.com/memgraph/mgclient/releases/tag/v1.2.0) library and headers, [install instructions](https://github.com/memgraph/mgclient)
-  - [readline](https://tiswww.case.edu/php/chet/readline/rltop.html) library
-    and headers
 
 To install compile dependencies on Debian / Ubuntu:
 
 ```
-apt-get install -y git cmake make gcc g++ libssl-dev libreadline-dev
+apt-get install -y git cmake make gcc g++ libssl-dev
 ```
 
 On RedHat / CentOS / Fedora:
 
 ```
-yum install -y git cmake make gcc gcc-c++ openssl-devel readline-devel
+yum install -y git cmake make gcc gcc-c++ openssl-devel
 ```
 
-Once everything is in place (please make sure `mgclient` is installed), create
-a build directory inside the source directory and configure the build by
-running CMake from it:
+Once everything is in place, create a build directory inside the source
+directory and configure the build by running CMake from it:
 
 ```
 mkdir build

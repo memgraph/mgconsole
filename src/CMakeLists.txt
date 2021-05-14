@@ -1,5 +1,3 @@
-# mgconsole - console client for Memgraph database
-# Copyright (C) 2016-2020 Memgraph Ltd. [https://memgraph.com]
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -17,8 +15,28 @@
 include(ExternalProject)
 
 find_package(Threads REQUIRED)
+set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
+set(THREADS_PREFER_PTHREAD_FLAG TRUE)
+
+set(OPENSSL_USE_STATIC_LIBS TRUE)
 find_package(OpenSSL REQUIRED)
-find_package(Readline REQUIRED)
+
+# Create compile_commands.json
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if (WIN32)
+  set(MGCONSOLE_ON_WINDOWS TRUE)
+elseif(APPLE)
+  set(MGCONSOLE_ON_OSX TRUE)
+elseif(UNIX)
+  set(MGCONSOLE_ON_LINUX TRUE)
+endif()
+
+# Handle platform lib prefixes
+if (MGCONSOLE_ON_WINDOWS)
+  set(GFLAGS_WIN_LIB_SUFFIX "_static")
+  set(CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++ ${CMAKE_EXE_LINKER_FLAGS}")
+endif()
 
 # Setup GFlags
 ExternalProject_Add(gflags-proj
@@ -31,40 +49,68 @@ ExternalProject_Add(gflags-proj
 
 ExternalProject_Get_Property(gflags-proj install_dir)
 set(GFLAGS_ROOT ${install_dir})
-
-set(GFLAGS_INCLUDE_DIRS ${GFLAGS_ROOT}/include
-        CACHE INTERNAL "Path to gflags include directory")
-
-set(GFLAGS_LIBRARY_PATH ${GFLAGS_ROOT}/lib/${CMAKE_FIND_LIBRARY_PREFIXES}gflags.a)
-set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/${CMAKE_FIND_LIBRARY_PREFIXES}gflags_debug.a)
+set(GFLAGS_INCLUDE_DIRS ${GFLAGS_ROOT}/include)
+set(GFLAGS_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags${GFLAGS_WIN_LIB_SUFFIX}.a)
+set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags${GFLAGS_WIN_LIB_SUFFIX}_debug.a)
 set(GFLAGS_LIBRARY gflags)
+
 add_library(${GFLAGS_LIBRARY} STATIC IMPORTED)
+target_compile_definitions(${GFLAGS_LIBRARY} INTERFACE GFLAGS_IS_A_DLL=0)
 set_target_properties(${GFLAGS_LIBRARY} PROPERTIES
         IMPORTED_LOCATION ${GFLAGS_LIBRARY_PATH}
         IMPORTED_LOCATION_DEBUG ${GFLAGS_DEBUG_LIBRARY_PATH}
-        INTERFACE_LINK_LIBRARIES ${CMAKE_THREAD_LIBS_INIT})
+        INTERFACE_LINK_LIBRARIES Threads::Threads)
 add_dependencies(${GFLAGS_LIBRARY} gflags-proj)
 
-# Setup mgclient library
-find_library(MGCLIENT_LIBRARY mgclient)
-find_path(MGCLIENT_INCLUDE_DIRS mgclient.h)
+ExternalProject_Add(mgclient-proj
+        PREFIX            mgclient
+        GIT_REPOSITORY    https://github.com/memgraph/mgclient.git
+        GIT_TAG           v1.2.1
+        CMAKE_ARGS        "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
+                          "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+        INSTALL_DIR       "${PROJECT_BINARY_DIR}/mgclient")
 
-if (MGCLIENT_LIBRARY AND MGCLIENT_INCLUDE_DIRS)
-  message(STATUS "Found mgclient: " ${MGCLIENT_LIBRARY} " "
-          ${MGCLIENT_INCLUDE_DIRS})
-else()
-  message(FATAL_ERROR "Could not find mgclient")
-endif()
+ExternalProject_Get_Property(mgclient-proj install_dir)
+set(MGCLIENT_ROOT ${install_dir})
+set(MGCLIENT_INCLUDE_DIRS ${MGCLIENT_ROOT}/include)
+set(MGCLIENT_LIBRARY_PATH ${MGCLIENT_ROOT}/lib/libmgclient.a)
+set(MGCLIENT_LIBRARY mgclient)
+
+add_library(${MGCLIENT_LIBRARY} STATIC IMPORTED)
+set_target_properties(${MGCLIENT_LIBRARY} PROPERTIES
+  IMPORTED_LOCATION ${MGCLIENT_LIBRARY_PATH}
+  INTERFACE_LINK_LIBRARIES Threads::Threads)
+add_dependencies(${MGCLIENT_LIBRARY} mgclient-proj)
+
+add_subdirectory(utils)
 
 add_compile_options(-Wall -Wextra -pedantic -Werror)
 
+# replxx performs narrowing conversion on Windows
+if (MGCONSOLE_ON_WINDOWS)
+  add_compile_options(-Wno-narrowing)
+endif()
+
 add_executable(mgconsole main.cpp)
-target_include_directories(mgconsole PRIVATE
+target_compile_definitions(mgconsole PRIVATE MGCLIENT_STATIC_DEFINE)
+target_include_directories(mgconsole
+        PRIVATE
         ${GFLAGS_INCLUDE_DIRS}
         ${MGCLIENT_INCLUDE_DIRS}
+        ${REPLXX_INCLUDE_DIRS}
         ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(mgconsole ${MGCLIENT_LIBRARY} ${GFLAGS_LIBRARY}
-        ${READLINE_LIBRARY} stdc++fs)
+
+target_link_libraries(mgconsole
+        PRIVATE
+        ${GFLAGS_LIBRARY}
+        utils
+        ${MGCLIENT_LIBRARY}
+        ${OPENSSL_LIBRARIES}
+        stdc++fs)
+
+if (MGCONSOLE_ON_WINDOWS)
+  target_link_libraries(mgconsole PRIVATE ws2_32 shlwapi)
+endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
         "${CMAKE_CURRENT_BINARY_DIR}/version.hpp")

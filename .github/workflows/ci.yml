@@ -3,35 +3,22 @@ name: CI
 on: [push]
 
 jobs:
-  build_and_test:
+  build_and_test_ubuntu:
     strategy:
      matrix:
-        platform: [ubuntu-18.04]
+        platform: [ubuntu-20.04]
     runs-on: ${{ matrix.platform }}
     steps:
-    - name: Install dependencies (Ubuntu 18.04)
-      if: matrix.platform == 'ubuntu-18.04'
+    - name: Install dependencies (Ubuntu 20.04)
+      if: matrix.platform == 'ubuntu-20.04'
       run: |
-        sudo apt install -y git cmake make gcc g++ libssl-dev libreadline-dev # mgconsole deps
-        sudo apt install -y libpython3.7 python3-pip # memgraph deps
+        sudo apt install -y git cmake make gcc g++ libssl-dev # mgconsole deps
+        sudo apt install -y libpython3.8 python3-pip # memgraph deps
         mkdir ~/memgraph
-        curl -L https://memgraph.com/download/memgraph/v1.4.0/ubuntu-18.04/memgraph_1.4.0-community-1_amd64.deb > ~/memgraph/memgraph_1.4.0-community-1_amd64.deb
+        curl -L https://memgraph.com/download/memgraph/v1.4.0/ubuntu-20.04/memgraph_1.4.0-community-1_amd64.deb > ~/memgraph/memgraph_1.4.0-community-1_amd64.deb
         sudo systemctl mask memgraph
         sudo dpkg -i ~/memgraph/memgraph_1.4.0-community-1_amd64.deb
-
-    - name: Download mgclient
-      uses: actions/checkout@master
-      with:
-        repository: memgraph/mgclient
-        ref: 'v1.2.0'
-    - name: Install mgclient
-      run: |
-        mkdir build
-        cd build
-        cmake ..
-        make
-        sudo make install
-
+    
     - uses: actions/checkout@v1
     - name: Install and test mgconsole
       run: |
@@ -41,3 +28,32 @@ jobs:
         make
         sudo make install
         ctest
+
+  build_windows:
+    runs-on: windows-latest
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl
+      - name: Add mingw64 to PATH
+        run: |
+          # First make sure python would resolve to the windows native python, not mingw one
+          echo "C:/msys64/mingw64/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+          echo "${{ env.pythonLocation }}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+      - uses: actions/checkout@v1
+      - name: Install mgconsole
+        run: |
+          mkdir build
+          cd build
+          cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
+          make
+          make install
+      - name: Save mgconsole Windows build
+        uses: actions/upload-artifact@v2
+        with:
+          name: "mgconsole Windows build"
+          path: build/src/mgconsole.exe
+          #ToDo(the-joksim):
+          #  - add Windows e2e test
