@@ -40,10 +40,6 @@ MINGW64 terminal:
 pacman -Syu --needed base-devel git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl
 ```
 
-Once done, add the MINGW64 bin folder to the system PATH variable. If you've
-installed MSYS2 using the default installation settings, the bin folder path
-should be `C:\msys64\mingw64\bin`.
-
 Once everything is in place, create a build directory inside the source
 directory and configure the build by running CMake from it as follows:
 
