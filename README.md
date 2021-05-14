@@ -12,7 +12,6 @@ To build and install mgconsole from source you will need:
   - OpenSSL version >= 1.0.2
   - C compiler supporting C11
   - C++ compiler supporting C++17
-  - [mgclient == 1.2](https://github.com/memgraph/mgclient/releases/tag/v1.2.0) library and headers, [install instructions](https://github.com/memgraph/mgclient)
 
 To install compile dependencies on Debian / Ubuntu:
 
@@ -26,14 +25,52 @@ On RedHat / CentOS / Fedora:
 yum install -y git cmake make gcc gcc-c++ openssl-devel
 ```
 
+On MacOS, first make sure you have [XCode](https://developer.apple.com/xcode/) and [Homebrew](https://brew.sh) installed. Then, in the terminal, paste:
+
+```
+brew install git cmake make openssl
+```
+
+On Windows, you need to install the MSYS2. Just follow the [instructions](https://www.msys2.org),
+up to step 6. Then, you'll need to install the dependencies using the MSYS2 MINGW64 terminal,
+which should be available from your Start menu. Just run the following command inside the MSYS2
+MINGW64 terminal:
+
+```
+pacman -Syu --needed base-devel git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl
+```
+
+Once done, add the MINGW64 bin folder to the system PATH variable. If you've
+installed MSYS2 using the default installation settings, the bin folder path
+should be `C:\msys64\mingw64\bin`.
+
 Once everything is in place, create a build directory inside the source
-directory and configure the build by running CMake from it:
+directory and configure the build by running CMake from it as follows:
+
+* on Linux:
 
 ```
 mkdir build
 cd build
-cmake ..
+cmake -DCMAKE_BUILD_TYPE=Release ..
 ```
+
+* on MacOS:
+
+```
+mkdir build
+cd build
+cmake -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release ..
+```
+
+* on Windows, from the MSYS2 MINGW64 terminal:
+
+```
+mkdir build
+cd build
+cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
+```
+
 
 After running CMake, you should see a Makefile in the build directory. Then you
 can build the project by running:
