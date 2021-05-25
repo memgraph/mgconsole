@@ -13,6 +13,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 include(ExternalProject)
+include(GNUInstallDirs)
 
 # Create compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -131,7 +132,6 @@ endif()
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
         "${CMAKE_CURRENT_BINARY_DIR}/version.hpp")
 
-include(GNUInstallDirs)
 
 install(TARGETS mgconsole
        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
