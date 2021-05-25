@@ -261,6 +261,8 @@ bool is_a_tty(int fd) {
 
 void PrintHelp() { std::cout << constants::kInteractiveUsage << std::endl; }
 
+void PrintDocs() { std::cout << constants::kDocs << std::endl; }
+
 void EchoFailure(const std::string &failure_msg, const std::string &explanation) {
   if (is_a_tty(STDIN_FILENO)) {
 #ifdef _WIN32
@@ -404,6 +406,9 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
           return std::nullopt;
         } else if (trimmed_line == constants::kCommandHelp) {
           console::PrintHelp();
+          return "";
+        } else if (trimmed_line == constants::kCommandDocs) {
+          console::PrintDocs();
           return "";
         } else {
           console::EchoFailure("Unsupported command", trimmed_line);

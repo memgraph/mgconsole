@@ -256,10 +256,10 @@ int main(int argc, char **argv) {
   }
 
   console::EchoInfo("mgconsole "s + gflags::VersionString());
-  console::EchoInfo("Type :help for shell usage");
-  console::EchoInfo("Quit the shell by typing Ctrl-D(eof) or :quit");
   console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" +
            std::to_string(FLAGS_port) + "'");
+  console::EchoInfo("Type :help for shell usage");
+  console::EchoInfo("Quit the shell by typing Ctrl-D(eof) or :quit");
   int num_retries = 3;
   while (true) {
     auto query = query::GetQuery(replxx_instance);

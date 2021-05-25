@@ -11,8 +11,8 @@ constexpr const auto *kUsage =
     "Memgraph bolt client.\n"
     "The client can be run in interactive or non-interactive mode.\n";
 
-constexpr const auto *kInteractiveUsage =
-    "In interactive mode, user can enter cypher queries and supported "
+constexpr const std::string_view kInteractiveUsage =
+    "In interactive mode, user can enter Cypher queries and supported "
     "commands.\n\n"
     "Cypher queries can span through multiple lines and conclude with a\n"
     "semi-colon (;). Each query is executed in the database and the results\n"
@@ -21,12 +21,22 @@ constexpr const auto *kInteractiveUsage =
     "\t:help\t Print out usage for interactive mode\n"
     "\t:quit\t Exit the shell\n";
 
-static const std::string kCommandQuit = ":quit";
-static const std::string kCommandHelp = ":help";
+constexpr const std::string_view kDocs =
+    "If you are new to Memgraph or the Cypher query language, check out these "
+    "resources:\n\n"
+    "\tQuerying with Cypher:  https://memgr.ph/querying\n"
+    "\tImporting data:  https://memgr.ph/importing-data\n"
+    "\tDatabase configuration:  https://memgr.ph/configuration\n\n"
+    "Official mgconsole documentation available on: "
+    "https://memgr.ph/mgconsole\n";
+
+constexpr const std::string_view kCommandQuit = ":quit";
+constexpr const std::string_view kCommandHelp = ":help";
+constexpr const std::string_view kCommandDocs = ":docs";
 
 // Supported formats.
-static const std::string kCsvFormat = "csv";
-static const std::string kTabularFormat = "tabular";
+constexpr const std::string_view kCsvFormat = "csv";
+constexpr const std::string_view kTabularFormat = "tabular";
 
 // History default directory.
 static const std::string kDefaultHistoryBaseDir = "~";

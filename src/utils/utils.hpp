@@ -159,6 +159,8 @@ bool is_a_tty(int fd);
 
 void PrintHelp();
 
+void PrintDocs();
+
 void EchoFailure(const std::string &failure_msg, const std::string &explanation);
 
 void EchoInfo(const std::string &message);
