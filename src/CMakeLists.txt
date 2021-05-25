@@ -39,13 +39,19 @@ if (MGCONSOLE_ON_OSX)
   set(MACOSX_OPENSSL_ROOTDIR_FLAG "-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}")
 endif()
 
-# Handle platform lib prefixes
+# Handle platforms
 if (MGCONSOLE_ON_WINDOWS)
   set(GFLAGS_WIN_LIB_SUFFIX "_static")
   set(CMAKE_CXX_STANDARD_LIBRARIES "-static-libgcc -static-libstdc++ -lws2_32")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive")
 elseif(MGCONSOLE_ON_LINUX)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
+endif()
+
+if(MGCONSOLE_ON_LINUX)
+  set(MG_INSTALL_LIB_DIR ${CMAKE_INSTALL_LIBDIR})
+else()
+  set(MG_INSTALL_LIB_DIR "lib")
 endif()
 
 # Setup GFlags
@@ -84,7 +90,7 @@ ExternalProject_Add(mgclient-proj
 ExternalProject_Get_Property(mgclient-proj install_dir)
 set(MGCLIENT_ROOT ${install_dir})
 set(MGCLIENT_INCLUDE_DIRS ${MGCLIENT_ROOT}/include)
-set(MGCLIENT_LIBRARY_PATH ${MGCLIENT_ROOT}/lib/libmgclient.a)
+set(MGCLIENT_LIBRARY_PATH ${MGCLIENT_ROOT}/${MG_INSTALL_LIB_DIR}/libmgclient.a)
 set(MGCLIENT_LIBRARY mgclient)
 
 add_library(${MGCLIENT_LIBRARY} STATIC IMPORTED)
