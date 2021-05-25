@@ -17,7 +17,7 @@ include(ExternalProject)
 # Create compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if (WIN32)
+if(WIN32)
   set(MGCONSOLE_ON_WINDOWS TRUE)
 elseif(APPLE)
   set(MGCONSOLE_ON_OSX TRUE)
@@ -29,7 +29,10 @@ find_package(Threads REQUIRED)
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 
-set(OPENSSL_USE_STATIC_LIBS TRUE)
+if(NOT MGCONSOLE_ON_LINUX)
+  set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
+
 find_package(OpenSSL REQUIRED)
 
 if (MGCONSOLE_ON_OSX)
