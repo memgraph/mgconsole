@@ -13,11 +13,12 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 include(ExternalProject)
+include(GNUInstallDirs)
 
 # Create compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-if (WIN32)
+if(WIN32)
   set(MGCONSOLE_ON_WINDOWS TRUE)
 elseif(APPLE)
   set(MGCONSOLE_ON_OSX TRUE)
@@ -29,20 +30,31 @@ find_package(Threads REQUIRED)
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 
-set(OPENSSL_USE_STATIC_LIBS TRUE)
+if(NOT MGCONSOLE_ON_LINUX)
+  set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
+
 find_package(OpenSSL REQUIRED)
 
 if (MGCONSOLE_ON_OSX)
   set(MACOSX_OPENSSL_ROOTDIR_FLAG "-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}")
 endif()
 
-# Handle platform lib prefixes
+# Handle platforms
 if (MGCONSOLE_ON_WINDOWS)
   set(GFLAGS_WIN_LIB_SUFFIX "_static")
   set(CMAKE_CXX_STANDARD_LIBRARIES "-static-libgcc -static-libstdc++ -lws2_32")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive")
 elseif(MGCONSOLE_ON_LINUX)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
+endif()
+
+if(MGCONSOLE_ON_LINUX)
+  # On Debian, the libdir has multiarch path which we don't want while searching for
+  # dependancy libs
+  string(REGEX REPLACE "(lib[A-Za-z0-9_]*)(/.*)?" "\\1" MG_INSTALL_LIB_DIR ${CMAKE_INSTALL_LIBDIR})
+else()
+  set(MG_INSTALL_LIB_DIR "lib")
 endif()
 
 # Setup GFlags
@@ -81,7 +93,7 @@ ExternalProject_Add(mgclient-proj
 ExternalProject_Get_Property(mgclient-proj install_dir)
 set(MGCLIENT_ROOT ${install_dir})
 set(MGCLIENT_INCLUDE_DIRS ${MGCLIENT_ROOT}/include)
-set(MGCLIENT_LIBRARY_PATH ${MGCLIENT_ROOT}/lib/libmgclient.a)
+set(MGCLIENT_LIBRARY_PATH ${MGCLIENT_ROOT}/${MG_INSTALL_LIB_DIR}/libmgclient.a)
 set(MGCLIENT_LIBRARY mgclient)
 
 add_library(${MGCLIENT_LIBRARY} STATIC IMPORTED)
@@ -121,8 +133,6 @@ endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
         "${CMAKE_CURRENT_BINARY_DIR}/version.hpp")
-
-include(GNUInstallDirs)
 
 install(TARGETS mgconsole
        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
