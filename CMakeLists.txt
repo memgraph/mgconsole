@@ -33,7 +33,7 @@ message(STATUS "CMake build type: ${CMAKE_BUILD_TYPE}")
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     # '/usr' is a special case, for more details see:
     # https://cmake.org/cmake/help/latest/module/GNUInstallDirs.html#special-cases
-    set(CMAKE_INSTALL_PREFIX "/usr")
+    set(CMAKE_INSTALL_PREFIX "/usr" CACHE PATH "install dir" FORCE)
 endif()
 
 add_subdirectory(src)

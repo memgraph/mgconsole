@@ -50,7 +50,9 @@ elseif(MGCONSOLE_ON_LINUX)
 endif()
 
 if(MGCONSOLE_ON_LINUX)
-  set(MG_INSTALL_LIB_DIR ${CMAKE_INSTALL_LIBDIR})
+  # On Debian, the libdir has multiarch path which we don't want while searching for
+  # dependancy libs
+  string(REGEX REPLACE "(lib[A-Za-z0-9_]*)(/.*)?" "\\1" MG_INSTALL_LIB_DIR ${CMAKE_INSTALL_LIBDIR})
 else()
   set(MG_INSTALL_LIB_DIR "lib")
 endif()
@@ -131,7 +133,6 @@ endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
         "${CMAKE_CURRENT_BINARY_DIR}/version.hpp")
-
 
 install(TARGETS mgconsole
        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
