@@ -52,7 +52,7 @@ endif()
 if(MGCONSOLE_ON_LINUX)
   # On Debian, the libdir has multiarch path which we don't want while searching for
   # dependancy libs
-  string(REGEX REPLACE "(lib[A-Za-z0-9_]*)(/.*)?" "\\1" MG_INSTALL_LIB_DIR ${CMAKE_INSTALL_LIBDIR})
+  string(REGEX MATCH "lib[^/]*" MG_INSTALL_LIB_DIR ${CMAKE_INSTALL_LIBDIR})
 else()
   set(MG_INSTALL_LIB_DIR "lib")
 endif()
