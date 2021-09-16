@@ -1,8 +1,12 @@
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <iostream>
-
+#include <ratio>
 #include <string.h>
 #include <string_view>
+
+#include "mgclient.h"
 
 #ifdef __APPLE__
 
@@ -29,20 +33,22 @@
 #include <replxx.h>
 
 #include "constants.hpp"
+#include "date.hpp"
 #include "utils.hpp"
 
 namespace utils {
 
 bool EnsureDir(const fs::path &dir) noexcept {
-  std::error_code error_code;  // for exception suppression.
-  if (fs::exists(dir, error_code)) return fs::is_directory(dir, error_code);
+  std::error_code error_code; // for exception suppression.
+  if (fs::exists(dir, error_code))
+    return fs::is_directory(dir, error_code);
   return fs::create_directories(dir, error_code);
 }
 
 fs::path GetUserHomeDir() {
 #ifdef _WIN32
   return getenv("USERPROFILE");
-#else /* _WIN32 */
+#else  /* _WIN32 */
   struct passwd *pw = getpwuid(getuid());
   return pw->pw_dir;
 #endif /* _WIN32 */
@@ -70,7 +76,8 @@ std::string Trim(const std::string &s) {
   return std::string(begin, end);
 }
 
-std::string Replace(std::string src, const std::string &match, const std::string &replacement) {
+std::string Replace(std::string src, const std::string &match,
+                    const std::string &replacement) {
   for (size_t pos = src.find(match); pos != std::string::npos;
        pos = src.find(match, pos + replacement.size())) {
     src.erase(pos, match.length()).insert(pos, replacement);
@@ -192,48 +199,107 @@ void PrintValue(std::ostream &os, const mg_path *path) {
   }
 }
 
+void PrintValue(std::ostream &os, const mg_date *date) {
+  const auto days = date::days(mg_date_days(date));
+  const auto sys_days = date::sys_days(days);
+  const auto ymd = date::year_month_day(sys_days);
+  os << ymd;
+}
+
+void PrintValue(std::ostream &os, const mg_local_time *local_time) {
+  const auto nanos =
+      std::chrono::nanoseconds(mg_local_time_nanoseconds(local_time));
+  const auto hms = date::hh_mm_ss(nanos);
+  os << hms;
+}
+
+void PrintValue(std::ostream &os, const mg_local_date_time *local_date_time) {
+  const auto seconds =
+      std::chrono::seconds(mg_local_date_time_seconds(local_date_time));
+  const auto days = std::chrono::duration_cast<date::days>(seconds);
+  const auto date = mg_date_make(days.count());
+
+  const auto nanoseconds =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(seconds) -
+      std::chrono::duration_cast<std::chrono::nanoseconds>(days);
+  const auto time = mg_local_time_make(nanoseconds.count());
+
+  PrintValue(os, date);
+  os << " ";
+  PrintValue(os, time);
+}
+
+void PrintValue(std::ostream &os, const mg_duration *duration) {
+  const auto months = date::months(mg_duration_months(duration));
+  const auto days = date::months(mg_duration_days(duration));
+  const auto seconds = std::chrono::seconds(mg_duration_seconds(duration));
+  const auto nanoseconds =
+      std::chrono::nanoseconds(mg_duration_nanoseconds(duration));
+
+  const auto micro = std::chrono::duration_cast<std::chrono::microseconds>(
+      months + days + seconds + nanoseconds);
+  const auto dd = std::chrono::duration_cast<date::days>(micro);
+  const auto remaining_time =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(micro - dd);
+  const auto time = mg_local_time_make(remaining_time.count());
+  os << "P" << dd.count() << "T";
+  PrintValue(os, time);
+}
+
 void PrintValue(std::ostream &os, const mg_value *value) {
   switch (mg_value_get_type(value)) {
-    case MG_VALUE_TYPE_NULL:
-      os << "Null";
-      return;
-    case MG_VALUE_TYPE_BOOL:
-      os << (mg_value_bool(value) ? "true" : "false");
-      return;
-    case MG_VALUE_TYPE_INTEGER:
-      os << mg_value_integer(value);
-      return;
-    case MG_VALUE_TYPE_FLOAT:
-      os << mg_value_float(value);
-      return;
-    case MG_VALUE_TYPE_STRING:
-      PrintValue(os, mg_value_string(value));
-      return;
-    case MG_VALUE_TYPE_LIST:
-      PrintValue(os, mg_value_list(value));
-      return;
-    case MG_VALUE_TYPE_MAP:
-      PrintValue(os, mg_value_map(value));
-      return;
-    case MG_VALUE_TYPE_NODE:
-      PrintValue(os, mg_value_node(value));
-      return;
-    case MG_VALUE_TYPE_RELATIONSHIP:
-      PrintValue(os, mg_value_relationship(value));
-      return;
-    case MG_VALUE_TYPE_UNBOUND_RELATIONSHIP:
-      PrintValue(os, mg_value_unbound_relationship(value));
-      return;
-    case MG_VALUE_TYPE_PATH:
-      PrintValue(os, mg_value_path(value));
-      return;
-    default:
-      os << "{unknown value}";
-      break;
+  case MG_VALUE_TYPE_NULL:
+    os << "Null";
+    return;
+  case MG_VALUE_TYPE_BOOL:
+    os << (mg_value_bool(value) ? "true" : "false");
+    return;
+  case MG_VALUE_TYPE_INTEGER:
+    os << mg_value_integer(value);
+    return;
+  case MG_VALUE_TYPE_FLOAT:
+    os << mg_value_float(value);
+    return;
+  case MG_VALUE_TYPE_STRING:
+    PrintValue(os, mg_value_string(value));
+    return;
+  case MG_VALUE_TYPE_LIST:
+    PrintValue(os, mg_value_list(value));
+    return;
+  case MG_VALUE_TYPE_MAP:
+    PrintValue(os, mg_value_map(value));
+    return;
+  case MG_VALUE_TYPE_NODE:
+    PrintValue(os, mg_value_node(value));
+    return;
+  case MG_VALUE_TYPE_RELATIONSHIP:
+    PrintValue(os, mg_value_relationship(value));
+    return;
+  case MG_VALUE_TYPE_UNBOUND_RELATIONSHIP:
+    PrintValue(os, mg_value_unbound_relationship(value));
+    return;
+  case MG_VALUE_TYPE_PATH:
+    PrintValue(os, mg_value_path(value));
+    return;
+  case MG_VALUE_TYPE_DATE:
+    PrintValue(os, mg_value_date(value));
+    return;
+  case MG_VALUE_TYPE_LOCAL_TIME:
+    PrintValue(os, mg_value_local_time(value));
+    return;
+  case MG_VALUE_TYPE_LOCAL_DATE_TIME:
+    PrintValue(os, mg_value_local_date_time(value));
+    return;
+  case MG_VALUE_TYPE_DURATION:
+    PrintValue(os, mg_value_duration(value));
+    return;
+  default:
+    os << "{unknown value}";
+    break;
   }
 }
 
-}  // namespace utils
+} // namespace utils
 
 namespace console {
 
@@ -263,12 +329,13 @@ void PrintHelp() { std::cout << constants::kInteractiveUsage << std::endl; }
 
 void PrintDocs() { std::cout << constants::kDocs << std::endl; }
 
-void EchoFailure(const std::string &failure_msg, const std::string &explanation) {
+void EchoFailure(const std::string &failure_msg,
+                 const std::string &explanation) {
   if (is_a_tty(STDIN_FILENO)) {
 #ifdef _WIN32
-    HANDLE  hConsole;
+    HANDLE hConsole;
     WORD original_console_attr;
-    CONSOLE_SCREEN_BUFFER_INFO   csbi;
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
 
     hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
@@ -277,12 +344,12 @@ void EchoFailure(const std::string &failure_msg, const std::string &explanation)
 
     original_console_attr = csbi.wAttributes;
     FlushConsoleInputBuffer(hConsole);
-    SetConsoleTextAttribute(hConsole,  FOREGROUND_RED | FOREGROUND_INTENSITY);
+    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
 
     std::cout << failure_msg << ":";
     SetConsoleTextAttribute(hConsole, original_console_attr);
     std::cout << " ";
-#else /* _WIN32 */
+#else  /* _WIN32 */
     std::cout << "\033[1;31m" << failure_msg << ": \033[0m";
 #endif /* _WIN32 */
     std::cout << explanation << std::endl;
@@ -300,7 +367,8 @@ void EchoInfo(const std::string &message) {
 
 void SetStdinEcho(bool enable = true) {
 #ifdef _WIN32
-  // from https://stackoverflow.com/questions/9217908/how-to-disable-echo-in-windows-console
+  // from
+  // https://stackoverflow.com/questions/9217908/how-to-disable-echo-in-windows-console
   HANDLE h;
   DWORD mode;
   h = GetStdHandle(STD_INPUT_HANDLE);
@@ -312,7 +380,7 @@ void SetStdinEcho(bool enable = true) {
     }
     SetConsoleMode(h, mode);
   }
-#else /* _WIN32 */
+#else  /* _WIN32 */
   struct termios tty;
   tcgetattr(STDIN_FILENO, &tty);
   if (!enable) {
@@ -334,7 +402,8 @@ std::optional<std::string> GetLine() {
   return line;
 }
 
-std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, bool *escaped) {
+std::pair<std::string, bool> ParseLine(const std::string &line, char *quote,
+                                       bool *escaped) {
   // Parse line.
   bool is_done = false;
   std::stringstream parsed_line;
@@ -375,8 +444,7 @@ std::optional<std::string> ReadLine(Replxx *replxx_instance,
   return r_val;
 }
 
-}  // namespace console
-
+} // namespace console
 
 namespace query {
 
@@ -419,13 +487,14 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
     }
     if (!line)
       return std::nullopt;
-    if (line->empty()) continue;
+    if (line->empty())
+      continue;
     auto ret = console::ParseLine(*line, &quote, &escaped);
     query << ret.first;
     auto char_count = ret.first.size();
     if (ret.second) {
       is_done = true;
-      char_count += 1;  // ';' sign
+      char_count += 1; // ';' sign
     } else {
       // Query is multiline so append newline.
       query << "\n";
@@ -439,7 +508,8 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
 }
 
 QueryData ExecuteQuery(mg_session *session, const std::string &query) {
-  int status = mg_session_run(session, query.c_str(), nullptr, nullptr, nullptr, nullptr);
+  int status = mg_session_run(session, query.c_str(), nullptr, nullptr, nullptr,
+                              nullptr);
   auto start = std::chrono::system_clock::now();
   if (status != 0) {
     if (mg_session_status(session) == MG_SESSION_BAD) {
@@ -461,8 +531,8 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
   QueryData ret;
   mg_result *result;
   while ((status = mg_session_fetch(session, &result)) == 1) {
-    ret.records.push_back(
-        mg_memory::MakeCustomUnique<mg_list>(mg_list_copy(mg_result_row(result))));
+    ret.records.push_back(mg_memory::MakeCustomUnique<mg_list>(
+        mg_list_copy(mg_result_row(result))));
     if (!ret.records.back()) {
       std::cerr << "out of memory";
       std::abort();
@@ -496,13 +566,15 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
   return ret;
 }
 
-}   //namespace query
+} // namespace query
 
 namespace format {
 
-void PrintHeaderTabular(const std::vector<std::string> &data, int total_width, int column_width,
-                        int num_columns, bool all_columns_fit, int margin = 1) {
-  if (!all_columns_fit) num_columns -= 1;
+void PrintHeaderTabular(const std::vector<std::string> &data, int total_width,
+                        int column_width, int num_columns, bool all_columns_fit,
+                        int margin = 1) {
+  if (!all_columns_fit)
+    num_columns -= 1;
   std::string data_output = std::string(total_width, ' ');
   for (auto i = 0; i < total_width; i += column_width) {
     data_output[i] = '|';
@@ -539,7 +611,8 @@ uint64_t GetMaxColumnWidth(const mg_memory::MgListPtr &data, int margin = 1) {
   return column_width + 1;
 }
 
-uint64_t GetMaxColumnWidth(const std::vector<std::string> &data, int margin = 1) {
+uint64_t GetMaxColumnWidth(const std::vector<std::string> &data,
+                           int margin = 1) {
   uint64_t column_width = 0;
   for (const auto &field : data) {
 
@@ -550,9 +623,10 @@ uint64_t GetMaxColumnWidth(const std::vector<std::string> &data, int margin = 1)
 }
 
 void PrintRowTabular(const mg_memory::MgListPtr &data, int total_width,
-                     int column_width, int num_columns,
-                     bool all_columns_fit, int margin = 1) {
-  if (!all_columns_fit) num_columns -= 1;
+                     int column_width, int num_columns, bool all_columns_fit,
+                     int margin = 1) {
+  if (!all_columns_fit)
+    num_columns -= 1;
   std::string data_output = std::string(total_width, ' ');
   for (auto i = 0; i < total_width; i += column_width) {
     data_output[i] = '|';
@@ -560,7 +634,7 @@ void PrintRowTabular(const mg_memory::MgListPtr &data, int total_width,
     if (idx < num_columns) {
       std::stringstream field;
       utils::PrintValue(field,
-                 mg_list_at(data.get(), idx));  // convert Value to string
+                        mg_list_at(data.get(), idx)); // convert Value to string
       std::string field_str(field.str());
       if ((int)field_str.size() > column_width - 2 * margin - 1) {
         field_str.erase(column_width - 2 * margin - 1, std::string::npos);
@@ -577,7 +651,8 @@ void PrintRowTabular(const mg_memory::MgListPtr &data, int total_width,
 }
 
 void PrintTabular(const std::vector<std::string> &header,
-                  const std::vector<mg_memory::MgListPtr> &records, const bool fit_to_screen) {
+                  const std::vector<mg_memory::MgListPtr> &records,
+                  const bool fit_to_screen) {
   // lifted from replxx io.cxx
   auto get_screen_columns = []() {
     int cols(0);
@@ -604,7 +679,7 @@ void PrintTabular(const std::vector<std::string> &header,
     column_width = std::max(column_width, GetMaxColumnWidth(records[i]));
   }
   column_width = std::max(static_cast<uint64_t>(5),
-                          column_width);  // set column width to min 5
+                          column_width); // set column width to min 5
   auto total_width = column_width * num_columns + 1;
 
   // Fit to screen width.
@@ -650,7 +725,8 @@ void PrintTabular(const std::vector<std::string> &header,
   std::cout << line_fill << std::endl;
 }
 
-std::vector<std::string> FormatCsvFields(const mg_memory::MgListPtr &fields, const CsvOptions &csv_opts) {
+std::vector<std::string> FormatCsvFields(const mg_memory::MgListPtr &fields,
+                                         const CsvOptions &csv_opts) {
   std::vector<std::string> formatted;
   formatted.reserve(mg_list_size(fields.get()));
   for (uint32_t i = 0; i < mg_list_size(fields.get()); ++i) {
@@ -670,7 +746,8 @@ std::vector<std::string> FormatCsvFields(const mg_memory::MgListPtr &fields, con
   return formatted;
 }
 
-std::vector<std::string> FormatCsvHeader(const std::vector<std::string> &fields, const CsvOptions &csv_opts) {
+std::vector<std::string> FormatCsvHeader(const std::vector<std::string> &fields,
+                                         const CsvOptions &csv_opts) {
   std::vector<std::string> formatted;
   formatted.reserve(fields.size());
   for (auto formatted_field : fields) {
@@ -704,8 +781,7 @@ void PrintCsv(const std::vector<std::string> &header,
 
 void Output(const std::vector<std::string> &header,
             const std::vector<mg_memory::MgListPtr> &records,
-            const OutputOptions &out_opts,
-            const CsvOptions &csv_opts) {
+            const OutputOptions &out_opts, const CsvOptions &csv_opts) {
   if (out_opts.output_format == constants::kTabularFormat) {
     PrintTabular(header, records, out_opts.fit_to_screen);
   } else if (out_opts.output_format == constants::kCsvFormat) {
@@ -713,7 +789,7 @@ void Output(const std::vector<std::string> &header,
   }
 }
 
-}  // namespace format
+} // namespace format
 
 namespace {
 // Completion and syntax highlighting support
@@ -872,7 +948,7 @@ Replxx *InitAndSetupReplxx() {
   //   - syntax highlighting disabled for now - figure out a smarter way of
   //     picking the right colors depending on the user's terminal settings
   //   - currently, the color scheme for highlighting is hardcoded
-  //replxx_set_highlighter_callback(replxx_instance, ColorHook, nullptr);
+  // replxx_set_highlighter_callback(replxx_instance, ColorHook, nullptr);
 
   return replxx_instance;
 }
