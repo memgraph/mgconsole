@@ -23,8 +23,3 @@ add_dependencies(utils replxx mgclient)
 target_compile_definitions(utils PUBLIC MGCLIENT_STATIC_DEFINE)
 target_include_directories(utils PUBLIC ${REPLXX_INCLUDE_DIRS} ${MGCLIENT_INCLUDE_DIRS})
 target_link_libraries(utils ${REPLXX_LIBRARY})
-
-add_library(date STATIC date.hpp)
-set_target_properties(date PROPERTIES LINKER_LANGUAGE CXX)
-target_compile_definitions(date PUBLIC MGCLIENT_STATIC_DEFINE)
-target_include_directories(date PUBLIC ${MGCLIENT_INCLUDE_DIRS})
