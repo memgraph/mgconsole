@@ -5,6 +5,7 @@
 #include <ratio>
 #include <string.h>
 #include <string_view>
+#include <type_traits>
 
 #ifdef __APPLE__
 
@@ -110,9 +111,9 @@ std::string Escape(const std::string &src) {
   return ret;
 }
 
-template <typename T>
-inline void PrintIfNotZero(std::ostream &os, T value,
-                           std::string_view suffix = "") {
+template <typename T, typename = typename std::enable_if<
+                          std::is_arithmetic<T>::value, T>::type>
+void PrintIfNotZero(std::ostream &os, T value, std::string_view suffix = "") {
   if (value) {
     os << value << suffix;
   }
@@ -214,21 +215,21 @@ void PrintValue(std::ostream &os, const mg_date *date) {
 }
 
 void PrintValue(std::ostream &os, const mg_local_time *local_time) {
-  const auto nanos =
-      std::chrono::nanoseconds(mg_local_time_nanoseconds(local_time));
+  namespace chrono = std::chrono;
+  const auto nanos = chrono::nanoseconds(mg_local_time_nanoseconds(local_time));
   const auto hms = date::hh_mm_ss(nanos);
   os << hms;
 }
 
 void PrintValue(std::ostream &os, const mg_local_date_time *local_date_time) {
+  namespace chrono = std::chrono;
   const auto seconds =
-      std::chrono::seconds(mg_local_date_time_seconds(local_date_time));
-  const auto days = std::chrono::duration_cast<date::days>(seconds);
+      chrono::seconds(mg_local_date_time_seconds(local_date_time));
+  const auto days = chrono::duration_cast<date::days>(seconds);
   const auto date = mg_date_make(days.count());
 
-  const auto nanoseconds =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(seconds) -
-      std::chrono::duration_cast<std::chrono::nanoseconds>(days);
+  const auto nanoseconds = chrono::duration_cast<chrono::nanoseconds>(seconds) -
+                           chrono::duration_cast<chrono::nanoseconds>(days);
   const auto time = mg_local_time_make(nanoseconds.count());
 
   PrintValue(os, date);
@@ -237,21 +238,22 @@ void PrintValue(std::ostream &os, const mg_local_date_time *local_date_time) {
 }
 
 void PrintValue(std::ostream &os, const mg_duration *duration) {
+  // Currently we are ignoring months for duration
   // const auto months = date::months(mg_duration_months(duration));
+  namespace chrono = std::chrono;
   const auto days = date::days(mg_duration_days(duration));
-  const auto seconds = std::chrono::seconds(mg_duration_seconds(duration));
+  const auto seconds = chrono::seconds(mg_duration_seconds(duration));
   const auto nanoseconds =
-      std::chrono::nanoseconds(mg_duration_nanoseconds(duration));
+      chrono::nanoseconds(mg_duration_nanoseconds(duration));
 
-  const auto time = std::chrono::duration_cast<std::chrono::microseconds>(
-      seconds + nanoseconds);
+  const auto time =
+      chrono::duration_cast<chrono::microseconds>(seconds + nanoseconds);
 
-  const auto hh = std::chrono::duration_cast<std::chrono::hours>(time);
-  const auto mm = std::chrono::duration_cast<std::chrono::minutes>(time - hh);
-  const auto ss =
-      std::chrono::duration_cast<std::chrono::seconds>(time - hh - mm);
+  const auto hh = chrono::duration_cast<chrono::hours>(time);
+  const auto mm = chrono::duration_cast<chrono::minutes>(time - hh);
+  const auto ss = chrono::duration_cast<chrono::seconds>(time - hh - mm);
   const auto ns =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(time - hh - mm - ss);
+      chrono::duration_cast<chrono::nanoseconds>(time - hh - mm - ss);
 
   os << "P";
   PrintIfNotZero(os, days.count(), "DT");
