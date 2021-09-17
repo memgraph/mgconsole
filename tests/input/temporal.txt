@@ -1,0 +1,8 @@
+RETURN date("1999-05-05");
+RETURN date({year: 2012, month: 12, day: 5});
+RETURN localtime({hour: 23, minute: 56, second: 23});
+RETURN localtime("12:01:12");
+RETURN localdatetime("2000-09-12T06:21:45");
+RETURN localdatetime({year: 2000, day: 23, hour: 12, second: 21});
+RETURN duration({day: 23, hour: 100, second: 21});
+RETURN duration("P1DT48H61M79.123S");
