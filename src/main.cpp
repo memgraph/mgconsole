@@ -1,5 +1,5 @@
 // mgconsole - console client for Memgraph database
-// Copyright (C) 2016-2020 Memgraph Ltd. [https://memgraph.com]
+// Copyright (C) 2016-2021 Memgraph Ltd. [https://memgraph.com]
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -37,9 +37,9 @@
 #include <mgclient.h>
 #include <replxx.h>
 
-#include "version.hpp"
-#include "utils/utils.hpp"
 #include "utils/constants.hpp"
+#include "utils/utils.hpp"
+#include "version.hpp"
 
 using namespace std::string_literals;
 
@@ -95,10 +95,12 @@ int main(int argc, char **argv) {
 
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  format::CsvOptions csv_opts{FLAGS_csv_delimiter, FLAGS_csv_escapechar, FLAGS_csv_doublequote};
+  format::CsvOptions csv_opts{FLAGS_csv_delimiter, FLAGS_csv_escapechar,
+                              FLAGS_csv_doublequote};
   format::OutputOptions output_opts{FLAGS_output_format, FLAGS_fit_to_screen};
 
-  if (output_opts.output_format == constants::kCsvFormat && !csv_opts.ValidateDoubleQuote()) {
+  if (output_opts.output_format == constants::kCsvFormat &&
+      !csv_opts.ValidateDoubleQuote()) {
     console::EchoFailure(
         "Unsupported combination of 'csv-doublequote' and 'csv-escapechar'\n"
         "flags",
@@ -131,7 +133,7 @@ int main(int argc, char **argv) {
       password = *password_optional;
     } else {
       console::EchoFailure("Password not submitted",
-                  "Requested password for username " + FLAGS_username);
+                           "Requested password for username " + FLAGS_username);
       cleanup_resources();
       return 1;
     }
@@ -139,8 +141,8 @@ int main(int argc, char **argv) {
   }
 
   fs::path history_dir = FLAGS_history;
-  if (FLAGS_history ==
-      (constants::kDefaultHistoryBaseDir + "/" + constants::kDefaultHistoryMemgraphDir)) {
+  if (FLAGS_history == (constants::kDefaultHistoryBaseDir + "/" +
+                        constants::kDefaultHistoryMemgraphDir)) {
     // Fetch home dir for user.
     history_dir =
         utils::GetUserHomeDir() / constants::kDefaultHistoryMemgraphDir;
@@ -230,8 +232,9 @@ int main(int argc, char **argv) {
   mg_memory::MgSessionParamsPtr params =
       mg_memory::MakeCustomUnique<mg_session_params>(mg_session_params_make());
   if (!params) {
-    console::EchoFailure("Connection failure",
-                "out of memory, failed to allocate `mg_session_params` struct");
+    console::EchoFailure(
+        "Connection failure",
+        "out of memory, failed to allocate `mg_session_params` struct");
   }
   mg_session_params_set_host(params.get(), FLAGS_host.c_str());
   mg_session_params_set_port(params.get(), FLAGS_port);
@@ -243,13 +246,15 @@ int main(int argc, char **argv) {
   mg_session_params_set_sslmode(
       params.get(), FLAGS_use_ssl ? MG_SSLMODE_REQUIRE : MG_SSLMODE_DISABLE);
 
-  mg_memory::MgSessionPtr session = mg_memory::MakeCustomUnique<mg_session>(nullptr);
+  mg_memory::MgSessionPtr session =
+      mg_memory::MakeCustomUnique<mg_session>(nullptr);
   {
     mg_session *session_tmp;
     int status = mg_connect(params.get(), &session_tmp);
     session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
     if (status != 0) {
-      console::EchoFailure("Connection failure", mg_session_error(session.get()));
+      console::EchoFailure("Connection failure",
+                           mg_session_error(session.get()));
       cleanup_resources();
       return 1;
     }
@@ -257,7 +262,7 @@ int main(int argc, char **argv) {
 
   console::EchoInfo("mgconsole "s + gflags::VersionString());
   console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" +
-           std::to_string(FLAGS_port) + "'");
+                    std::to_string(FLAGS_port) + "'");
   console::EchoInfo("Type :help for shell usage");
   console::EchoInfo("Quit the shell by typing Ctrl-D(eof) or :quit");
   int num_retries = 3;
@@ -267,10 +272,12 @@ int main(int argc, char **argv) {
       console::EchoInfo("Bye");
       break;
     }
-    if (query->empty()) continue;
+    if (query->empty())
+      continue;
     try {
       auto ret = query::ExecuteQuery(session.get(), *query);
-      if (ret.records.size() > 0) Output(ret.header, ret.records, output_opts, csv_opts);
+      if (ret.records.size() > 0)
+        Output(ret.header, ret.records, output_opts, csv_opts);
       if (console::is_a_tty(STDIN_FILENO)) {
         std::string summary;
         if (ret.records.size() == 0) {
@@ -307,7 +314,8 @@ int main(int argc, char **argv) {
         int status = mg_connect(params.get(), &session_tmp);
         session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
         if (status != 0) {
-          console::EchoFailure("Connection failure", mg_session_error(session.get()));
+          console::EchoFailure("Connection failure",
+                               mg_session_error(session.get()));
           session.reset(nullptr);
         } else {
           is_connected = true;
@@ -318,11 +326,11 @@ int main(int argc, char **argv) {
       if (is_connected) {
         num_retries = 3;
         console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" +
-                 std::to_string(FLAGS_port) + "'");
+                          std::to_string(FLAGS_port) + "'");
       } else {
-        console::EchoFailure("Couldn't connect to", "'memgraph://" + FLAGS_host + ":" +
-                                               std::to_string(FLAGS_port) +
-                                               "'");
+        console::EchoFailure("Couldn't connect to",
+                             "'memgraph://" + FLAGS_host + ":" +
+                                 std::to_string(FLAGS_port) + "'");
         cleanup_resources();
         return 1;
       }
