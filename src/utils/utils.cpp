@@ -230,20 +230,25 @@ void PrintValue(std::ostream &os, const mg_local_date_time *local_date_time) {
 }
 
 void PrintValue(std::ostream &os, const mg_duration *duration) {
-  const auto months = date::months(mg_duration_months(duration));
-  const auto days = date::months(mg_duration_days(duration));
+  // const auto months = date::months(mg_duration_months(duration));
+  const auto days = date::days(mg_duration_days(duration));
   const auto seconds = std::chrono::seconds(mg_duration_seconds(duration));
   const auto nanoseconds =
       std::chrono::nanoseconds(mg_duration_nanoseconds(duration));
 
-  const auto micro = std::chrono::duration_cast<std::chrono::microseconds>(
-      months + days + seconds + nanoseconds);
-  const auto dd = std::chrono::duration_cast<date::days>(micro);
-  const auto remaining_time =
-      std::chrono::duration_cast<std::chrono::nanoseconds>(micro - dd);
-  const auto time = mg_local_time_make(remaining_time.count());
-  os << "P" << dd.count() << "T";
-  PrintValue(os, time);
+  const auto time = std::chrono::duration_cast<std::chrono::microseconds>(
+      seconds + nanoseconds);
+
+  const auto hh = std::chrono::duration_cast<std::chrono::hours>(time);
+  const auto mm = std::chrono::duration_cast<std::chrono::minutes>(time - hh);
+  const auto ss =
+      std::chrono::duration_cast<std::chrono::seconds>(time - hh - mm);
+  const auto ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(time - hh - mm - ss);
+
+  const auto dd = days.count();
+  os << "P" << dd << "DT" << hh.count() << "H" << mm.count() << "M"
+     << ss.count() << "S" << ns.count() << "E";
 }
 
 void PrintValue(std::ostream &os, const mg_value *value) {
