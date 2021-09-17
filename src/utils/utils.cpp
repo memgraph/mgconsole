@@ -6,8 +6,6 @@
 #include <string.h>
 #include <string_view>
 
-#include "mgclient.h"
-
 #ifdef __APPLE__
 
 #include <sstream>
@@ -34,6 +32,7 @@
 
 #include "constants.hpp"
 #include "date.hpp"
+#include "mgclient.h"
 #include "utils.hpp"
 
 namespace utils {
@@ -109,6 +108,14 @@ std::string Escape(const std::string &src) {
   }
   ret.append(1, '"');
   return ret;
+}
+
+template <typename T>
+inline void PrintIfNotZero(std::ostream &os, T value,
+                           std::string_view suffix = "") {
+  if (value) {
+    os << value << suffix;
+  }
 }
 
 void PrintStringUnescaped(std::ostream &os, const mg_string *str) {
@@ -246,9 +253,12 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
   const auto ns =
       std::chrono::duration_cast<std::chrono::nanoseconds>(time - hh - mm - ss);
 
-  const auto dd = days.count();
-  os << "P" << dd << "DT" << hh.count() << "H" << mm.count() << "M"
-     << ss.count() << "S" << ns.count() << "E";
+  os << "P";
+  PrintIfNotZero(os, days.count(), "DT");
+  PrintIfNotZero(os, hh.count(), "H");
+  PrintIfNotZero(os, mm.count(), "M");
+  PrintIfNotZero(os, ss.count(), "S");
+  PrintIfNotZero(os, ns.count(), "E");
 }
 
 void PrintValue(std::ostream &os, const mg_value *value) {
