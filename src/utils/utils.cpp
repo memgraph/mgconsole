@@ -2,7 +2,6 @@
 #include <chrono>
 #include <cstdint>
 #include <iostream>
-#include <ratio>
 #include <string.h>
 #include <string_view>
 #include <type_traits>
@@ -111,8 +110,7 @@ std::string Escape(const std::string &src) {
   return ret;
 }
 
-template <typename T, typename = typename std::enable_if<
-                          std::is_arithmetic<T>::value, T>::type>
+template <typename T, std::enable_if_t<std::is_arithmetic<T>::value, T> = true>
 void PrintIfNotZero(std::ostream &os, T value, std::string_view suffix = "") {
   if (value) {
     os << value << suffix;
@@ -252,15 +250,22 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
   const auto hh = chrono::duration_cast<chrono::hours>(time);
   const auto mm = chrono::duration_cast<chrono::minutes>(time - hh);
   const auto ss = chrono::duration_cast<chrono::seconds>(time - hh - mm);
-  const auto ns =
-      chrono::duration_cast<chrono::nanoseconds>(time - hh - mm - ss);
+  const auto mis =
+      chrono::duration_cast<chrono::microseconds>(time - hh - mm - ss);
 
   os << "P";
   PrintIfNotZero(os, days.count(), "DT");
   PrintIfNotZero(os, hh.count(), "H");
   PrintIfNotZero(os, mm.count(), "M");
-  PrintIfNotZero(os, ss.count(), "S");
-  PrintIfNotZero(os, ns.count(), "E");
+  if (ss.count() > 0) {
+    os << ss.count();
+    if (mis.count() > 0) {
+      os << "." << mis.count();
+    }
+    os << "S";
+  } else if (mis.count() > 0) {
+    os << "0." << mis.count() << "S";
+  }
 }
 
 void PrintValue(std::ostream &os, const mg_value *value) {
