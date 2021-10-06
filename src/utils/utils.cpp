@@ -257,14 +257,11 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
   PrintIfNotZero(os, days.count(), "DT");
   PrintIfNotZero(os, hh.count(), "H");
   PrintIfNotZero(os, mm.count(), "M");
-  if (ss.count() > 0) {
-    os << ss.count();
-    if (mis.count() > 0) {
-      os << "." << mis.count();
-    }
-    os << "S";
-  } else if (mis.count() > 0) {
+  if (ss.count() == 0 && mis.count() > 0) {
     os << "0." << mis.count() << "S";
+  }
+  if (ss.count() > 0) {
+    os << ss.count() << "." << mis.count() << "S";
   }
 }
 
