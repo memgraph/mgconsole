@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <ios>
 #include <iostream>
 #include <string.h>
 #include <string_view>
@@ -235,6 +237,21 @@ void PrintValue(std::ostream &os, const mg_local_date_time *local_date_time) {
   PrintValue(os, time);
 }
 
+void PrintSeconds(std::ostream &os, std::chrono::seconds ss,
+                  std::chrono::microseconds mis) {
+  if (ss.count() == 0 && mis.count() < 0) {
+    os << '-';
+  }
+  os << ss.count();
+}
+
+void PrintMicroseconds(std::ostream &os, std::chrono::microseconds mis) {
+  if (mis.count() != 0) {
+    os << "." << std::setw(6) << std::setfill('0') << std::fixed
+       << std::abs(mis.count());
+  }
+}
+
 void PrintValue(std::ostream &os, const mg_duration *duration) {
   // Currently we are ignoring months for duration
   // const auto months = date::months(mg_duration_months(duration));
@@ -260,10 +277,8 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
   if (ss.count() == 0 && mis.count() == 0) {
     return;
   }
-  os << ss.count();
-  if (mis.count() > 0) {
-    os << "." << mis.count();
-  }
+  PrintSeconds(os, ss, mis);
+  PrintMicroseconds(os, mis);
   os << "S";
 }
 
