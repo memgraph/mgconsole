@@ -264,6 +264,7 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
   if (mis.count() > 0) {
     os << "." << mis.count();
   }
+  os << "S";
 }
 
 void PrintValue(std::ostream &os, const mg_value *value) {
