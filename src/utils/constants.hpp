@@ -87,6 +87,6 @@ static const std::vector<std::string_view> kAwesomeFunctions{
     "RIGHT",         "RTRIM",     "SPLIT",         "STARTSWITH",
     "SUBSTRING",     "TOLOWER",   "TOSTRING",      "TOUPPER",
     "TRIM",          "ASSERT",    "COUNTER",       "TOBYTESTRING",
-    "FROMBYTESTRING"};
+    "FROMBYTESTRING", "DURATION"};
 
 } // namespace constants
