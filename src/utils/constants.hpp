@@ -72,21 +72,22 @@ static const std::vector<std::string_view> kCypherKeywords{
     "WHEN",       "WHERE",  "WITH",   "WSHORTEST",  "XOR"};
 
 static const std::vector<std::string_view> kAwesomeFunctions{
-    "DEGREE",        "INDEGREE",  "OUTDEGREE",     "ENDNODE",
-    "HEAD",          "ID",        "LAST",          "PROPERTIES",
-    "SIZE",          "STARTNODE", "TIMESTAMP",     "TOBOOLEAN",
-    "TOFLOAT",       "TOINTEGER", "TYPE",          "VALUETYPE",
-    "KEYS",          "LABELS",    "NODES",         "RANGE",
-    "RELATIONSHIPS", "TAIL",      "UNIFORMSAMPLE", "ABS",
-    "CEIL",          "FLOOR",     "RAND",          "ROUND",
-    "SIGN",          "E",         "EXP",           "LOG",
-    "LOG10",         "SQRT",      "ACOS",          "ASIN",
-    "ATAN",          "ATAN2",     "COS",           "PI",
-    "SIN",           "TAN",       "CONTAINS",      "ENDSWITH",
-    "LEFT",          "LTRIM",     "REPLACE",       "REVERSE",
-    "RIGHT",         "RTRIM",     "SPLIT",         "STARTSWITH",
-    "SUBSTRING",     "TOLOWER",   "TOSTRING",      "TOUPPER",
-    "TRIM",          "ASSERT",    "COUNTER",       "TOBYTESTRING",
-    "FROMBYTESTRING"};
+    "DEGREE",         "INDEGREE",  "OUTDEGREE",     "ENDNODE",
+    "HEAD",           "ID",        "LAST",          "PROPERTIES",
+    "SIZE",           "STARTNODE", "TIMESTAMP",     "TOBOOLEAN",
+    "TOFLOAT",        "TOINTEGER", "TYPE",          "VALUETYPE",
+    "KEYS",           "LABELS",    "NODES",         "RANGE",
+    "RELATIONSHIPS",  "TAIL",      "UNIFORMSAMPLE", "ABS",
+    "CEIL",           "FLOOR",     "RAND",          "ROUND",
+    "SIGN",           "E",         "EXP",           "LOG",
+    "LOG10",          "SQRT",      "ACOS",          "ASIN",
+    "ATAN",           "ATAN2",     "COS",           "PI",
+    "SIN",            "TAN",       "CONTAINS",      "ENDSWITH",
+    "LEFT",           "LTRIM",     "REPLACE",       "REVERSE",
+    "RIGHT",          "RTRIM",     "SPLIT",         "STARTSWITH",
+    "SUBSTRING",      "TOLOWER",   "TOSTRING",      "TOUPPER",
+    "TRIM",           "ASSERT",    "COUNTER",       "TOBYTESTRING",
+    "FROMBYTESTRING", "DATE",      "LOCALTIME",     "LOCALDATETIME",
+    "DURATION"};
 
 } // namespace constants
