@@ -54,6 +54,7 @@ DEFINE_string(password, "", "Password for the database");
 DEFINE_bool(use_ssl, false, "Use SSL when connecting to the server.");
 
 DEFINE_bool(fit_to_screen, false, "Fit output width to screen width.");
+DEFINE_bool(term_colors, false, "Use terminal colors syntax highlighting.");
 DEFINE_string(output_format, "tabular",
               "Query output format. Can be csv/tabular. If output format is "
               "other than tabular `fit-to-screen` flag is ignored.");

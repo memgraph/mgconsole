@@ -30,6 +30,7 @@
 
 #endif /* _WIN32 */
 
+#include <gflags/gflags.h>
 #include <replxx.h>
 
 #include "constants.hpp"
@@ -974,6 +975,8 @@ void ColorHook(const char *input, ReplxxColor *colors, int size, void *) {
 
 } // namespace
 
+DECLARE_bool(term_colors);
+
 Replxx *InitAndSetupReplxx() {
   Replxx *replxx_instance = replxx_init();
 
@@ -984,7 +987,9 @@ Replxx *InitAndSetupReplxx() {
   //   - syntax highlighting disabled for now - figure out a smarter way of
   //     picking the right colors depending on the user's terminal settings
   //   - currently, the color scheme for highlighting is hardcoded
-  // replxx_set_highlighter_callback(replxx_instance, ColorHook, nullptr);
+  if (FLAGS_term_colors) {
+    replxx_set_highlighter_callback(replxx_instance, ColorHook, nullptr);
+  }
 
   return replxx_instance;
 }
