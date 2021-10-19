@@ -265,6 +265,8 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
   const auto time =
       chrono::duration_cast<chrono::microseconds>(seconds + nanoseconds);
 
+  const bool has_subdays = time.count() > 0;
+
   const auto hh = chrono::duration_cast<chrono::hours>(time);
   const auto mm = chrono::duration_cast<chrono::minutes>(time - hh);
   const auto ss = chrono::duration_cast<chrono::seconds>(time - hh - mm);
@@ -272,7 +274,12 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
       chrono::duration_cast<chrono::microseconds>(time - hh - mm - ss);
 
   os << "P";
-  PrintIfNotZero(os, days.count(), "DT");
+  PrintIfNotZero(os, days.count(), "D");
+
+  if (has_subdays) {
+    os << "T";
+  }
+
   PrintIfNotZero(os, hh.count(), "H");
   PrintIfNotZero(os, mm.count(), "M");
   if (ss.count() == 0 && mis.count() == 0) {
