@@ -1,10 +1,13 @@
 #pragma once
 
+#include <cstdint>
 #include <iostream>
 #include <memory>
 
 #include <filesystem>
 #include <optional>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
@@ -195,6 +198,8 @@ struct QueryData {
   std::vector<std::string> header;
   std::vector<mg_memory::MgListPtr> records;
   std::chrono::duration<double> wall_time;
+  std::optional<std::unordered_map<std::string, std::string>> notification;
+  std::optional<std::unordered_map<std::string, int64_t>> stats;
 };
 
 std::optional<std::string> GetQuery(Replxx *replxx_instance);
