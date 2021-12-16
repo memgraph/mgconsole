@@ -166,7 +166,7 @@ void EchoFailure(const std::string &failure_msg,
 
 void EchoInfo(const std::string &message);
 
-void EchoStats(const std::map<std::string, int64_t> &stats);
+void EchoStats(const std::map<std::string, std::int64_t> &stats);
 
 void EchoNotification(const std::map<std::string, std::string> &notification);
 

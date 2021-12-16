@@ -412,38 +412,63 @@ void EchoInfo(const std::string &message) {
   }
 }
 
-void EchoStats(const std::map<std::string, int64_t> &stats) {
+void EchoStats(const std::map<std::string, std::int64_t> &stats) {
   for (const auto &[key, value] : stats) {
     if (value == 0) {
       continue;
     }
     if (key == "nodes-created") {
-      std::printf("%ld vertices have been created.\n", value);
+      std::cout << value << " nodes have been created." << std::endl;
     }
     if (key == "nodes-deleted") {
-      std::printf("%ld vertices have been deleted.\n", value);
+      std::cout << value << " nodes have been deleted." << std::endl;
     }
     if (key == "relationships-created") {
-      std::printf("%ld edges have been created.\n", value);
+      std::cout << value << " relationships have been created." << std::endl;
     }
     if (key == "relationships-deleted") {
-      std::printf("%ld edges have been deleted.\n", value);
+      std::cout << value << " relationships have been deleted." << std::endl;
     }
     if (key == "labels-added") {
-      std::printf("%ld labels have been created.\n", value);
+      std::cout << value << " labels have been created." << std::endl;
     }
     if (key == "labels-removed") {
-      std::printf("%ld labels have been deleted.\n", value);
+      std::cout << value << " labels have been deleted." << std::endl;
     }
     if (key == "properties-set") {
-      std::printf("%ld properties have been updated.\n", value);
+      std::cout << value << " properties have been updated." << std::endl;
     }
   }
 }
 
 void EchoNotification(const std::map<std::string, std::string> &notification) {
-  std::printf("%s: %s\n", notification.at("severity").c_str(),
-              notification.at("code").c_str());
+  std::string severity = notification.at("severity");
+  std::transform(severity.begin(), severity.end(), severity.begin(), ::toupper);
+  if (severity == "WARNING") {
+#ifdef _WIN32
+    HANDLE hConsole;
+    WORD original_console_attr;
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+
+    hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
+      std::cout << failure_msg << ": ";
+    }
+
+    original_console_attr = csbi.wAttributes;
+    FlushConsoleInputBuffer(hConsole);
+    SetConsoleTextAttribute(hConsole, FOREGROUND_YELLOW | FOREGROUND_INTENSITY);
+
+    std::cout << severity << ":";
+    SetConsoleTextAttribute(hConsole, original_console_attr);
+    std::cout << " ";
+#else  /* _WIN32 */
+    std::cout << "\033[1;33m" << severity << ": \033[0m";
+#endif /* _WIN32 */
+    std::cout << notification.at("code") << std::endl;
+  } else {
+    std::cout << severity << ": " << notification.at("code") << std::endl;
+  }
 }
 
 void SetStdinEcho(bool enable = true) {
