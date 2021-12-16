@@ -412,6 +412,40 @@ void EchoInfo(const std::string &message) {
   }
 }
 
+void EchoStats(const std::map<std::string, int64_t> &stats) {
+  for (const auto &[key, value] : stats) {
+    if (value == 0) {
+      continue;
+    }
+    if (key == "nodes-created") {
+      std::printf("%ld vertices have been created.\n", value);
+    }
+    if (key == "nodes-deleted") {
+      std::printf("%ld vertices have been deleted.\n", value);
+    }
+    if (key == "relationships-created") {
+      std::printf("%ld edges have been created.\n", value);
+    }
+    if (key == "relationships-deleted") {
+      std::printf("%ld edges have been deleted.\n", value);
+    }
+    if (key == "labels-added") {
+      std::printf("%ld labels have been created.\n", value);
+    }
+    if (key == "labels-removed") {
+      std::printf("%ld labels have been deleted.\n", value);
+    }
+    if (key == "properties-set") {
+      std::printf("%ld properties have been updated.\n", value);
+    }
+  }
+}
+
+void EchoNotification(const std::map<std::string, std::string> &notification) {
+  std::printf("%s: %s\n", notification.at("severity").c_str(),
+              notification.at("code").c_str());
+}
+
 void SetStdinEcho(bool enable = true) {
 #ifdef _WIN32
   // from
@@ -616,20 +650,18 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
 
       // Parse only stats and notifications from summary
       if (strcmp(mg_string_data(key), "stats") == 0) {
-        ret.stats = std::unordered_map<std::string, int64_t>{};
-        const mg_value *mg_stats = mg_map_value_at(summary, i);
-        const mg_map *stats_map = mg_value_map(mg_stats);
+        ret.stats = std::map<std::string, int64_t>{};
+        const mg_map *stats_map = mg_value_map(mg_map_value_at(summary, i));
 
         for (size_t j = 0; j < mg_map_size(stats_map); j++) {
-          const mg_string *mg_stat_key = mg_map_key_at(stats_map, j);
-          const auto *stat_key = mg_string_data(mg_stat_key);
+          const auto *stat_key = mg_string_data(mg_map_key_at(stats_map, j));
 
           const int64_t stat_value =
               mg_value_integer(mg_map_value_at(stats_map, j));
           ret.stats->insert({stat_key, stat_value});
         }
       } else if (strcmp(mg_string_data(key), "notifications") == 0) {
-        ret.notification = std::unordered_map<std::string, std::string>{};
+        ret.notification = std::map<std::string, std::string>{};
         const mg_list *notifications =
             mg_value_list(mg_map_value_at(summary, i));
         if (mg_list_size(notifications) == 0) {
@@ -640,9 +672,8 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
             mg_value_map(mg_list_at(notifications, 0));
 
         for (size_t j = 0; j < mg_map_size(notification_map); j++) {
-          const mg_string *mg_notification_key =
-              mg_map_key_at(notification_map, j);
-          const auto *notification_key = mg_string_data(mg_notification_key);
+          const auto *notification_key =
+              mg_string_data(mg_map_key_at(notification_map, j));
 
           const mg_string *mg_notification_value =
               mg_value_string(mg_map_value_at(notification_map, j));

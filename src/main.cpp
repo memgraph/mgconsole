@@ -297,37 +297,10 @@ int main(int argc, char **argv) {
         }
       }
       if (ret.notification) {
-        const auto notification = ret.notification.value();
-        std::printf("%s: %s\n", notification.at("severity").c_str(),
-                    notification.at("code").c_str());
+        console::EchoNotification(ret.notification.value());
       }
       if (ret.stats) {
-        for (const auto &[key, value] : ret.stats.value()) {
-          if (value == 0) {
-            continue;
-          }
-          if (key == "nodes-created") {
-            std::printf("%ld vertices have been created.\n", value);
-          }
-          if (key == "nodes-deleted") {
-            std::printf("%ld vertices have been deleted.\n", value);
-          }
-          if (key == "relationships-created") {
-            std::printf("%ld edges have been created.\n", value);
-          }
-          if (key == "relationships-deleted") {
-            std::printf("%ld edges have been deleted.\n", value);
-          }
-          if (key == "labels-added") {
-            std::printf("%ld labels have been created.\n", value);
-          }
-          if (key == "labels-removed") {
-            std::printf("%ld labels have been deleted.\n", value);
-          }
-          if (key == "properties-set") {
-            std::printf("%ld properties have been updated.\n", value);
-          }
-        }
+        console::EchoStats(ret.stats.value());
       }
     } catch (const utils::ClientQueryException &e) {
       if (!console::is_a_tty(STDIN_FILENO)) {
