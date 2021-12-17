@@ -672,12 +672,11 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
   const mg_map *summary = mg_result_summary(result);
   if (summary && mg_map_size(summary) > 0) {
     {
-      // parse stats from the summary
       const mg_value *mg_stats = mg_map_at(summary, "stats");
       if (mg_stats) {
         const mg_map *stats = mg_value_map(mg_stats);
         ret.stats = std::map<std::string, std::int64_t>{};
-        for (size_t j = 0; j < mg_map_size(stats); j++) {
+        for (size_t j = 0; j < mg_map_size(stats); ++j) {
           const mg_string *mg_stat_key = mg_map_key_at(stats, j);
           const auto stat_key = std::string(mg_string_data(mg_stat_key),
                                             mg_string_size(mg_stat_key));
