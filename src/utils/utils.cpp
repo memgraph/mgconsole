@@ -637,7 +637,7 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
 
     hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
-      std::cout << severity << ": ";
+      std::cout << severity << ":";
     }
 
     original_console_attr = csbi.wAttributes;
@@ -651,10 +651,10 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
 #else  /* _WIN32 */
     std::cout << "\033[1;33m" << severity << ": \033[0m";
 #endif /* _WIN32 */
-    std::cout << notification.at("code") << std::endl;
   } else {
-    std::cout << severity << ": " << notification.at("code") << std::endl;
+    std::cout << severity << ": ";
   }
+  std::cout << notification.at("title") << std::endl;
 }
 
 void SetStdinEcho(bool enable = true) {
