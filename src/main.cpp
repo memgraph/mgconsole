@@ -295,12 +295,12 @@ int main(int argc, char **argv) {
           cleanup_resources();
           return history_ret;
         }
-      }
-      if (ret.notification) {
-        console::EchoNotification(ret.notification.value());
-      }
-      if (ret.stats) {
-        console::EchoStats(ret.stats.value());
+        if (ret.notification) {
+          console::EchoNotification(ret.notification.value());
+        }
+        if (ret.stats) {
+          console::EchoStats(ret.stats.value());
+        }
       }
     } catch (const utils::ClientQueryException &e) {
       if (!console::is_a_tty(STDIN_FILENO)) {
