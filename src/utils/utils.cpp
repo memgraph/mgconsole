@@ -452,18 +452,19 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
 
     hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
-      std::cout << failure_msg << ": ";
+      std::cout << severity << ": ";
     }
 
     original_console_attr = csbi.wAttributes;
     FlushConsoleInputBuffer(hConsole);
-    SetConsoleTextAttribute(hConsole, FOREGROUND_YELLOW | FOREGROUND_INTENSITY);
+    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN |
+                                          FOREGROUND_INTENSITY);
 
     std::cout << severity << ":";
     SetConsoleTextAttribute(hConsole, original_console_attr);
     std::cout << " ";
 #else  /* _WIN32 */
-    std::cout << "\033[1;33m" << severity << ": \033[0m" << std::endl;
+    std::cout << "\033[1;33m" << severity << ": \033[0m";
 #endif /* _WIN32 */
     std::cout << notification.at("code") << std::endl;
   } else {
