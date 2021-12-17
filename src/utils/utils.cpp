@@ -463,7 +463,7 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
     SetConsoleTextAttribute(hConsole, original_console_attr);
     std::cout << " ";
 #else  /* _WIN32 */
-    std::cout << "\033[1;33m" << severity << ": \033[0m";
+    std::cout << "\033[1;33m" << severity << ": \033[0m" << std::endl;
 #endif /* _WIN32 */
     std::cout << notification.at("code") << std::endl;
   } else {
@@ -668,42 +668,48 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
     }
   }
 
-  {
-    const mg_map *summary = mg_result_summary(result);
-    for (size_t i = 0; i < mg_map_size(summary); i++) {
-      const mg_string *key = mg_map_key_at(summary, i);
-
-      // Parse only stats and notifications from summary
-      if (strcmp(mg_string_data(key), "stats") == 0) {
-        ret.stats = std::map<std::string, int64_t>{};
-        const mg_map *stats_map = mg_value_map(mg_map_value_at(summary, i));
-
-        for (size_t j = 0; j < mg_map_size(stats_map); j++) {
-          const auto *stat_key = mg_string_data(mg_map_key_at(stats_map, j));
+  const mg_map *summary = mg_result_summary(result);
+  if (summary && mg_map_size(summary) > 0) {
+    {
+      // parse stats from the summary
+      const mg_value *mg_stats = mg_map_at(summary, "stats");
+      if (mg_stats) {
+        const mg_map *stats = mg_value_map(mg_stats);
+        ret.stats = std::map<std::string, std::int64_t>{};
+        for (size_t j = 0; j < mg_map_size(stats); j++) {
+          const mg_string *mg_stat_key = mg_map_key_at(stats, j);
+          const auto stat_key = std::string(mg_string_data(mg_stat_key),
+                                            mg_string_size(mg_stat_key));
 
           const int64_t stat_value =
-              mg_value_integer(mg_map_value_at(stats_map, j));
+              mg_value_integer(mg_map_value_at(stats, j));
           ret.stats->insert({stat_key, stat_value});
         }
-      } else if (strcmp(mg_string_data(key), "notifications") == 0) {
+      }
+    }
+    {
+      // parse notifications from the summary
+      const mg_value *mg_notifications = mg_map_at(summary, "notifications");
+      if (mg_notifications) {
+        const mg_list *notifications = mg_value_list(mg_notifications);
         ret.notification = std::map<std::string, std::string>{};
-        const mg_list *notifications =
-            mg_value_list(mg_map_value_at(summary, i));
-        if (mg_list_size(notifications) == 0) {
-          continue;
-        }
         // For now support only one notification
         const mg_map *notification_map =
             mg_value_map(mg_list_at(notifications, 0));
 
         for (size_t j = 0; j < mg_map_size(notification_map); j++) {
-          const auto *notification_key =
-              mg_string_data(mg_map_key_at(notification_map, j));
+
+          const mg_string *mg_notification_key =
+              mg_map_key_at(notification_map, j);
+          const auto notification_key =
+              std::string(mg_string_data(mg_notification_key),
+                          mg_string_size(mg_notification_key));
 
           const mg_string *mg_notification_value =
               mg_value_string(mg_map_value_at(notification_map, j));
-          const auto *notification_value =
-              mg_string_data(mg_notification_value);
+          const auto notification_value =
+              std::string(mg_string_data(mg_notification_value),
+                          mg_string_size(mg_notification_value));
           ret.notification->insert({notification_key, notification_value});
         }
       }
