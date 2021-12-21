@@ -601,26 +601,19 @@ void EchoStats(const std::map<std::string, std::int64_t> &stats) {
   for (const auto &[key, value] : stats) {
     if (value == 0) {
       continue;
-    }
-    if (key == "nodes-created") {
+    } else if (key == "nodes-created") {
       std::cout << value << " nodes have been created." << std::endl;
-    }
-    if (key == "nodes-deleted") {
+    } else if (key == "nodes-deleted") {
       std::cout << value << " nodes have been deleted." << std::endl;
-    }
-    if (key == "relationships-created") {
+    } else if (key == "relationships-created") {
       std::cout << value << " relationships have been created." << std::endl;
-    }
-    if (key == "relationships-deleted") {
+    } else if (key == "relationships-deleted") {
       std::cout << value << " relationships have been deleted." << std::endl;
-    }
-    if (key == "labels-added") {
+    } else if (key == "labels-added") {
       std::cout << value << " labels have been created." << std::endl;
-    }
-    if (key == "labels-removed") {
+    } else if (key == "labels-removed") {
       std::cout << value << " labels have been deleted." << std::endl;
-    }
-    if (key == "properties-set") {
+    } else if (key == "properties-set") {
       std::cout << value << " properties have been updated." << std::endl;
     }
   }
