@@ -496,7 +496,7 @@ void ColorHook(const char *input, ReplxxColor *colors, int size, void *) {
 void ParseStats(const mg_value *mg_stats,
                 std::optional<std::map<std::string, std::int64_t>> &ret_stats) {
   const mg_map *stats = mg_value_map(mg_stats);
-  ret_stats = std::map<std::string, std::int64_t>{};
+  ret_stats.emplace();
   for (size_t j = 0; j < mg_map_size(stats); ++j) {
     const mg_string *mg_stat_key = mg_map_key_at(stats, j);
     const auto stat_key =
@@ -511,7 +511,7 @@ void ParseNotifications(
     const mg_value *mg_notifications,
     std::optional<std::map<std::string, std::string>> &ret_notification) {
   const mg_list *notifications = mg_value_list(mg_notifications);
-  ret_notification = std::map<std::string, std::string>{};
+  ret_notification.emplace();
   // For now support only one notification
   const mg_map *notification_map = mg_value_map(mg_list_at(notifications, 0));
 
