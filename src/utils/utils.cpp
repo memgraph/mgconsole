@@ -626,7 +626,8 @@ void EchoStats(const std::map<std::string, std::int64_t> &stats) {
 }
 
 void EchoNotification(const std::map<std::string, std::string> &notification) {
-  if (notification.at("severity") == "WARNING") {
+  const std::string_view severity = notification.at("severity");
+  if (severity == "WARNING") {
 #ifdef _WIN32
     HANDLE hConsole;
     WORD original_console_attr;
@@ -634,7 +635,7 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
 
     hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
-      std::cout << notification.at("severity") << ":";
+      std::cout << severity << ":";
     }
 
     original_console_attr = csbi.wAttributes;
@@ -642,14 +643,14 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
     SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN |
                                           FOREGROUND_INTENSITY);
 
-    std::cout << notification.at("severity") << ":";
+    std::cout << severity << ":";
     SetConsoleTextAttribute(hConsole, original_console_attr);
     std::cout << " ";
 #else  /* _WIN32 */
-    std::cout << "\033[1;33m" << notification.at("severity") << ": \033[0m";
+    std::cout << "\033[1;33m" << severity << ": \033[0m";
 #endif /* _WIN32 */
   } else {
-    std::cout << notification.at("severity") << ": ";
+    std::cout << severity << ": ";
   }
   std::cout << notification.at("title") << std::endl;
 }
