@@ -493,42 +493,48 @@ void ColorHook(const char *input, ReplxxColor *colors, int size, void *) {
   }
 }
 
-void ParseStats(const mg_value *mg_stats,
-                std::optional<std::map<std::string, std::int64_t>> &ret_stats) {
-  const mg_map *stats = mg_value_map(mg_stats);
-  ret_stats.emplace();
-  for (size_t j = 0; j < mg_map_size(stats); ++j) {
-    const mg_string *mg_stat_key = mg_map_key_at(stats, j);
-    const auto stat_key =
+std::map<std::string, std::int64_t> ParseStats(const mg_value *mg_stats) {
+  const mg_map *stats_map = mg_value_map(mg_stats);
+  std::map<std::string, std::int64_t> stats{};
+  for (size_t j = 0; j < mg_map_size(stats_map); ++j) {
+    const mg_string *mg_stat_key = mg_map_key_at(stats_map, j);
+    auto stat_key =
         std::string(mg_string_data(mg_stat_key), mg_string_size(mg_stat_key));
 
-    const int64_t stat_value = mg_value_integer(mg_map_value_at(stats, j));
-    ret_stats->insert({stat_key, stat_value});
+    const int64_t stat_value = mg_value_integer(mg_map_value_at(stats_map, j));
+    stats.emplace(std::move(stat_key), stat_value);
   }
+  return stats;
 }
 
-void ParseNotifications(
-    const mg_value *mg_notifications,
-    std::optional<std::map<std::string, std::string>> &ret_notification) {
-  const mg_list *notifications = mg_value_list(mg_notifications);
-  ret_notification.emplace();
+std::map<std::string, std::string>
+ParseNotifications(const mg_value *mg_notifications) {
+  const mg_list *notifications_list = mg_value_list(mg_notifications);
+  std::map<std::string, std::string> notifications;
   // For now support only one notification
-  const mg_map *notification_map = mg_value_map(mg_list_at(notifications, 0));
+  const mg_map *notification_map =
+      mg_value_map(mg_list_at(notifications_list, 0));
 
   for (size_t j = 0; j < mg_map_size(notification_map); j++) {
 
     const mg_string *mg_notification_key = mg_map_key_at(notification_map, j);
-    const auto notification_key =
-        std::string(mg_string_data(mg_notification_key),
-                    mg_string_size(mg_notification_key));
+    auto notification_key = std::string(mg_string_data(mg_notification_key),
+                                        mg_string_size(mg_notification_key));
 
     const mg_string *mg_notification_value =
         mg_value_string(mg_map_value_at(notification_map, j));
-    const auto notification_value =
+    auto notification_value =
         std::string(mg_string_data(mg_notification_value),
                     mg_string_size(mg_notification_value));
-    ret_notification->insert({notification_key, notification_value});
+
+    if (notification_key == "severity") {
+      std::transform(notification_value.begin(), notification_value.end(),
+                     notification_value.begin(), ::toupper);
+    }
+    notifications.emplace(std::move(notification_key),
+                          std::move(notification_value));
   }
+  return notifications;
 }
 
 } // namespace
@@ -620,9 +626,7 @@ void EchoStats(const std::map<std::string, std::int64_t> &stats) {
 }
 
 void EchoNotification(const std::map<std::string, std::string> &notification) {
-  std::string severity = notification.at("severity");
-  std::transform(severity.begin(), severity.end(), severity.begin(), ::toupper);
-  if (severity == "WARNING") {
+  if (notification.at("severity") == "WARNING") {
 #ifdef _WIN32
     HANDLE hConsole;
     WORD original_console_attr;
@@ -630,7 +634,7 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
 
     hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
     if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
-      std::cout << severity << ":";
+      std::cout << notification.at("severity") << ":";
     }
 
     original_console_attr = csbi.wAttributes;
@@ -638,14 +642,14 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
     SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN |
                                           FOREGROUND_INTENSITY);
 
-    std::cout << severity << ":";
+    std::cout << notification.at("severity") << ":";
     SetConsoleTextAttribute(hConsole, original_console_attr);
     std::cout << " ";
 #else  /* _WIN32 */
-    std::cout << "\033[1;33m" << severity << ": \033[0m";
+    std::cout << "\033[1;33m" << notification.at("severity") << ": \033[0m";
 #endif /* _WIN32 */
   } else {
-    std::cout << severity << ": ";
+    std::cout << notification.at("severity") << ": ";
   }
   std::cout << notification.at("title") << std::endl;
 }
@@ -849,13 +853,13 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
 
   const mg_map *summary = mg_result_summary(result);
   if (summary && mg_map_size(summary) > 0) {
-    const mg_value *mg_stats = mg_map_at(summary, "stats");
-    const mg_value *mg_notifications = mg_map_at(summary, "notifications");
-    if (mg_stats) {
-      ParseStats(mg_stats, ret.stats);
+
+    if (const mg_value *mg_stats = mg_map_at(summary, "stats"); mg_stats) {
+      ret.stats.emplace(ParseStats(mg_stats));
     }
-    if (mg_notifications) {
-      ParseNotifications(mg_notifications, ret.notification);
+    if (const mg_value *mg_notifications = mg_map_at(summary, "notifications");
+        mg_notifications) {
+      ret.notification.emplace(ParseNotifications(mg_notifications));
     }
   }
 
