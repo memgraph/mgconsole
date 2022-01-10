@@ -408,7 +408,7 @@ static char const wb[] = " \t\n\r\v\f-=+*&^%$#@!,./?<>;:`~'\"[]{}()\\|";
 
 int context_length(char const *prefix) {
   // word boundary chars
-  int i = (int)strlen(prefix) - 1;
+  int i = static_cast<int>(strlen(prefix)) - 1;
   int cl = 0;
   while (i >= 0) {
     if (strchr(wb, prefix[i]) != NULL) {
@@ -423,7 +423,7 @@ int context_length(char const *prefix) {
 void CompletionHook(const char *input, replxx_completions *completions,
                     int *contextLen, void *) {
   int utf8_context_len = context_length(input);
-  int prefix_len = (int)strlen(input) - utf8_context_len;
+  int prefix_len = static_cast<int>(strlen(input)) - utf8_context_len;
   *contextLen = utf8str_codepoint_length(input + prefix_len, utf8_context_len);
 
   AddCompletions(completions, input + prefix_len);
@@ -452,7 +452,7 @@ ReplxxColor GetWordColor(const std::string_view word) {
   }
 }
 
-void SetWordColor(std::string_view word, ReplxxColor *colors,
+void SetWordColor(const std::string_view word, ReplxxColor *colors,
                   int *colors_offset) {
   auto color = GetWordColor(word);
   auto word_codepoint_len = utf8str_codepoint_length(word.data(), word.size());
@@ -515,7 +515,7 @@ ParseNotifications(const mg_value *mg_notifications) {
   const mg_map *notification_map =
       mg_value_map(mg_list_at(notifications_list, 0));
 
-  for (size_t j = 0; j < mg_map_size(notification_map); j++) {
+  for (size_t j = 0; j < mg_map_size(notification_map); ++j {
 
     const mg_string *mg_notification_key = mg_map_key_at(notification_map, j);
     auto notification_key = std::string(mg_string_data(mg_notification_key),
