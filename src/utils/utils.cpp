@@ -515,7 +515,7 @@ ParseNotifications(const mg_value *mg_notifications) {
   const mg_map *notification_map =
       mg_value_map(mg_list_at(notifications_list, 0));
 
-  for (size_t j = 0; j < mg_map_size(notification_map); ++j {
+  for (size_t j = 0; j < mg_map_size(notification_map); ++j) {
 
     const mg_string *mg_notification_key = mg_map_key_at(notification_map, j);
     auto notification_key = std::string(mg_string_data(mg_notification_key),
