@@ -630,21 +630,21 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
   if (severity == "WARNING") {
 #ifdef _WIN32
     HANDLE hConsole;
-    WORD original_console_attr;
-    CONSOLE_SCREEN_BUFFER_INFO csbi;
-
     hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
     if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
       std::cout << severity << ":";
+    } else {
+      WORD original_console_attr;
+      original_console_attr = csbi.wAttributes;
+      FlushConsoleInputBuffer(hConsole);
+      SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN |
+                                            FOREGROUND_INTENSITY);
+
+      std::cout << severity << ":";
+      SetConsoleTextAttribute(hConsole, original_console_attr);
     }
-
-    original_console_attr = csbi.wAttributes;
-    FlushConsoleInputBuffer(hConsole);
-    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN |
-                                          FOREGROUND_INTENSITY);
-
-    std::cout << severity << ":";
-    SetConsoleTextAttribute(hConsole, original_console_attr);
     std::cout << " ";
 #else  /* _WIN32 */
     std::cout << "\033[1;33m" << severity << ": \033[0m";
