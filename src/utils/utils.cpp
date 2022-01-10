@@ -571,21 +571,19 @@ void EchoFailure(const std::string &failure_msg,
                  const std::string &explanation) {
   if (is_a_tty(STDIN_FILENO)) {
 #ifdef _WIN32
-    HANDLE hConsole;
-    WORD original_console_attr;
+    const auto h_console = GetStdHandle(STD_OUTPUT_HANDLE);
+
     CONSOLE_SCREEN_BUFFER_INFO csbi;
-
-    hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
+    if (!GetConsoleScreenBufferInfo(h_console, &csbi)) {
       std::cout << failure_msg << ": ";
+    } else {
+      const WORD original_console_attr = csbi.wAttributes;
+      FlushConsoleInputBuffer(h_console);
+      SetConsoleTextAttribute(h_console, FOREGROUND_RED | FOREGROUND_INTENSITY);
+
+      std::cout << failure_msg << ":";
+      SetConsoleTextAttribute(h_console, original_console_attr);
     }
-
-    original_console_attr = csbi.wAttributes;
-    FlushConsoleInputBuffer(hConsole);
-    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
-
-    std::cout << failure_msg << ":";
-    SetConsoleTextAttribute(hConsole, original_console_attr);
     std::cout << " ";
 #else  /* _WIN32 */
     std::cout << "\033[1;31m" << failure_msg << ": \033[0m";
@@ -629,21 +627,19 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
   const std::string_view severity = notification.at("severity");
   if (severity == "WARNING") {
 #ifdef _WIN32
-    HANDLE hConsole;
-    hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
+    const auto h_console = GetStdHandle(STD_OUTPUT_HANDLE);
 
     CONSOLE_SCREEN_BUFFER_INFO csbi;
-    if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
+    if (!GetConsoleScreenBufferInfo(h_console, &csbi)) {
       std::cout << severity << ":";
     } else {
-      WORD original_console_attr;
-      original_console_attr = csbi.wAttributes;
-      FlushConsoleInputBuffer(hConsole);
-      SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_GREEN |
-                                            FOREGROUND_INTENSITY);
+      const WORD original_console_attr = csbi.wAttributes;
+      FlushConsoleInputBuffer(h_console);
+      SetConsoleTextAttribute(h_console, FOREGROUND_RED | FOREGROUND_GREEN |
+                                             FOREGROUND_INTENSITY);
 
       std::cout << severity << ":";
-      SetConsoleTextAttribute(hConsole, original_console_attr);
+      SetConsoleTextAttribute(h_console, original_console_attr);
     }
     std::cout << " ";
 #else  /* _WIN32 */
