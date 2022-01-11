@@ -10,7 +10,7 @@ jobs:
       matrix:
         platform: [ubuntu-20.04]
         mg_version:
-          - 2.0.0
+          - "2.1.1"
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Install dependencies (Ubuntu 20.04)

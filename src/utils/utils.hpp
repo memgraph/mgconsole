@@ -1,10 +1,13 @@
 #pragma once
 
+#include <cstdint>
 #include <iostream>
 #include <memory>
 
 #include <filesystem>
+#include <map>
 #include <optional>
+#include <string>
 #include <vector>
 
 #ifdef _WIN32
@@ -163,6 +166,10 @@ void EchoFailure(const std::string &failure_msg,
 
 void EchoInfo(const std::string &message);
 
+void EchoStats(const std::map<std::string, std::int64_t> &stats);
+
+void EchoNotification(const std::map<std::string, std::string> &notification);
+
 /// Helper function that sets default input for 'readline'
 int SetDefaultText();
 
@@ -195,6 +202,8 @@ struct QueryData {
   std::vector<std::string> header;
   std::vector<mg_memory::MgListPtr> records;
   std::chrono::duration<double> wall_time;
+  std::optional<std::map<std::string, std::string>> notification;
+  std::optional<std::map<std::string, std::int64_t>> stats;
 };
 
 std::optional<std::string> GetQuery(Replxx *replxx_instance);

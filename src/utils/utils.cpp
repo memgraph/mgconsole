@@ -1,12 +1,15 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <ios>
 #include <iostream>
 #include <string.h>
+#include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 
 #ifdef __APPLE__
 
@@ -345,6 +348,197 @@ void PrintValue(std::ostream &os, const mg_value *value) {
 
 } // namespace utils
 
+namespace {
+// Completion and syntax highlighting support
+
+std::vector<std::string> GetCompletions(const char *text) {
+  std::vector<std::string> matches;
+
+  // Collect a vector of matches: vocabulary words that begin with text.
+  std::string text_str = utils::ToUpperCase(std::string(text));
+  for (auto word : constants::kCypherKeywords) {
+    if (word.size() >= text_str.size() &&
+        word.compare(0, text_str.size(), text_str) == 0) {
+      matches.emplace_back(word);
+    }
+  }
+  for (auto word : constants::kMemgraphKeywords) {
+    if (word.size() >= text_str.size() &&
+        word.compare(0, text_str.size(), text_str) == 0) {
+      matches.emplace_back(word);
+    }
+  }
+  for (auto word : constants::kAwesomeFunctions) {
+    if (word.size() >= text_str.size() &&
+        word.compare(0, text_str.size(), text_str) == 0) {
+      matches.emplace_back(word);
+    }
+  }
+
+  return matches;
+}
+
+void AddCompletions(replxx_completions *completions, const char *text) {
+  auto text_completions = GetCompletions(text);
+  for (const auto &completion : text_completions) {
+    replxx_add_completion(completions, strdup(completion.c_str()));
+  }
+}
+
+// taken from the replxx example.c (correct handling of UTF-8)
+int utf8str_codepoint_length(char const *s, int utf8len) {
+  int codepointLen = 0;
+  unsigned char m4 = 128 + 64 + 32 + 16;
+  unsigned char m3 = 128 + 64 + 32;
+  unsigned char m2 = 128 + 64;
+  for (int i = 0; i < utf8len; ++i, ++codepointLen) {
+    char c = s[i];
+    if ((c & m4) == m4) {
+      i += 3;
+    } else if ((c & m3) == m3) {
+      i += 2;
+    } else if ((c & m2) == m2) {
+      i += 1;
+    }
+  }
+  return codepointLen;
+};
+
+static char const wb[] = " \t\n\r\v\f-=+*&^%$#@!,./?<>;:`~'\"[]{}()\\|";
+
+int context_length(char const *prefix) {
+  // word boundary chars
+  int i = static_cast<int>(strlen(prefix)) - 1;
+  int cl = 0;
+  while (i >= 0) {
+    if (strchr(wb, prefix[i]) != NULL) {
+      break;
+    }
+    ++cl;
+    --i;
+  }
+  return cl;
+};
+
+void CompletionHook(const char *input, replxx_completions *completions,
+                    int *contextLen, void *) {
+  int utf8_context_len = context_length(input);
+  int prefix_len = static_cast<int>(strlen(input)) - utf8_context_len;
+  *contextLen = utf8str_codepoint_length(input + prefix_len, utf8_context_len);
+
+  AddCompletions(completions, input + prefix_len);
+}
+
+ReplxxColor GetWordColor(const std::string_view word) {
+  auto word_uppercase = utils::ToUpperCase(std::string(word));
+  bool is_cypher_keyword =
+      std::find(constants::kCypherKeywords.begin(),
+                constants::kCypherKeywords.end(),
+                word_uppercase) != constants::kCypherKeywords.end();
+  bool is_memgraph_keyword =
+      std::find(constants::kMemgraphKeywords.begin(),
+                constants::kMemgraphKeywords.end(),
+                word_uppercase) != constants::kMemgraphKeywords.end();
+  bool is_awesome_function =
+      std::find(constants::kAwesomeFunctions.begin(),
+                constants::kAwesomeFunctions.end(),
+                word_uppercase) != constants::kAwesomeFunctions.end();
+  if (is_cypher_keyword || is_memgraph_keyword) {
+    return REPLXX_COLOR_YELLOW;
+  } else if (is_awesome_function) {
+    return REPLXX_COLOR_BRIGHTRED;
+  } else {
+    return REPLXX_COLOR_DEFAULT;
+  }
+}
+
+void SetWordColor(const std::string_view word, ReplxxColor *colors,
+                  int *colors_offset) {
+  auto color = GetWordColor(word);
+  auto word_codepoint_len = utf8str_codepoint_length(word.data(), word.size());
+  for (int i = *colors_offset; i < *colors_offset + word_codepoint_len; i++) {
+    colors[i] = color;
+  }
+  // +1 for the word boundary char (we don't want to color it)
+  *colors_offset = *colors_offset + word_codepoint_len + 1;
+}
+
+void ColorHook(const char *input, ReplxxColor *colors, int size, void *) {
+  auto *word_begin = input;
+  size_t word_size = 0;
+  int colors_offset = 0;
+
+  auto input_size = strlen(input);
+  for (int i = 0; i < input_size; i++) {
+    // word boundary
+    if (strchr(wb, input[i]) != NULL) {
+      SetWordColor(std::string_view(word_begin, word_size), colors,
+                   &colors_offset);
+      // if the boundary is not the last char in input, advance the
+      // next word ptr and reset word size
+      if (i != (input_size - 1)) {
+        word_begin = input + i + 1;
+        word_size = 0;
+      }
+      // end of input
+    } else if (i == (input_size - 1)) {
+      // regular char encountered as the last char of input
+      word_size++;
+      SetWordColor(std::string_view(word_begin, word_size), colors,
+                   &colors_offset);
+    } else {
+      // regular char encountered, but not the end of input - advance
+      word_size++;
+    }
+  }
+}
+
+std::map<std::string, std::int64_t> ParseStats(const mg_value *mg_stats) {
+  const mg_map *stats_map = mg_value_map(mg_stats);
+  std::map<std::string, std::int64_t> stats{};
+  for (size_t j = 0; j < mg_map_size(stats_map); ++j) {
+    const mg_string *mg_stat_key = mg_map_key_at(stats_map, j);
+    auto stat_key =
+        std::string(mg_string_data(mg_stat_key), mg_string_size(mg_stat_key));
+
+    const int64_t stat_value = mg_value_integer(mg_map_value_at(stats_map, j));
+    stats.emplace(std::move(stat_key), stat_value);
+  }
+  return stats;
+}
+
+std::map<std::string, std::string>
+ParseNotifications(const mg_value *mg_notifications) {
+  const mg_list *notifications_list = mg_value_list(mg_notifications);
+  std::map<std::string, std::string> notifications;
+  // For now support only one notification
+  const mg_map *notification_map =
+      mg_value_map(mg_list_at(notifications_list, 0));
+
+  for (size_t j = 0; j < mg_map_size(notification_map); ++j) {
+
+    const mg_string *mg_notification_key = mg_map_key_at(notification_map, j);
+    auto notification_key = std::string(mg_string_data(mg_notification_key),
+                                        mg_string_size(mg_notification_key));
+
+    const mg_string *mg_notification_value =
+        mg_value_string(mg_map_value_at(notification_map, j));
+    auto notification_value =
+        std::string(mg_string_data(mg_notification_value),
+                    mg_string_size(mg_notification_value));
+
+    if (notification_key == "severity") {
+      std::transform(notification_value.begin(), notification_value.end(),
+                     notification_value.begin(), ::toupper);
+    }
+    notifications.emplace(std::move(notification_key),
+                          std::move(notification_value));
+  }
+  return notifications;
+}
+
+} // namespace
+
 namespace console {
 
 // lifted from replxx io.cxx
@@ -377,21 +571,19 @@ void EchoFailure(const std::string &failure_msg,
                  const std::string &explanation) {
   if (is_a_tty(STDIN_FILENO)) {
 #ifdef _WIN32
-    HANDLE hConsole;
-    WORD original_console_attr;
+    const auto h_console = GetStdHandle(STD_OUTPUT_HANDLE);
+
     CONSOLE_SCREEN_BUFFER_INFO csbi;
-
-    hConsole = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (!GetConsoleScreenBufferInfo(hConsole, &csbi)) {
+    if (!GetConsoleScreenBufferInfo(h_console, &csbi)) {
       std::cout << failure_msg << ": ";
+    } else {
+      const WORD original_console_attr = csbi.wAttributes;
+      FlushConsoleInputBuffer(h_console);
+      SetConsoleTextAttribute(h_console, FOREGROUND_RED | FOREGROUND_INTENSITY);
+
+      std::cout << failure_msg << ":";
+      SetConsoleTextAttribute(h_console, original_console_attr);
     }
-
-    original_console_attr = csbi.wAttributes;
-    FlushConsoleInputBuffer(hConsole);
-    SetConsoleTextAttribute(hConsole, FOREGROUND_RED | FOREGROUND_INTENSITY);
-
-    std::cout << failure_msg << ":";
-    SetConsoleTextAttribute(hConsole, original_console_attr);
     std::cout << " ";
 #else  /* _WIN32 */
     std::cout << "\033[1;31m" << failure_msg << ": \033[0m";
@@ -407,6 +599,56 @@ void EchoInfo(const std::string &message) {
   if (is_a_tty(STDIN_FILENO)) {
     std::cout << message << std::endl;
   }
+}
+
+void EchoStats(const std::map<std::string, std::int64_t> &stats) {
+  for (const auto &[key, value] : stats) {
+    if (value == 0) {
+      continue;
+    } else if (key == "nodes-created") {
+      std::cout << value << " nodes have been created." << std::endl;
+    } else if (key == "nodes-deleted") {
+      std::cout << value << " nodes have been deleted." << std::endl;
+    } else if (key == "relationships-created") {
+      std::cout << value << " relationships have been created." << std::endl;
+    } else if (key == "relationships-deleted") {
+      std::cout << value << " relationships have been deleted." << std::endl;
+    } else if (key == "labels-added") {
+      std::cout << value << " labels have been created." << std::endl;
+    } else if (key == "labels-removed") {
+      std::cout << value << " labels have been deleted." << std::endl;
+    } else if (key == "properties-set") {
+      std::cout << value << " properties have been updated." << std::endl;
+    }
+  }
+}
+
+void EchoNotification(const std::map<std::string, std::string> &notification) {
+  const std::string_view severity = notification.at("severity");
+  if (severity == "WARNING") {
+#ifdef _WIN32
+    const auto h_console = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (!GetConsoleScreenBufferInfo(h_console, &csbi)) {
+      std::cout << severity << ":";
+    } else {
+      const WORD original_console_attr = csbi.wAttributes;
+      FlushConsoleInputBuffer(h_console);
+      SetConsoleTextAttribute(h_console, FOREGROUND_RED | FOREGROUND_GREEN |
+                                             FOREGROUND_INTENSITY);
+
+      std::cout << severity << ":";
+      SetConsoleTextAttribute(h_console, original_console_attr);
+    }
+    std::cout << " ";
+#else  /* _WIN32 */
+    std::cout << "\033[1;33m" << severity << ": \033[0m";
+#endif /* _WIN32 */
+  } else {
+    std::cout << severity << ": ";
+  }
+  std::cout << notification.at("title") << std::endl;
 }
 
 void SetStdinEcho(bool enable = true) {
@@ -603,6 +845,18 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
         utils::PrintValue(field_stream, field);
         ret.header.push_back(field_stream.str());
       }
+    }
+  }
+
+  const mg_map *summary = mg_result_summary(result);
+  if (summary && mg_map_size(summary) > 0) {
+
+    if (const mg_value *mg_stats = mg_map_at(summary, "stats"); mg_stats) {
+      ret.stats.emplace(ParseStats(mg_stats));
+    }
+    if (const mg_value *mg_notifications = mg_map_at(summary, "notifications");
+        mg_notifications) {
+      ret.notification.emplace(ParseNotifications(mg_notifications));
     }
   }
 
@@ -834,153 +1088,6 @@ void Output(const std::vector<std::string> &header,
 }
 
 } // namespace format
-
-namespace {
-// Completion and syntax highlighting support
-
-std::vector<std::string> GetCompletions(const char *text) {
-  std::vector<std::string> matches;
-
-  // Collect a vector of matches: vocabulary words that begin with text.
-  std::string text_str = utils::ToUpperCase(std::string(text));
-  for (auto word : constants::kCypherKeywords) {
-    if (word.size() >= text_str.size() &&
-        word.compare(0, text_str.size(), text_str) == 0) {
-      matches.emplace_back(word);
-    }
-  }
-  for (auto word : constants::kMemgraphKeywords) {
-    if (word.size() >= text_str.size() &&
-        word.compare(0, text_str.size(), text_str) == 0) {
-      matches.emplace_back(word);
-    }
-  }
-  for (auto word : constants::kAwesomeFunctions) {
-    if (word.size() >= text_str.size() &&
-        word.compare(0, text_str.size(), text_str) == 0) {
-      matches.emplace_back(word);
-    }
-  }
-
-  return matches;
-}
-
-void AddCompletions(replxx_completions *completions, const char *text) {
-  auto text_completions = GetCompletions(text);
-  for (const auto &completion : text_completions) {
-    replxx_add_completion(completions, strdup(completion.c_str()));
-  }
-}
-
-// taken from the replxx example.c (correct handling of UTF-8)
-int utf8str_codepoint_length(char const *s, int utf8len) {
-  int codepointLen = 0;
-  unsigned char m4 = 128 + 64 + 32 + 16;
-  unsigned char m3 = 128 + 64 + 32;
-  unsigned char m2 = 128 + 64;
-  for (int i = 0; i < utf8len; ++i, ++codepointLen) {
-    char c = s[i];
-    if ((c & m4) == m4) {
-      i += 3;
-    } else if ((c & m3) == m3) {
-      i += 2;
-    } else if ((c & m2) == m2) {
-      i += 1;
-    }
-  }
-  return codepointLen;
-};
-
-static char const wb[] = " \t\n\r\v\f-=+*&^%$#@!,./?<>;:`~'\"[]{}()\\|";
-
-int context_length(char const *prefix) {
-  // word boundary chars
-  int i = (int)strlen(prefix) - 1;
-  int cl = 0;
-  while (i >= 0) {
-    if (strchr(wb, prefix[i]) != NULL) {
-      break;
-    }
-    ++cl;
-    --i;
-  }
-  return cl;
-};
-
-void CompletionHook(const char *input, replxx_completions *completions,
-                    int *contextLen, void *) {
-  int utf8_context_len = context_length(input);
-  int prefix_len = (int)strlen(input) - utf8_context_len;
-  *contextLen = utf8str_codepoint_length(input + prefix_len, utf8_context_len);
-
-  AddCompletions(completions, input + prefix_len);
-}
-
-ReplxxColor GetWordColor(const std::string_view word) {
-  auto word_uppercase = utils::ToUpperCase(std::string(word));
-  bool is_cypher_keyword =
-      std::find(constants::kCypherKeywords.begin(),
-                constants::kCypherKeywords.end(),
-                word_uppercase) != constants::kCypherKeywords.end();
-  bool is_memgraph_keyword =
-      std::find(constants::kMemgraphKeywords.begin(),
-                constants::kMemgraphKeywords.end(),
-                word_uppercase) != constants::kMemgraphKeywords.end();
-  bool is_awesome_function =
-      std::find(constants::kAwesomeFunctions.begin(),
-                constants::kAwesomeFunctions.end(),
-                word_uppercase) != constants::kAwesomeFunctions.end();
-  if (is_cypher_keyword || is_memgraph_keyword) {
-    return REPLXX_COLOR_YELLOW;
-  } else if (is_awesome_function) {
-    return REPLXX_COLOR_BRIGHTRED;
-  } else {
-    return REPLXX_COLOR_DEFAULT;
-  }
-}
-
-void SetWordColor(std::string_view word, ReplxxColor *colors,
-                  int *colors_offset) {
-  auto color = GetWordColor(word);
-  auto word_codepoint_len = utf8str_codepoint_length(word.data(), word.size());
-  for (int i = *colors_offset; i < *colors_offset + word_codepoint_len; i++) {
-    colors[i] = color;
-  }
-  // +1 for the word boundary char (we don't want to color it)
-  *colors_offset = *colors_offset + word_codepoint_len + 1;
-}
-
-void ColorHook(const char *input, ReplxxColor *colors, int size, void *) {
-  auto *word_begin = input;
-  size_t word_size = 0;
-  int colors_offset = 0;
-
-  auto input_size = strlen(input);
-  for (int i = 0; i < input_size; i++) {
-    // word boundary
-    if (strchr(wb, input[i]) != NULL) {
-      SetWordColor(std::string_view(word_begin, word_size), colors,
-                   &colors_offset);
-      // if the boundary is not the last char in input, advance the
-      // next word ptr and reset word size
-      if (i != (input_size - 1)) {
-        word_begin = input + i + 1;
-        word_size = 0;
-      }
-      // end of input
-    } else if (i == (input_size - 1)) {
-      // regular char encountered as the last char of input
-      word_size++;
-      SetWordColor(std::string_view(word_begin, word_size), colors,
-                   &colors_offset);
-    } else {
-      // regular char encountered, but not the end of input - advance
-      word_size++;
-    }
-  }
-}
-
-} // namespace
 
 DECLARE_bool(term_colors);
 

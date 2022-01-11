@@ -15,6 +15,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <algorithm>
+#include <cstdio>
 #include <iostream>
 #include <optional>
 #include <thread>
@@ -293,6 +294,12 @@ int main(int argc, char **argv) {
         if (history_ret != 0) {
           cleanup_resources();
           return history_ret;
+        }
+        if (ret.notification) {
+          console::EchoNotification(ret.notification.value());
+        }
+        if (ret.stats) {
+          console::EchoStats(ret.stats.value());
         }
       }
     } catch (const utils::ClientQueryException &e) {
