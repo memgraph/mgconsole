@@ -234,7 +234,7 @@ void PrintValue(std::ostream &os, const mg_local_date_time *local_date_time) {
 
   const auto nanoseconds = chrono::duration_cast<chrono::nanoseconds>(seconds) -
                            chrono::duration_cast<chrono::nanoseconds>(days);
-  const auto time = mg_local_time_make(nanoseconds.count());
+  const auto time = mg_local_time_make(nanoseconds.count() + mg_local_date_time_nanoseconds(local_date_time));
 
   PrintValue(os, date);
   os << " ";
