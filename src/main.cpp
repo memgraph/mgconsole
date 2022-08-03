@@ -14,13 +14,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <signal.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
 #include <optional>
 #include <thread>
-
-#include <signal.h>
 
 #ifdef _WIN32
 
@@ -59,6 +59,9 @@ DEFINE_bool(term_colors, false, "Use terminal colors syntax highlighting.");
 DEFINE_string(output_format, "tabular",
               "Query output format. Can be csv/tabular. If output format is "
               "other than tabular `fit-to-screen` flag is ignored.");
+DEFINE_bool(verbose_query, false,
+              "Output the additional information about query time such is "
+              "query parsing time and query planning time.");
 DEFINE_validator(output_format, [](const char *, const std::string &value) {
   if (value == constants::kCsvFormat || value == constants::kTabularFormat) {
     return true;
@@ -200,8 +203,7 @@ int main(int argc, char **argv) {
 #else /* _WIN32 */
 
   auto shutdown = [](int exit_code = 0) {
-    if (is_shutting_down)
-      return;
+    if (is_shutting_down) return;
     is_shutting_down = 1;
 
 #ifdef __APPLE__
@@ -274,8 +276,7 @@ int main(int argc, char **argv) {
       console::EchoInfo("Bye");
       break;
     }
-    if (query->empty())
-      continue;
+    if (query->empty()) continue;
     try {
       auto ret = query::ExecuteQuery(session.get(), *query);
       if (ret.records.size() > 0)
@@ -289,7 +290,8 @@ int main(int argc, char **argv) {
         } else {
           summary = std::to_string(ret.records.size()) + " rows in set";
         }
-        std::printf("%s (%.3lf sec)\n", summary.c_str(), ret.wall_time.count());
+        std::printf("%s (round trip in %.3lf sec)\n", summary.c_str(),
+                    ret.wall_time.count());
         auto history_ret = save_history();
         if (history_ret != 0) {
           cleanup_resources();
@@ -300,6 +302,9 @@ int main(int argc, char **argv) {
         }
         if (ret.stats) {
           console::EchoStats(ret.stats.value());
+        }
+        if (FLAGS_verbose_query) {
+          console::EchoExecutionTimeInfo(ret.execution_time_info.value());
         }
       }
     } catch (const utils::ClientQueryException &e) {

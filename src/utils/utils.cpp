@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -5,7 +7,6 @@
 #include <cstdint>
 #include <ios>
 #include <iostream>
-#include <string.h>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -44,9 +45,8 @@
 namespace utils {
 
 bool EnsureDir(const fs::path &dir) noexcept {
-  std::error_code error_code; // for exception suppression.
-  if (fs::exists(dir, error_code))
-    return fs::is_directory(dir, error_code);
+  std::error_code error_code;  // for exception suppression.
+  if (fs::exists(dir, error_code)) return fs::is_directory(dir, error_code);
   return fs::create_directories(dir, error_code);
 }
 
@@ -234,7 +234,8 @@ void PrintValue(std::ostream &os, const mg_local_date_time *local_date_time) {
 
   const auto nanoseconds = chrono::duration_cast<chrono::nanoseconds>(seconds) -
                            chrono::duration_cast<chrono::nanoseconds>(days);
-  const auto time = mg_local_time_make(nanoseconds.count() + mg_local_date_time_nanoseconds(local_date_time));
+  const auto time = mg_local_time_make(
+      nanoseconds.count() + mg_local_date_time_nanoseconds(local_date_time));
 
   PrintValue(os, date);
   os << " ";
@@ -295,58 +296,58 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
 
 void PrintValue(std::ostream &os, const mg_value *value) {
   switch (mg_value_get_type(value)) {
-  case MG_VALUE_TYPE_NULL:
-    os << "Null";
-    return;
-  case MG_VALUE_TYPE_BOOL:
-    os << (mg_value_bool(value) ? "true" : "false");
-    return;
-  case MG_VALUE_TYPE_INTEGER:
-    os << mg_value_integer(value);
-    return;
-  case MG_VALUE_TYPE_FLOAT:
-    os << mg_value_float(value);
-    return;
-  case MG_VALUE_TYPE_STRING:
-    PrintValue(os, mg_value_string(value));
-    return;
-  case MG_VALUE_TYPE_LIST:
-    PrintValue(os, mg_value_list(value));
-    return;
-  case MG_VALUE_TYPE_MAP:
-    PrintValue(os, mg_value_map(value));
-    return;
-  case MG_VALUE_TYPE_NODE:
-    PrintValue(os, mg_value_node(value));
-    return;
-  case MG_VALUE_TYPE_RELATIONSHIP:
-    PrintValue(os, mg_value_relationship(value));
-    return;
-  case MG_VALUE_TYPE_UNBOUND_RELATIONSHIP:
-    PrintValue(os, mg_value_unbound_relationship(value));
-    return;
-  case MG_VALUE_TYPE_PATH:
-    PrintValue(os, mg_value_path(value));
-    return;
-  case MG_VALUE_TYPE_DATE:
-    PrintValue(os, mg_value_date(value));
-    return;
-  case MG_VALUE_TYPE_LOCAL_TIME:
-    PrintValue(os, mg_value_local_time(value));
-    return;
-  case MG_VALUE_TYPE_LOCAL_DATE_TIME:
-    PrintValue(os, mg_value_local_date_time(value));
-    return;
-  case MG_VALUE_TYPE_DURATION:
-    PrintValue(os, mg_value_duration(value));
-    return;
-  default:
-    os << "{unknown value}";
-    break;
+    case MG_VALUE_TYPE_NULL:
+      os << "Null";
+      return;
+    case MG_VALUE_TYPE_BOOL:
+      os << (mg_value_bool(value) ? "true" : "false");
+      return;
+    case MG_VALUE_TYPE_INTEGER:
+      os << mg_value_integer(value);
+      return;
+    case MG_VALUE_TYPE_FLOAT:
+      os << mg_value_float(value);
+      return;
+    case MG_VALUE_TYPE_STRING:
+      PrintValue(os, mg_value_string(value));
+      return;
+    case MG_VALUE_TYPE_LIST:
+      PrintValue(os, mg_value_list(value));
+      return;
+    case MG_VALUE_TYPE_MAP:
+      PrintValue(os, mg_value_map(value));
+      return;
+    case MG_VALUE_TYPE_NODE:
+      PrintValue(os, mg_value_node(value));
+      return;
+    case MG_VALUE_TYPE_RELATIONSHIP:
+      PrintValue(os, mg_value_relationship(value));
+      return;
+    case MG_VALUE_TYPE_UNBOUND_RELATIONSHIP:
+      PrintValue(os, mg_value_unbound_relationship(value));
+      return;
+    case MG_VALUE_TYPE_PATH:
+      PrintValue(os, mg_value_path(value));
+      return;
+    case MG_VALUE_TYPE_DATE:
+      PrintValue(os, mg_value_date(value));
+      return;
+    case MG_VALUE_TYPE_LOCAL_TIME:
+      PrintValue(os, mg_value_local_time(value));
+      return;
+    case MG_VALUE_TYPE_LOCAL_DATE_TIME:
+      PrintValue(os, mg_value_local_date_time(value));
+      return;
+    case MG_VALUE_TYPE_DURATION:
+      PrintValue(os, mg_value_duration(value));
+      return;
+    default:
+      os << "{unknown value}";
+      break;
   }
 }
 
-} // namespace utils
+}  // namespace utils
 
 namespace {
 // Completion and syntax highlighting support
@@ -507,8 +508,8 @@ std::map<std::string, std::int64_t> ParseStats(const mg_value *mg_stats) {
   return stats;
 }
 
-std::map<std::string, std::string>
-ParseNotifications(const mg_value *mg_notifications) {
+std::map<std::string, std::string> ParseNotifications(
+    const mg_value *mg_notifications) {
   const mg_list *notifications_list = mg_value_list(mg_notifications);
   std::map<std::string, std::string> notifications;
   // For now support only one notification
@@ -516,7 +517,6 @@ ParseNotifications(const mg_value *mg_notifications) {
       mg_value_map(mg_list_at(notifications_list, 0));
 
   for (size_t j = 0; j < mg_map_size(notification_map); ++j) {
-
     const mg_string *mg_notification_key = mg_map_key_at(notification_map, j);
     auto notification_key = std::string(mg_string_data(mg_notification_key),
                                         mg_string_size(mg_notification_key));
@@ -537,7 +537,10 @@ ParseNotifications(const mg_value *mg_notifications) {
   return notifications;
 }
 
-} // namespace
+double ParseFloat(const mg_value *mg_val_float) {
+  return mg_value_float(mg_val_float);
+}
+}  // namespace
 
 namespace console {
 
@@ -601,6 +604,21 @@ void EchoInfo(const std::string &message) {
   }
 }
 
+void EchoExecutionTimeInfo(const std::map<std::string, double> &execution_info) {
+   std::cout << "Additional execution time info:" << std::endl;
+  for (const auto &[key, value] : execution_info) {
+    if (key == "cost_estimate") {
+      std::cout << "Cost estimate: " << value << std::endl;
+    }else if (key == "parsing_time") {
+      std::cout << "Query parsing time: " << value << " sec" << std::endl;
+    }else if (key == "planning_time") {
+      std::cout << "Query planning time: " << value << " sec" <<  std::endl;
+    }else if (key == "plan_execution_time") {
+      std::cout << "Query plan execution time: " << value << " sec" << std::endl;
+    }
+  }
+}
+
 void EchoStats(const std::map<std::string, std::int64_t> &stats) {
   for (const auto &[key, value] : stats) {
     if (value == 0) {
@@ -635,8 +653,8 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
     } else {
       const WORD original_console_attr = csbi.wAttributes;
       FlushConsoleInputBuffer(h_console);
-      SetConsoleTextAttribute(h_console, FOREGROUND_RED | FOREGROUND_GREEN |
-                                             FOREGROUND_INTENSITY);
+      SetConsoleTextAttribute(
+          h_console, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
 
       std::cout << severity << ":";
       SetConsoleTextAttribute(h_console, original_console_attr);
@@ -681,8 +699,7 @@ void SetStdinEcho(bool enable = true) {
 std::optional<std::string> GetLine() {
   std::string line;
   std::getline(std::cin, line);
-  if (std::cin.eof())
-    return std::nullopt;
+  if (std::cin.eof()) return std::nullopt;
   line = default_text + line;
   default_text = "";
   return line;
@@ -725,12 +742,11 @@ std::optional<std::string> ReadLine(Replxx *replxx_instance,
   }
 
   std::string r_val(line);
-  if (!utils::Trim(r_val).empty())
-    replxx_history_add(replxx_instance, line);
+  if (!utils::Trim(r_val).empty()) replxx_history_add(replxx_instance, line);
   return r_val;
 }
 
-} // namespace console
+}  // namespace console
 
 namespace query {
 
@@ -751,9 +767,9 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
     if (!console::is_a_tty(STDIN_FILENO)) {
       line = console::GetLine();
     } else {
-      line = console::ReadLine(replxx_instance,
-                               line_cnt == 0 ? constants::kPrompt
-                                             : constants::kMultilinePrompt);
+      line = console::ReadLine(
+          replxx_instance,
+          line_cnt == 0 ? constants::kPrompt : constants::kMultilinePrompt);
       if (line_cnt == 0 && line && line->size() > 0 && (*line)[0] == ':') {
         auto trimmed_line = utils::Trim(*line);
         if (trimmed_line == constants::kCommandQuit) {
@@ -771,16 +787,14 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
         }
       }
     }
-    if (!line)
-      return std::nullopt;
-    if (line->empty())
-      continue;
+    if (!line) return std::nullopt;
+    if (line->empty()) continue;
     auto ret = console::ParseLine(*line, &quote, &escaped);
     query << ret.first;
     auto char_count = ret.first.size();
     if (ret.second) {
       is_done = true;
-      char_count += 1; // ';' sign
+      char_count += 1;  // ';' sign
     } else {
       // Query is multiline so append newline.
       query << "\n";
@@ -850,6 +864,19 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
 
   const mg_map *summary = mg_result_summary(result);
   if (summary && mg_map_size(summary) > 0) {
+    {
+      std::map<std::string, double> execution_time_info;
+      execution_time_info.emplace(
+          "cost_estimate", ParseFloat(mg_map_at(summary, "cost_estimate")));
+      execution_time_info.emplace(
+          "parsing_time", ParseFloat(mg_map_at(summary, "parsing_time")));
+      execution_time_info.emplace(
+          "planning_time", ParseFloat(mg_map_at(summary, "planning_time")));
+      execution_time_info.emplace(
+          "plan_execution_time",
+          ParseFloat(mg_map_at(summary, "plan_execution_time")));
+      ret.execution_time_info = execution_time_info;
+    }
 
     if (const mg_value *mg_stats = mg_map_at(summary, "stats"); mg_stats) {
       ret.stats.emplace(ParseStats(mg_stats));
@@ -864,15 +891,14 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
   return ret;
 }
 
-} // namespace query
+}  // namespace query
 
 namespace format {
 
 void PrintHeaderTabular(const std::vector<std::string> &data, int total_width,
                         int column_width, int num_columns, bool all_columns_fit,
                         int margin = 1) {
-  if (!all_columns_fit)
-    num_columns -= 1;
+  if (!all_columns_fit) num_columns -= 1;
   std::string data_output = std::string(total_width, ' ');
   for (auto i = 0; i < total_width; i += column_width) {
     data_output[i] = '|';
@@ -913,7 +939,6 @@ uint64_t GetMaxColumnWidth(const std::vector<std::string> &data,
                            int margin = 1) {
   uint64_t column_width = 0;
   for (const auto &field : data) {
-
     column_width = std::max(column_width,
                             static_cast<uint64_t>(field.size() + 2 * margin));
   }
@@ -923,16 +948,15 @@ uint64_t GetMaxColumnWidth(const std::vector<std::string> &data,
 void PrintRowTabular(const mg_memory::MgListPtr &data, int total_width,
                      int column_width, int num_columns, bool all_columns_fit,
                      int margin = 1) {
-  if (!all_columns_fit)
-    num_columns -= 1;
+  if (!all_columns_fit) num_columns -= 1;
   std::string data_output = std::string(total_width, ' ');
   for (auto i = 0; i < total_width; i += column_width) {
     data_output[i] = '|';
     int idx = i / column_width;
     if (idx < num_columns) {
       std::stringstream field;
-      utils::PrintValue(field,
-                        mg_list_at(data.get(), idx)); // convert Value to string
+      utils::PrintValue(
+          field, mg_list_at(data.get(), idx));  // convert Value to string
       std::string field_str(field.str());
       if ((int)field_str.size() > column_width - 2 * margin - 1) {
         field_str.erase(column_width - 2 * margin - 1, std::string::npos);
@@ -977,7 +1001,7 @@ void PrintTabular(const std::vector<std::string> &header,
     column_width = std::max(column_width, GetMaxColumnWidth(records[i]));
   }
   column_width = std::max(static_cast<uint64_t>(5),
-                          column_width); // set column width to min 5
+                          column_width);  // set column width to min 5
   auto total_width = column_width * num_columns + 1;
 
   // Fit to screen width.
@@ -1087,7 +1111,7 @@ void Output(const std::vector<std::string> &header,
   }
 }
 
-} // namespace format
+}  // namespace format
 
 DECLARE_bool(term_colors);
 
