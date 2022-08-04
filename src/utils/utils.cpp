@@ -60,8 +60,7 @@ fs::path GetUserHomeDir() {
 }
 
 std::string ToUpperCase(std::string s) {
-  std::transform(s.begin(), s.end(), s.begin(),
-                 [](char c) { return toupper(c); });
+  std::transform(s.begin(), s.end(), s.begin(), [](char c) { return toupper(c); });
   return s;
 }
 
@@ -81,10 +80,8 @@ std::string Trim(const std::string &s) {
   return std::string(begin, end);
 }
 
-std::string Replace(std::string src, const std::string &match,
-                    const std::string &replacement) {
-  for (size_t pos = src.find(match); pos != std::string::npos;
-       pos = src.find(match, pos + replacement.size())) {
+std::string Replace(std::string src, const std::string &match, const std::string &replacement) {
+  for (size_t pos = src.find(match); pos != std::string::npos; pos = src.find(match, pos + replacement.size())) {
     src.erase(pos, match.length()).insert(pos, replacement);
   }
   return src;
@@ -227,23 +224,20 @@ void PrintValue(std::ostream &os, const mg_local_time *local_time) {
 
 void PrintValue(std::ostream &os, const mg_local_date_time *local_date_time) {
   namespace chrono = std::chrono;
-  const auto seconds =
-      chrono::seconds(mg_local_date_time_seconds(local_date_time));
+  const auto seconds = chrono::seconds(mg_local_date_time_seconds(local_date_time));
   const auto days = chrono::duration_cast<date::days>(seconds);
   const auto date = mg_date_make(days.count());
 
-  const auto nanoseconds = chrono::duration_cast<chrono::nanoseconds>(seconds) -
-                           chrono::duration_cast<chrono::nanoseconds>(days);
-  const auto time = mg_local_time_make(
-      nanoseconds.count() + mg_local_date_time_nanoseconds(local_date_time));
+  const auto nanoseconds =
+      chrono::duration_cast<chrono::nanoseconds>(seconds) - chrono::duration_cast<chrono::nanoseconds>(days);
+  const auto time = mg_local_time_make(nanoseconds.count() + mg_local_date_time_nanoseconds(local_date_time));
 
   PrintValue(os, date);
   os << " ";
   PrintValue(os, time);
 }
 
-void PrintSeconds(std::ostream &os, std::chrono::seconds ss,
-                  std::chrono::microseconds mis) {
+void PrintSeconds(std::ostream &os, std::chrono::seconds ss, std::chrono::microseconds mis) {
   if (ss.count() == 0 && mis.count() < 0) {
     os << '-';
   }
@@ -252,8 +246,7 @@ void PrintSeconds(std::ostream &os, std::chrono::seconds ss,
 
 void PrintMicroseconds(std::ostream &os, std::chrono::microseconds mis) {
   if (mis.count() != 0) {
-    os << "." << std::setw(6) << std::setfill('0') << std::fixed
-       << std::abs(mis.count());
+    os << "." << std::setw(6) << std::setfill('0') << std::fixed << std::abs(mis.count());
   }
 }
 
@@ -263,19 +256,16 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
   namespace chrono = std::chrono;
   const auto days = date::days(mg_duration_days(duration));
   const auto seconds = chrono::seconds(mg_duration_seconds(duration));
-  const auto nanoseconds =
-      chrono::nanoseconds(mg_duration_nanoseconds(duration));
+  const auto nanoseconds = chrono::nanoseconds(mg_duration_nanoseconds(duration));
 
-  const auto time =
-      chrono::duration_cast<chrono::microseconds>(seconds + nanoseconds);
+  const auto time = chrono::duration_cast<chrono::microseconds>(seconds + nanoseconds);
 
   const bool has_subdays = time.count() > 0;
 
   const auto hh = chrono::duration_cast<chrono::hours>(time);
   const auto mm = chrono::duration_cast<chrono::minutes>(time - hh);
   const auto ss = chrono::duration_cast<chrono::seconds>(time - hh - mm);
-  const auto mis =
-      chrono::duration_cast<chrono::microseconds>(time - hh - mm - ss);
+  const auto mis = chrono::duration_cast<chrono::microseconds>(time - hh - mm - ss);
 
   os << "P";
   PrintIfNotZero(os, days.count(), "D");
@@ -358,20 +348,17 @@ std::vector<std::string> GetCompletions(const char *text) {
   // Collect a vector of matches: vocabulary words that begin with text.
   std::string text_str = utils::ToUpperCase(std::string(text));
   for (auto word : constants::kCypherKeywords) {
-    if (word.size() >= text_str.size() &&
-        word.compare(0, text_str.size(), text_str) == 0) {
+    if (word.size() >= text_str.size() && word.compare(0, text_str.size(), text_str) == 0) {
       matches.emplace_back(word);
     }
   }
   for (auto word : constants::kMemgraphKeywords) {
-    if (word.size() >= text_str.size() &&
-        word.compare(0, text_str.size(), text_str) == 0) {
+    if (word.size() >= text_str.size() && word.compare(0, text_str.size(), text_str) == 0) {
       matches.emplace_back(word);
     }
   }
   for (auto word : constants::kAwesomeFunctions) {
-    if (word.size() >= text_str.size() &&
-        word.compare(0, text_str.size(), text_str) == 0) {
+    if (word.size() >= text_str.size() && word.compare(0, text_str.size(), text_str) == 0) {
       matches.emplace_back(word);
     }
   }
@@ -421,8 +408,7 @@ int context_length(char const *prefix) {
   return cl;
 };
 
-void CompletionHook(const char *input, replxx_completions *completions,
-                    int *contextLen, void *) {
+void CompletionHook(const char *input, replxx_completions *completions, int *contextLen, void *) {
   int utf8_context_len = context_length(input);
   int prefix_len = static_cast<int>(strlen(input)) - utf8_context_len;
   *contextLen = utf8str_codepoint_length(input + prefix_len, utf8_context_len);
@@ -432,18 +418,12 @@ void CompletionHook(const char *input, replxx_completions *completions,
 
 ReplxxColor GetWordColor(const std::string_view word) {
   auto word_uppercase = utils::ToUpperCase(std::string(word));
-  bool is_cypher_keyword =
-      std::find(constants::kCypherKeywords.begin(),
-                constants::kCypherKeywords.end(),
-                word_uppercase) != constants::kCypherKeywords.end();
-  bool is_memgraph_keyword =
-      std::find(constants::kMemgraphKeywords.begin(),
-                constants::kMemgraphKeywords.end(),
-                word_uppercase) != constants::kMemgraphKeywords.end();
-  bool is_awesome_function =
-      std::find(constants::kAwesomeFunctions.begin(),
-                constants::kAwesomeFunctions.end(),
-                word_uppercase) != constants::kAwesomeFunctions.end();
+  bool is_cypher_keyword = std::find(constants::kCypherKeywords.begin(), constants::kCypherKeywords.end(),
+                                     word_uppercase) != constants::kCypherKeywords.end();
+  bool is_memgraph_keyword = std::find(constants::kMemgraphKeywords.begin(), constants::kMemgraphKeywords.end(),
+                                       word_uppercase) != constants::kMemgraphKeywords.end();
+  bool is_awesome_function = std::find(constants::kAwesomeFunctions.begin(), constants::kAwesomeFunctions.end(),
+                                       word_uppercase) != constants::kAwesomeFunctions.end();
   if (is_cypher_keyword || is_memgraph_keyword) {
     return REPLXX_COLOR_YELLOW;
   } else if (is_awesome_function) {
@@ -453,8 +433,7 @@ ReplxxColor GetWordColor(const std::string_view word) {
   }
 }
 
-void SetWordColor(const std::string_view word, ReplxxColor *colors,
-                  int *colors_offset) {
+void SetWordColor(const std::string_view word, ReplxxColor *colors, int *colors_offset) {
   auto color = GetWordColor(word);
   auto word_codepoint_len = utf8str_codepoint_length(word.data(), word.size());
   for (int i = *colors_offset; i < *colors_offset + word_codepoint_len; i++) {
@@ -473,8 +452,7 @@ void ColorHook(const char *input, ReplxxColor *colors, int size, void *) {
   for (int i = 0; i < input_size; i++) {
     // word boundary
     if (strchr(wb, input[i]) != NULL) {
-      SetWordColor(std::string_view(word_begin, word_size), colors,
-                   &colors_offset);
+      SetWordColor(std::string_view(word_begin, word_size), colors, &colors_offset);
       // if the boundary is not the last char in input, advance the
       // next word ptr and reset word size
       if (i != (input_size - 1)) {
@@ -485,8 +463,7 @@ void ColorHook(const char *input, ReplxxColor *colors, int size, void *) {
     } else if (i == (input_size - 1)) {
       // regular char encountered as the last char of input
       word_size++;
-      SetWordColor(std::string_view(word_begin, word_size), colors,
-                   &colors_offset);
+      SetWordColor(std::string_view(word_begin, word_size), colors, &colors_offset);
     } else {
       // regular char encountered, but not the end of input - advance
       word_size++;
@@ -499,8 +476,7 @@ std::map<std::string, std::int64_t> ParseStats(const mg_value *mg_stats) {
   std::map<std::string, std::int64_t> stats{};
   for (size_t j = 0; j < mg_map_size(stats_map); ++j) {
     const mg_string *mg_stat_key = mg_map_key_at(stats_map, j);
-    auto stat_key =
-        std::string(mg_string_data(mg_stat_key), mg_string_size(mg_stat_key));
+    auto stat_key = std::string(mg_string_data(mg_stat_key), mg_string_size(mg_stat_key));
 
     const int64_t stat_value = mg_value_integer(mg_map_value_at(stats_map, j));
     stats.emplace(std::move(stat_key), stat_value);
@@ -508,38 +484,28 @@ std::map<std::string, std::int64_t> ParseStats(const mg_value *mg_stats) {
   return stats;
 }
 
-std::map<std::string, std::string> ParseNotifications(
-    const mg_value *mg_notifications) {
+std::map<std::string, std::string> ParseNotifications(const mg_value *mg_notifications) {
   const mg_list *notifications_list = mg_value_list(mg_notifications);
   std::map<std::string, std::string> notifications;
   // For now support only one notification
-  const mg_map *notification_map =
-      mg_value_map(mg_list_at(notifications_list, 0));
+  const mg_map *notification_map = mg_value_map(mg_list_at(notifications_list, 0));
 
   for (size_t j = 0; j < mg_map_size(notification_map); ++j) {
     const mg_string *mg_notification_key = mg_map_key_at(notification_map, j);
-    auto notification_key = std::string(mg_string_data(mg_notification_key),
-                                        mg_string_size(mg_notification_key));
+    auto notification_key = std::string(mg_string_data(mg_notification_key), mg_string_size(mg_notification_key));
 
-    const mg_string *mg_notification_value =
-        mg_value_string(mg_map_value_at(notification_map, j));
-    auto notification_value =
-        std::string(mg_string_data(mg_notification_value),
-                    mg_string_size(mg_notification_value));
+    const mg_string *mg_notification_value = mg_value_string(mg_map_value_at(notification_map, j));
+    auto notification_value = std::string(mg_string_data(mg_notification_value), mg_string_size(mg_notification_value));
 
     if (notification_key == "severity") {
-      std::transform(notification_value.begin(), notification_value.end(),
-                     notification_value.begin(), ::toupper);
+      std::transform(notification_value.begin(), notification_value.end(), notification_value.begin(), ::toupper);
     }
-    notifications.emplace(std::move(notification_key),
-                          std::move(notification_value));
+    notifications.emplace(std::move(notification_key), std::move(notification_value));
   }
   return notifications;
 }
 
-double ParseFloat(const mg_value *mg_val_float) {
-  return mg_value_float(mg_val_float);
-}
+double ParseFloat(const mg_value *mg_val_float) { return mg_value_float(mg_val_float); }
 }  // namespace
 
 namespace console {
@@ -570,8 +536,7 @@ void PrintHelp() { std::cout << constants::kInteractiveUsage << std::endl; }
 
 void PrintDocs() { std::cout << constants::kDocs << std::endl; }
 
-void EchoFailure(const std::string &failure_msg,
-                 const std::string &explanation) {
+void EchoFailure(const std::string &failure_msg, const std::string &explanation) {
   if (is_a_tty(STDIN_FILENO)) {
 #ifdef _WIN32
     const auto h_console = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -605,15 +570,15 @@ void EchoInfo(const std::string &message) {
 }
 
 void EchoExecutionTimeInfo(const std::map<std::string, double> &execution_info) {
-   std::cout << "Additional execution time info:" << std::endl;
+  std::cout << "Additional execution time info:" << std::endl;
   for (const auto &[key, value] : execution_info) {
     if (key == "cost_estimate") {
       std::cout << "Cost estimate: " << value << std::endl;
-    }else if (key == "parsing_time") {
+    } else if (key == "parsing_time") {
       std::cout << "Query parsing time: " << value << " sec" << std::endl;
-    }else if (key == "planning_time") {
-      std::cout << "Query planning time: " << value << " sec" <<  std::endl;
-    }else if (key == "plan_execution_time") {
+    } else if (key == "planning_time") {
+      std::cout << "Query planning time: " << value << " sec" << std::endl;
+    } else if (key == "plan_execution_time") {
       std::cout << "Query plan execution time: " << value << " sec" << std::endl;
     }
   }
@@ -653,8 +618,7 @@ void EchoNotification(const std::map<std::string, std::string> &notification) {
     } else {
       const WORD original_console_attr = csbi.wAttributes;
       FlushConsoleInputBuffer(h_console);
-      SetConsoleTextAttribute(
-          h_console, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+      SetConsoleTextAttribute(h_console, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
 
       std::cout << severity << ":";
       SetConsoleTextAttribute(h_console, original_console_attr);
@@ -705,8 +669,7 @@ std::optional<std::string> GetLine() {
   return line;
 }
 
-std::pair<std::string, bool> ParseLine(const std::string &line, char *quote,
-                                       bool *escaped) {
+std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, bool *escaped) {
   // Parse line.
   bool is_done = false;
   std::stringstream parsed_line;
@@ -717,8 +680,7 @@ std::pair<std::string, bool> ParseLine(const std::string &line, char *quote,
       *escaped = !*escaped;
       parsed_line << c;
       continue;
-    } else if ((!*quote && (c == '\"' || c == '\'')) ||
-               (!*escaped && c == *quote)) {
+    } else if ((!*quote && (c == '\"' || c == '\'')) || (!*escaped && c == *quote)) {
       *quote = *quote ? '\0' : c;
     } else if (!*quote && c == ';') {
       is_done = true;
@@ -730,8 +692,7 @@ std::pair<std::string, bool> ParseLine(const std::string &line, char *quote,
   return std::make_pair(parsed_line.str(), is_done);
 }
 
-std::optional<std::string> ReadLine(Replxx *replxx_instance,
-                                    const std::string &prompt) {
+std::optional<std::string> ReadLine(Replxx *replxx_instance, const std::string &prompt) {
   if (!default_text.empty()) {
     replxx_set_preload_buffer(replxx_instance, default_text.c_str());
   }
@@ -767,9 +728,7 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
     if (!console::is_a_tty(STDIN_FILENO)) {
       line = console::GetLine();
     } else {
-      line = console::ReadLine(
-          replxx_instance,
-          line_cnt == 0 ? constants::kPrompt : constants::kMultilinePrompt);
+      line = console::ReadLine(replxx_instance, line_cnt == 0 ? constants::kPrompt : constants::kMultilinePrompt);
       if (line_cnt == 0 && line && line->size() > 0 && (*line)[0] == ':') {
         auto trimmed_line = utils::Trim(*line);
         if (trimmed_line == constants::kCommandQuit) {
@@ -808,8 +767,7 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
 }
 
 QueryData ExecuteQuery(mg_session *session, const std::string &query) {
-  int status = mg_session_run(session, query.c_str(), nullptr, nullptr, nullptr,
-                              nullptr);
+  int status = mg_session_run(session, query.c_str(), nullptr, nullptr, nullptr, nullptr);
   auto start = std::chrono::system_clock::now();
   if (status != 0) {
     if (mg_session_status(session) == MG_SESSION_BAD) {
@@ -831,8 +789,7 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
   QueryData ret;
   mg_result *result;
   while ((status = mg_session_fetch(session, &result)) == 1) {
-    ret.records.push_back(mg_memory::MakeCustomUnique<mg_list>(
-        mg_list_copy(mg_result_row(result))));
+    ret.records.push_back(mg_memory::MakeCustomUnique<mg_list>(mg_list_copy(mg_result_row(result))));
     if (!ret.records.back()) {
       std::cerr << "out of memory";
       std::abort();
@@ -852,8 +809,7 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
       const mg_value *field = mg_list_at(header, i);
       if (mg_value_get_type(field) == MG_VALUE_TYPE_STRING) {
         ret.header.push_back(
-            std::string(mg_string_data(mg_value_string(field)),
-                        mg_string_size(mg_value_string(field))));
+            std::string(mg_string_data(mg_value_string(field)), mg_string_size(mg_value_string(field))));
       } else {
         std::stringstream field_stream;
         utils::PrintValue(field_stream, field);
@@ -866,23 +822,16 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
   if (summary && mg_map_size(summary) > 0) {
     {
       std::map<std::string, double> execution_time_info;
-      execution_time_info.emplace(
-          "cost_estimate", ParseFloat(mg_map_at(summary, "cost_estimate")));
-      execution_time_info.emplace(
-          "parsing_time", ParseFloat(mg_map_at(summary, "parsing_time")));
-      execution_time_info.emplace(
-          "planning_time", ParseFloat(mg_map_at(summary, "planning_time")));
-      execution_time_info.emplace(
-          "plan_execution_time",
-          ParseFloat(mg_map_at(summary, "plan_execution_time")));
+      for (auto key : {"cost_estimate", "parsing_time", "planning_time", "plan_execution_time"}) {
+        execution_time_info.emplace(key, ParseFloat(mg_map_at(summary, key)));
+      }
       ret.execution_time_info = execution_time_info;
     }
 
     if (const mg_value *mg_stats = mg_map_at(summary, "stats"); mg_stats) {
       ret.stats.emplace(ParseStats(mg_stats));
     }
-    if (const mg_value *mg_notifications = mg_map_at(summary, "notifications");
-        mg_notifications) {
+    if (const mg_value *mg_notifications = mg_map_at(summary, "notifications"); mg_notifications) {
       ret.notification.emplace(ParseNotifications(mg_notifications));
     }
   }
@@ -895,9 +844,8 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
 
 namespace format {
 
-void PrintHeaderTabular(const std::vector<std::string> &data, int total_width,
-                        int column_width, int num_columns, bool all_columns_fit,
-                        int margin = 1) {
+void PrintHeaderTabular(const std::vector<std::string> &data, int total_width, int column_width, int num_columns,
+                        bool all_columns_fit, int margin = 1) {
   if (!all_columns_fit) num_columns -= 1;
   std::string data_output = std::string(total_width, ' ');
   for (auto i = 0; i < total_width; i += column_width) {
@@ -929,25 +877,21 @@ uint64_t GetMaxColumnWidth(const mg_memory::MgListPtr &data, int margin = 1) {
   for (uint32_t i = 0; i < mg_list_size(data.get()); ++i) {
     std::stringstream field;
     utils::PrintValue(field, mg_list_at(data.get(), i));
-    column_width = std::max(
-        column_width, static_cast<uint64_t>(field.str().size() + 2 * margin));
+    column_width = std::max(column_width, static_cast<uint64_t>(field.str().size() + 2 * margin));
   }
   return column_width + 1;
 }
 
-uint64_t GetMaxColumnWidth(const std::vector<std::string> &data,
-                           int margin = 1) {
+uint64_t GetMaxColumnWidth(const std::vector<std::string> &data, int margin = 1) {
   uint64_t column_width = 0;
   for (const auto &field : data) {
-    column_width = std::max(column_width,
-                            static_cast<uint64_t>(field.size() + 2 * margin));
+    column_width = std::max(column_width, static_cast<uint64_t>(field.size() + 2 * margin));
   }
   return column_width + 1;
 }
 
-void PrintRowTabular(const mg_memory::MgListPtr &data, int total_width,
-                     int column_width, int num_columns, bool all_columns_fit,
-                     int margin = 1) {
+void PrintRowTabular(const mg_memory::MgListPtr &data, int total_width, int column_width, int num_columns,
+                     bool all_columns_fit, int margin = 1) {
   if (!all_columns_fit) num_columns -= 1;
   std::string data_output = std::string(total_width, ' ');
   for (auto i = 0; i < total_width; i += column_width) {
@@ -955,8 +899,7 @@ void PrintRowTabular(const mg_memory::MgListPtr &data, int total_width,
     int idx = i / column_width;
     if (idx < num_columns) {
       std::stringstream field;
-      utils::PrintValue(
-          field, mg_list_at(data.get(), idx));  // convert Value to string
+      utils::PrintValue(field, mg_list_at(data.get(), idx));  // convert Value to string
       std::string field_str(field.str());
       if ((int)field_str.size() > column_width - 2 * margin - 1) {
         field_str.erase(column_width - 2 * margin - 1, std::string::npos);
@@ -972,8 +915,7 @@ void PrintRowTabular(const mg_memory::MgListPtr &data, int total_width,
   std::cout << data_output << std::endl;
 }
 
-void PrintTabular(const std::vector<std::string> &header,
-                  const std::vector<mg_memory::MgListPtr> &records,
+void PrintTabular(const std::vector<std::string> &header, const std::vector<mg_memory::MgListPtr> &records,
                   const bool fit_to_screen) {
   // lifted from replxx io.cxx
   auto get_screen_columns = []() {
@@ -1036,19 +978,16 @@ void PrintTabular(const std::vector<std::string> &header,
   line_fill[total_width - 1] = '+';
   std::cout << line_fill << std::endl;
   // Print Header.
-  PrintHeaderTabular(header, total_width, column_width, num_columns,
-                     all_columns_fit);
+  PrintHeaderTabular(header, total_width, column_width, num_columns, all_columns_fit);
   std::cout << line_fill << std::endl;
   // Print Records.
   for (size_t i = 0; i < records.size(); ++i) {
-    PrintRowTabular(records[i], total_width, column_width, num_columns,
-                    all_columns_fit);
+    PrintRowTabular(records[i], total_width, column_width, num_columns, all_columns_fit);
   }
   std::cout << line_fill << std::endl;
 }
 
-std::vector<std::string> FormatCsvFields(const mg_memory::MgListPtr &fields,
-                                         const CsvOptions &csv_opts) {
+std::vector<std::string> FormatCsvFields(const mg_memory::MgListPtr &fields, const CsvOptions &csv_opts) {
   std::vector<std::string> formatted;
   formatted.reserve(mg_list_size(fields.get()));
   for (uint32_t i = 0; i < mg_list_size(fields.get()); ++i) {
@@ -1058,8 +997,7 @@ std::vector<std::string> FormatCsvFields(const mg_memory::MgListPtr &fields,
     if (csv_opts.doublequote) {
       formatted_field = utils::Replace(formatted_field, "\"", "\"\"");
     } else {
-      formatted_field =
-          utils::Replace(formatted_field, "\"", csv_opts.escapechar + "\"");
+      formatted_field = utils::Replace(formatted_field, "\"", csv_opts.escapechar + "\"");
     }
     formatted_field.insert(0, 1, '"');
     formatted_field.append(1, '"');
@@ -1068,16 +1006,14 @@ std::vector<std::string> FormatCsvFields(const mg_memory::MgListPtr &fields,
   return formatted;
 }
 
-std::vector<std::string> FormatCsvHeader(const std::vector<std::string> &fields,
-                                         const CsvOptions &csv_opts) {
+std::vector<std::string> FormatCsvHeader(const std::vector<std::string> &fields, const CsvOptions &csv_opts) {
   std::vector<std::string> formatted;
   formatted.reserve(fields.size());
   for (auto formatted_field : fields) {
     if (csv_opts.doublequote) {
       formatted_field = utils::Replace(formatted_field, "\"", "\"\"");
     } else {
-      formatted_field =
-          utils::Replace(formatted_field, "\"", csv_opts.escapechar + "\"");
+      formatted_field = utils::Replace(formatted_field, "\"", csv_opts.escapechar + "\"");
     }
     formatted_field.insert(0, 1, '"');
     formatted_field.append(1, '"');
@@ -1086,8 +1022,7 @@ std::vector<std::string> FormatCsvHeader(const std::vector<std::string> &fields,
   return formatted;
 }
 
-void PrintCsv(const std::vector<std::string> &header,
-              const std::vector<mg_memory::MgListPtr> &records,
+void PrintCsv(const std::vector<std::string> &header, const std::vector<mg_memory::MgListPtr> &records,
               const CsvOptions &csv_opts) {
   // Print Header.
   auto formatted_header = FormatCsvHeader(header, csv_opts);
@@ -1101,8 +1036,7 @@ void PrintCsv(const std::vector<std::string> &header,
   }
 }
 
-void Output(const std::vector<std::string> &header,
-            const std::vector<mg_memory::MgListPtr> &records,
+void Output(const std::vector<std::string> &header, const std::vector<mg_memory::MgListPtr> &records,
             const OutputOptions &out_opts, const CsvOptions &csv_opts) {
   if (out_opts.output_format == constants::kTabularFormat) {
     PrintTabular(header, records, out_opts.fit_to_screen);
