@@ -47,8 +47,7 @@ using namespace std::string_literals;
 volatile sig_atomic_t is_shutting_down = 0;
 
 // connection
-DEFINE_string(host, "127.0.0.1",
-              "Server address. It can be a DNS resolvable hostname.");
+DEFINE_string(host, "127.0.0.1", "Server address. It can be a DNS resolvable hostname.");
 DEFINE_int32(port, 7687, "Server port");
 DEFINE_string(username, "", "Username for the database");
 DEFINE_string(password, "", "Password for the database");
@@ -74,19 +73,15 @@ DEFINE_validator(csv_delimiter, [](const char *, const std::string &value) {
   }
   return true;
 });
-DEFINE_string(
-    csv_escapechar, "",
-    "Character used to escape the quotechar(\") if csv-doublequote is false.");
-DEFINE_bool(
-    csv_doublequote, true,
-    "Controls how instances of quotechar(\") appearing inside a field should "
-    "themselves be quoted. When true, the character is doubled. When false, "
-    "the escapechar is used as a prefix to the quotechar. "
-    "If csv-doublequote is false 'csv-escapechar' must be set.");
+DEFINE_string(csv_escapechar, "", "Character used to escape the quotechar(\") if csv-doublequote is false.");
+DEFINE_bool(csv_doublequote, true,
+            "Controls how instances of quotechar(\") appearing inside a field should "
+            "themselves be quoted. When true, the character is doubled. When false, "
+            "the escapechar is used as a prefix to the quotechar. "
+            "If csv-doublequote is false 'csv-escapechar' must be set.");
 
 // history
-DEFINE_string(history, "~/.memgraph",
-              "Use the specified directory for saving history.");
+DEFINE_string(history, "~/.memgraph", "Use the specified directory for saving history.");
 DEFINE_bool(no_history, false, "Do not save history.");
 
 DECLARE_int32(min_log_level);
@@ -97,12 +92,10 @@ int main(int argc, char **argv) {
 
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-  format::CsvOptions csv_opts{FLAGS_csv_delimiter, FLAGS_csv_escapechar,
-                              FLAGS_csv_doublequote};
+  format::CsvOptions csv_opts{FLAGS_csv_delimiter, FLAGS_csv_escapechar, FLAGS_csv_doublequote};
   format::OutputOptions output_opts{FLAGS_output_format, FLAGS_fit_to_screen};
 
-  if (output_opts.output_format == constants::kCsvFormat &&
-      !csv_opts.ValidateDoubleQuote()) {
+  if (output_opts.output_format == constants::kCsvFormat && !csv_opts.ValidateDoubleQuote()) {
     console::EchoFailure(
         "Unsupported combination of 'csv-doublequote' and 'csv-escapechar'\n"
         "flags",
@@ -111,8 +104,7 @@ int main(int argc, char **argv) {
   }
 
   if (mg_init() != 0) {
-    console::EchoFailure("Internal error",
-                         "Couldn't initialize all the resources");
+    console::EchoFailure("Internal error", "Couldn't initialize all the resources");
     return 1;
   }
   Replxx *replxx_instance = InitAndSetupReplxx();
@@ -126,16 +118,14 @@ int main(int argc, char **argv) {
   };
 
   auto password = FLAGS_password;
-  if (console::is_a_tty(STDIN_FILENO) && FLAGS_username.size() > 0 &&
-      password.size() == 0) {
+  if (console::is_a_tty(STDIN_FILENO) && FLAGS_username.size() > 0 && password.size() == 0) {
     console::SetStdinEcho(false);
     auto password_optional = console::ReadLine(replxx_instance, "Password: ");
     std::cout << std::endl;
     if (password_optional) {
       password = *password_optional;
     } else {
-      console::EchoFailure("Password not submitted",
-                           "Requested password for username " + FLAGS_username);
+      console::EchoFailure("Password not submitted", "Requested password for username " + FLAGS_username);
       cleanup_resources();
       return 1;
     }
@@ -143,15 +133,12 @@ int main(int argc, char **argv) {
   }
 
   fs::path history_dir = FLAGS_history;
-  if (FLAGS_history == (constants::kDefaultHistoryBaseDir + "/" +
-                        constants::kDefaultHistoryMemgraphDir)) {
+  if (FLAGS_history == (constants::kDefaultHistoryBaseDir + "/" + constants::kDefaultHistoryMemgraphDir)) {
     // Fetch home dir for user.
-    history_dir =
-        utils::GetUserHomeDir() / constants::kDefaultHistoryMemgraphDir;
+    history_dir = utils::GetUserHomeDir() / constants::kDefaultHistoryMemgraphDir;
   }
   if (!utils::EnsureDir(history_dir)) {
-    console::EchoFailure("History directory doesn't exist",
-                         history_dir.string());
+    console::EchoFailure("History directory doesn't exist", history_dir.string());
     // Should program exit here or just continue with warning message?
     cleanup_resources();
     return 1;
@@ -159,11 +146,9 @@ int main(int argc, char **argv) {
   fs::path history_file = history_dir / constants::kHistoryFilename;
   // Read history file.
   if (fs::exists(history_file)) {
-    auto ret =
-        replxx_history_load(replxx_instance, history_file.string().c_str());
+    auto ret = replxx_history_load(replxx_instance, history_file.string().c_str());
     if (ret != 0) {
-      console::EchoFailure("Unable to read history file",
-                           history_file.string());
+      console::EchoFailure("Unable to read history file", history_file.string());
       // Should program exit here or just continue with warning message?
       cleanup_resources();
       return 1;
@@ -175,11 +160,9 @@ int main(int argc, char **argv) {
     if (!FLAGS_no_history) {
       // If there was no history, create history file.
       // Otherwise, append to existing history.
-      auto ret =
-          replxx_history_save(replxx_instance, history_file.string().c_str());
+      auto ret = replxx_history_save(replxx_instance, history_file.string().c_str());
       if (ret != 0) {
-        console::EchoFailure("Unable to save history to file",
-                             history_file.string());
+        console::EchoFailure("Unable to save history to file", history_file.string());
         cleanup_resources();
         return 1;
       }
@@ -200,8 +183,7 @@ int main(int argc, char **argv) {
 #else /* _WIN32 */
 
   auto shutdown = [](int exit_code = 0) {
-    if (is_shutting_down)
-      return;
+    if (is_shutting_down) return;
     is_shutting_down = 1;
 
 #ifdef __APPLE__
@@ -231,12 +213,9 @@ int main(int argc, char **argv) {
 
   std::string bolt_client_version = "mg/"s + gflags::VersionString();
 
-  mg_memory::MgSessionParamsPtr params =
-      mg_memory::MakeCustomUnique<mg_session_params>(mg_session_params_make());
+  mg_memory::MgSessionParamsPtr params = mg_memory::MakeCustomUnique<mg_session_params>(mg_session_params_make());
   if (!params) {
-    console::EchoFailure(
-        "Connection failure",
-        "out of memory, failed to allocate `mg_session_params` struct");
+    console::EchoFailure("Connection failure", "out of memory, failed to allocate `mg_session_params` struct");
   }
   mg_session_params_set_host(params.get(), FLAGS_host.c_str());
   mg_session_params_set_port(params.get(), FLAGS_port);
@@ -245,26 +224,22 @@ int main(int argc, char **argv) {
     mg_session_params_set_password(params.get(), password.c_str());
   }
   mg_session_params_set_user_agent(params.get(), bolt_client_version.c_str());
-  mg_session_params_set_sslmode(
-      params.get(), FLAGS_use_ssl ? MG_SSLMODE_REQUIRE : MG_SSLMODE_DISABLE);
+  mg_session_params_set_sslmode(params.get(), FLAGS_use_ssl ? MG_SSLMODE_REQUIRE : MG_SSLMODE_DISABLE);
 
-  mg_memory::MgSessionPtr session =
-      mg_memory::MakeCustomUnique<mg_session>(nullptr);
+  mg_memory::MgSessionPtr session = mg_memory::MakeCustomUnique<mg_session>(nullptr);
   {
     mg_session *session_tmp;
     int status = mg_connect(params.get(), &session_tmp);
     session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
     if (status != 0) {
-      console::EchoFailure("Connection failure",
-                           mg_session_error(session.get()));
+      console::EchoFailure("Connection failure", mg_session_error(session.get()));
       cleanup_resources();
       return 1;
     }
   }
 
   console::EchoInfo("mgconsole "s + gflags::VersionString());
-  console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" +
-                    std::to_string(FLAGS_port) + "'");
+  console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" + std::to_string(FLAGS_port) + "'");
   console::EchoInfo("Type :help for shell usage");
   console::EchoInfo("Quit the shell by typing Ctrl-D(eof) or :quit");
   int num_retries = 3;
@@ -274,12 +249,10 @@ int main(int argc, char **argv) {
       console::EchoInfo("Bye");
       break;
     }
-    if (query->empty())
-      continue;
+    if (query->empty()) continue;
     try {
       auto ret = query::ExecuteQuery(session.get(), *query);
-      if (ret.records.size() > 0)
-        Output(ret.header, ret.records, output_opts, csv_opts);
+      if (ret.records.size() > 0) Output(ret.header, ret.records, output_opts, csv_opts);
       if (console::is_a_tty(STDIN_FILENO)) {
         std::string summary;
         if (ret.records.size() == 0) {
@@ -322,8 +295,7 @@ int main(int argc, char **argv) {
         int status = mg_connect(params.get(), &session_tmp);
         session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
         if (status != 0) {
-          console::EchoFailure("Connection failure",
-                               mg_session_error(session.get()));
+          console::EchoFailure("Connection failure", mg_session_error(session.get()));
           session.reset(nullptr);
         } else {
           is_connected = true;
@@ -333,12 +305,10 @@ int main(int argc, char **argv) {
       }
       if (is_connected) {
         num_retries = 3;
-        console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" +
-                          std::to_string(FLAGS_port) + "'");
+        console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" + std::to_string(FLAGS_port) + "'");
       } else {
         console::EchoFailure("Couldn't connect to",
-                             "'memgraph://" + FLAGS_host + ":" +
-                                 std::to_string(FLAGS_port) + "'");
+                             "'memgraph://" + FLAGS_host + ":" + std::to_string(FLAGS_port) + "'");
         cleanup_resources();
         return 1;
       }

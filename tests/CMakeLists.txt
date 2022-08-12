@@ -18,9 +18,9 @@ set(MEMGRAPH_PATH "/usr/lib/memgraph/memgraph" CACHE FILEPATH
         "Path to Memgraph binary for client tests")
 
 add_test(NAME mgconsole-test
-         COMMAND ./run-tests.sh ${MEMGRAPH_PATH} ${PROJECT_BINARY_DIR}/src/mgconsole
-         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        COMMAND ./run-tests.sh ${MEMGRAPH_PATH} ${PROJECT_BINARY_DIR}/src/mgconsole
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_test(NAME mgconsole-secure-test
-         COMMAND ./run-tests.sh --use-ssl ${MEMGRAPH_PATH} ${PROJECT_BINARY_DIR}/src/mgconsole
-         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        COMMAND ./run-tests.sh --use-ssl ${MEMGRAPH_PATH} ${PROJECT_BINARY_DIR}/src/mgconsole
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
