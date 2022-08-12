@@ -252,7 +252,7 @@ int main(int argc, char **argv) {
     if (query->empty()) {
       continue;
     }
-    
+
     try {
       auto ret = query::ExecuteQuery(session.get(), *query);
       if (ret.records.size() > 0) {
