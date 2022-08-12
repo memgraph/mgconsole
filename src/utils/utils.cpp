@@ -805,7 +805,17 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
     }
   }
 
-  status = mg_session_pull(session, nullptr);
+  auto *pull_information = mg_map_make_empty(1);
+  if (!pull_information) {
+    throw utils::ClientFatalException(mg_session_error(session));
+  }
+
+  // Pulling unlimited stream of information
+  mg_value *n_val = mg_value_make_integer(-1); 
+  if (!pull_information || mg_map_insert_unsafe(pull_information, "n", n_val) != 0) {
+   throw utils::ClientFatalException(mg_session_error(session));
+  }
+  status = mg_session_pull(session, pull_information);
   if (status != 0) {
     if (mg_session_status(session) == MG_SESSION_BAD) {
       throw utils::ClientFatalException(mg_session_error(session));
