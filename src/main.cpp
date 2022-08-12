@@ -249,10 +249,16 @@ int main(int argc, char **argv) {
       console::EchoInfo("Bye");
       break;
     }
-    if (query->empty()) continue;
+    if (query->empty()) {
+      continue;
+    }
+    
     try {
       auto ret = query::ExecuteQuery(session.get(), *query);
-      if (ret.records.size() > 0) Output(ret.header, ret.records, output_opts, csv_opts);
+      if (ret.records.size() > 0) {
+        Output(ret.header, ret.records, output_opts, csv_opts);
+      }
+
       if (console::is_a_tty(STDIN_FILENO)) {
         std::string summary;
         if (ret.records.size() == 0) {
