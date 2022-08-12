@@ -277,7 +277,7 @@ int main(int argc, char **argv) {
         if (ret.stats) {
           console::EchoStats(ret.stats.value());
         }
-        if (FLAGS_verbose_query) {
+        if (FLAGS_verbose_query && ret.execution_time_info) {
           console::EchoExecutionTimeInfo(ret.execution_time_info.value());
         }
       }

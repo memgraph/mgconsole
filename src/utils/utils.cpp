@@ -823,9 +823,13 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
     {
       std::map<std::string, double> execution_time_info;
       for (auto key : {"cost_estimate", "parsing_time", "planning_time", "plan_execution_time"}) {
-        execution_time_info.emplace(key, ParseFloat(mg_map_at(summary, key)));
+        if (const mg_value *info = mg_map_at(summary, key); info) {
+          execution_time_info.emplace(key, ParseFloat(info));
+        }
       }
-      ret.execution_time_info = execution_time_info;
+      if (!execution_time_info.empty()) {
+        ret.execution_time_info = execution_time_info;
+      }
     }
 
     if (const mg_value *mg_stats = mg_map_at(summary, "stats"); mg_stats) {
