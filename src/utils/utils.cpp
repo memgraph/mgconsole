@@ -506,6 +506,7 @@ std::map<std::string, std::string> ParseNotifications(const mg_value *mg_notific
 }
 
 double ParseFloat(const mg_value *mg_val_float) { return mg_value_float(mg_val_float); }
+
 }  // namespace
 
 namespace console {
@@ -777,7 +778,18 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
     }
   }
 
-  status = mg_session_pull(session, nullptr);
+  auto pull_information = mg_memory::MakeCustomUnique<mg_map>(mg_map_make_empty(1));
+  if (!pull_information) {
+    throw utils::ClientFatalException(mg_session_error(session));
+  }
+
+  // Pulling unlimited stream of information
+  auto *n_val = mg_value_make_integer(-1);  // NOTE: Destroy only on insertion failure.
+  if (mg_map_insert_unsafe(pull_information.get(), "n", n_val) != 0) {
+    mg_value_destroy(n_val);
+    throw utils::ClientFatalException(mg_session_error(session));
+  }
+  status = mg_session_pull(session, pull_information.get());
   if (status != 0) {
     if (mg_session_status(session) == MG_SESSION_BAD) {
       throw utils::ClientFatalException(mg_session_error(session));
