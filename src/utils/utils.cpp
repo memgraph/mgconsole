@@ -1,4 +1,5 @@
 #include <string.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -504,6 +505,8 @@ std::map<std::string, std::string> ParseNotifications(const mg_value *mg_notific
   return notifications;
 }
 
+double ParseFloat(const mg_value *mg_val_float) { return mg_value_float(mg_val_float); }
+
 }  // namespace
 
 namespace console {
@@ -564,6 +567,21 @@ void EchoFailure(const std::string &failure_msg, const std::string &explanation)
 void EchoInfo(const std::string &message) {
   if (is_a_tty(STDIN_FILENO)) {
     std::cout << message << std::endl;
+  }
+}
+
+void EchoExecutionInfo(const std::map<std::string, double> &execution_info) {
+  std::cout << "Additional execution time info:" << std::endl;
+  for (const auto &[key, value] : execution_info) {
+    if (key == "cost_estimate") {
+      std::cout << "  Query COST estimate: " << value << std::endl;
+    } else if (key == "parsing_time") {
+      std::cout << "  Query PARSING time: " << value << " sec" << std::endl;
+    } else if (key == "planning_time") {
+      std::cout << "  Query PLANNING time: " << value << " sec" << std::endl;
+    } else if (key == "plan_execution_time") {
+      std::cout << "  Query PLAN EXECUTION time: " << value << " sec" << std::endl;
+    }
   }
 }
 
@@ -814,6 +832,18 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
 
   const mg_map *summary = mg_result_summary(result);
   if (summary && mg_map_size(summary) > 0) {
+    {
+      std::map<std::string, double> execution_info;
+      for (auto key : {"cost_estimate", "parsing_time", "planning_time", "plan_execution_time"}) {
+        if (const mg_value *info = mg_map_at(summary, key); info) {
+          execution_info.emplace(key, ParseFloat(info));
+        }
+      }
+      if (!execution_info.empty()) {
+        ret.execution_info = execution_info;
+      }
+    }
+
     if (const mg_value *mg_stats = mg_map_at(summary, "stats"); mg_stats) {
       ret.stats.emplace(ParseStats(mg_stats));
     }

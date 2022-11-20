@@ -14,13 +14,13 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <signal.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
 #include <optional>
 #include <thread>
-
-#include <signal.h>
 
 #ifdef _WIN32
 
@@ -58,6 +58,8 @@ DEFINE_bool(term_colors, false, "Use terminal colors syntax highlighting.");
 DEFINE_string(output_format, "tabular",
               "Query output format. Can be csv/tabular. If output format is "
               "other than tabular `fit-to-screen` flag is ignored.");
+DEFINE_bool(verbose_execution_info, false,
+            "Output the additional information about query such is query cost, parsing, planning and execution times.");
 DEFINE_validator(output_format, [](const char *, const std::string &value) {
   if (value == constants::kCsvFormat || value == constants::kTabularFormat) {
     return true;
@@ -252,13 +254,11 @@ int main(int argc, char **argv) {
     if (query->empty()) {
       continue;
     }
-
     try {
       auto ret = query::ExecuteQuery(session.get(), *query);
       if (ret.records.size() > 0) {
         Output(ret.header, ret.records, output_opts, csv_opts);
       }
-
       if (console::is_a_tty(STDIN_FILENO)) {
         std::string summary;
         if (ret.records.size() == 0) {
@@ -268,7 +268,7 @@ int main(int argc, char **argv) {
         } else {
           summary = std::to_string(ret.records.size()) + " rows in set";
         }
-        std::printf("%s (%.3lf sec)\n", summary.c_str(), ret.wall_time.count());
+        std::printf("%s (round trip in %.3lf sec)\n", summary.c_str(), ret.wall_time.count());
         auto history_ret = save_history();
         if (history_ret != 0) {
           cleanup_resources();
@@ -279,6 +279,9 @@ int main(int argc, char **argv) {
         }
         if (ret.stats) {
           console::EchoStats(ret.stats.value());
+        }
+        if (FLAGS_verbose_execution_info && ret.execution_info) {
+          console::EchoExecutionInfo(ret.execution_info.value());
         }
       }
     } catch (const utils::ClientQueryException &e) {
