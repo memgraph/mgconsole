@@ -178,7 +178,7 @@ void EchoStats(const std::map<std::string, std::int64_t> &stats);
 
 void EchoNotification(const std::map<std::string, std::string> &notification);
 
-void EchoExecutionTimeInfo(const std::map<std::string, double> &execution_info);
+void EchoExecutionInfo(const std::map<std::string, double> &execution_info);
 
 /// Helper function that sets default input for 'readline'
 int SetDefaultText();
@@ -212,7 +212,7 @@ struct QueryData {
   std::chrono::duration<double> wall_time;
   std::optional<std::map<std::string, std::string>> notification;
   std::optional<std::map<std::string, std::int64_t>> stats;
-  std::optional<std::map<std::string, double>> execution_time_info;
+  std::optional<std::map<std::string, double>> execution_info;
 };
 
 std::optional<std::string> GetQuery(Replxx *replxx_instance);

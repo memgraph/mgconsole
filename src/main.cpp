@@ -58,9 +58,8 @@ DEFINE_bool(term_colors, false, "Use terminal colors syntax highlighting.");
 DEFINE_string(output_format, "tabular",
               "Query output format. Can be csv/tabular. If output format is "
               "other than tabular `fit-to-screen` flag is ignored.");
-DEFINE_bool(verbose_query, false,
-            "Output the additional information about query time such is "
-            "query parsing time and query planning time.");
+DEFINE_bool(verbose_execution_info, false,
+            "Output the additional information about query such is query cost, parsing, planning and execution times.");
 DEFINE_validator(output_format, [](const char *, const std::string &value) {
   if (value == constants::kCsvFormat || value == constants::kTabularFormat) {
     return true;
@@ -281,8 +280,8 @@ int main(int argc, char **argv) {
         if (ret.stats) {
           console::EchoStats(ret.stats.value());
         }
-        if (FLAGS_verbose_query && ret.execution_time_info) {
-          console::EchoExecutionTimeInfo(ret.execution_time_info.value());
+        if (FLAGS_verbose_execution_info && ret.execution_info) {
+          console::EchoExecutionInfo(ret.execution_info.value());
         }
       }
     } catch (const utils::ClientQueryException &e) {
