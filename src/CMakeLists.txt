@@ -36,12 +36,12 @@ endif()
 
 find_package(OpenSSL REQUIRED)
 
-if (MGCONSOLE_ON_OSX)
+if(MGCONSOLE_ON_OSX)
   set(MACOSX_OPENSSL_ROOTDIR_FLAG "-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}")
 endif()
 
 # Handle platforms
-if (MGCONSOLE_ON_WINDOWS)
+if(MGCONSOLE_ON_WINDOWS)
   set(GFLAGS_WIN_LIB_SUFFIX "_static")
   set(CMAKE_CXX_STANDARD_LIBRARIES "-static-libgcc -static-libstdc++ -lws2_32")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive")
@@ -59,12 +59,12 @@ endif()
 
 # Setup GFlags
 ExternalProject_Add(gflags-proj
-        PREFIX            gflags
-        GIT_REPOSITORY    https://github.com/gflags/gflags.git
-        GIT_TAG           v2.2.2
-        CMAKE_ARGS        "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
-                          "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
-        INSTALL_DIR       "${PROJECT_BINARY_DIR}/gflags")
+  PREFIX gflags
+  GIT_REPOSITORY https://github.com/gflags/gflags.git
+  GIT_TAG v2.2.2
+  CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
+  "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+  INSTALL_DIR "${PROJECT_BINARY_DIR}/gflags")
 
 ExternalProject_Get_Property(gflags-proj install_dir)
 set(GFLAGS_ROOT ${install_dir})
@@ -76,19 +76,19 @@ set(GFLAGS_LIBRARY gflags)
 add_library(${GFLAGS_LIBRARY} STATIC IMPORTED)
 target_compile_definitions(${GFLAGS_LIBRARY} INTERFACE GFLAGS_IS_A_DLL=0)
 set_target_properties(${GFLAGS_LIBRARY} PROPERTIES
-        IMPORTED_LOCATION ${GFLAGS_LIBRARY_PATH}
-        IMPORTED_LOCATION_DEBUG ${GFLAGS_DEBUG_LIBRARY_PATH}
-        INTERFACE_LINK_LIBRARIES Threads::Threads)
+  IMPORTED_LOCATION ${GFLAGS_LIBRARY_PATH}
+  IMPORTED_LOCATION_DEBUG ${GFLAGS_DEBUG_LIBRARY_PATH}
+  INTERFACE_LINK_LIBRARIES Threads::Threads)
 add_dependencies(${GFLAGS_LIBRARY} gflags-proj)
 
 ExternalProject_Add(mgclient-proj
-        PREFIX            mgclient
-        GIT_REPOSITORY    https://github.com/memgraph/mgclient.git
-        GIT_TAG           v1.3.0
-        CMAKE_ARGS        "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
-                          "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
-                          ${MACOSX_OPENSSL_ROOTDIR_FLAG}
-        INSTALL_DIR       "${PROJECT_BINARY_DIR}/mgclient")
+  PREFIX mgclient
+  GIT_REPOSITORY https://github.com/memgraph/mgclient.git
+  GIT_TAG v1.3.0
+  CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
+  "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+  ${MACOSX_OPENSSL_ROOTDIR_FLAG}
+  INSTALL_DIR "${PROJECT_BINARY_DIR}/mgclient")
 
 ExternalProject_Get_Property(mgclient-proj install_dir)
 set(MGCLIENT_ROOT ${install_dir})
@@ -107,32 +107,32 @@ add_subdirectory(utils)
 add_compile_options(-Wall -Wextra -pedantic -Werror)
 
 # replxx performs narrowing conversion on Windows
-if (MGCONSOLE_ON_WINDOWS)
+if(MGCONSOLE_ON_WINDOWS)
   add_compile_options(-Wno-narrowing)
 endif()
 
 add_executable(mgconsole main.cpp)
 target_compile_definitions(mgconsole PRIVATE MGCLIENT_STATIC_DEFINE)
 target_include_directories(mgconsole
-        PRIVATE
-        ${GFLAGS_INCLUDE_DIRS}
-        ${MGCLIENT_INCLUDE_DIRS}
-        ${REPLXX_INCLUDE_DIRS}
-        ${CMAKE_CURRENT_BINARY_DIR})
+  PRIVATE
+  ${GFLAGS_INCLUDE_DIRS}
+  ${MGCLIENT_INCLUDE_DIRS}
+  ${REPLXX_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(mgconsole
-        PRIVATE
-        ${GFLAGS_LIBRARY}
-        utils
-        ${MGCLIENT_LIBRARY}
-        ${OPENSSL_LIBRARIES})
+  PRIVATE
+  ${GFLAGS_LIBRARY}
+  utils
+  ${MGCLIENT_LIBRARY}
+  ${OPENSSL_LIBRARIES})
 
-if (MGCONSOLE_ON_WINDOWS)
+if(MGCONSOLE_ON_WINDOWS)
   target_link_libraries(mgconsole PRIVATE shlwapi)
 endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
-        "${CMAKE_CURRENT_BINARY_DIR}/version.hpp")
+  "${CMAKE_CURRENT_BINARY_DIR}/version.hpp")
 
 install(TARGETS mgconsole
-       RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
