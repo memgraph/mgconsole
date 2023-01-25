@@ -749,7 +749,7 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
   return query.str();
 }
 
-QueryData ExecuteQuery(mg_session *session, const std::string &query) {
+QueryResult ExecuteQuery(mg_session *session, const std::string &query) {
   int status = mg_session_run(session, query.c_str(), nullptr, nullptr, nullptr, nullptr);
   auto start = std::chrono::system_clock::now();
   if (status != 0) {
@@ -780,7 +780,7 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
     }
   }
 
-  QueryData ret;
+  QueryResult ret;
   mg_result *result;
   while ((status = mg_session_fetch(session, &result)) == 1) {
     ret.records.push_back(mg_memory::MakeCustomUnique<mg_list>(mg_list_copy(mg_result_row(result))));

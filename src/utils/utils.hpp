@@ -204,7 +204,15 @@ std::optional<std::string> ReadLine(Replxx *replxx_instance, const std::string &
 
 namespace query {
 
-struct QueryData {
+struct Query {
+  int64_t line_number;
+  std::string query;
+};
+
+struct Batch {
+};
+
+struct QueryResult {
   std::vector<std::string> header;
   std::vector<mg_memory::MgListPtr> records;
   std::chrono::duration<double> wall_time;
@@ -214,7 +222,7 @@ struct QueryData {
 
 std::optional<std::string> GetQuery(Replxx *replxx_instance);
 
-QueryData ExecuteQuery(mg_session *session, const std::string &query);
+QueryResult ExecuteQuery(mg_session *session, const std::string &query);
 
 }  // namespace query
 
