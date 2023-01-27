@@ -204,8 +204,15 @@ std::optional<std::string> ReadLine(Replxx *replxx_instance, const std::string &
 
 namespace query {
 
+// Interesting abstraction because multiple lines can be parsed in parallel.
+struct Line {
+  int64_t line_number;
+  std::string line;
+};
+
 struct Query {
   int64_t line_number;
+  int64_t query_number;
   std::string query;
 };
 
