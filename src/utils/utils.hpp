@@ -217,6 +217,7 @@ struct Query {
 };
 
 struct Batch {
+  std::vector<Query> queries;
 };
 
 struct QueryResult {
@@ -227,9 +228,14 @@ struct QueryResult {
   std::optional<std::map<std::string, std::int64_t>> stats;
 };
 
+struct BatchResult {
+  std::vector<QueryResult> results;
+};
+
 std::optional<std::string> GetQuery(Replxx *replxx_instance);
 
 QueryResult ExecuteQuery(mg_session *session, const std::string &query);
+BatchResult ExecuteBatch(mg_session *session, const Batch& batch);
 
 }  // namespace query
 

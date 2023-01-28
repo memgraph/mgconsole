@@ -826,6 +826,10 @@ QueryResult ExecuteQuery(mg_session *session, const std::string &query) {
   return ret;
 }
 
+BatchResult ExecuteBatch(mg_session *session, const Batch& batch) {
+  throw 1;
+}
+
 }  // namespace query
 
 namespace format {
