@@ -155,20 +155,20 @@ int main(int argc, char **argv) {
     }
   }
 
-  // // Save history function. Used to save replxx history after each query.
-  // auto save_history = [&history_file, replxx_instance, &cleanup_resources] {
-  //   if (!FLAGS_no_history) {
-  //     // If there was no history, create history file.
-  //     // Otherwise, append to existing history.
-  //     auto ret = replxx_history_save(replxx_instance, history_file.string().c_str());
-  //     if (ret != 0) {
-  //       console::EchoFailure("Unable to save history to file", history_file.string());
-  //       cleanup_resources();
-  //       return 1;
-  //     }
-  //   }
-  //   return 0;
-  // };
+  // Save history function. Used to save replxx history after each query.
+  auto save_history = [&history_file, replxx_instance, &cleanup_resources] {
+    if (!FLAGS_no_history) {
+      // If there was no history, create history file.
+      // Otherwise, append to existing history.
+      auto ret = replxx_history_save(replxx_instance, history_file.string().c_str());
+      if (ret != 0) {
+        console::EchoFailure("Unable to save history to file", history_file.string());
+        cleanup_resources();
+        return 1;
+      }
+    }
+    return 0;
+  };
 
 #ifdef _WIN32
 // ToDo(the-joksim):
@@ -242,9 +242,9 @@ int main(int argc, char **argv) {
   console::EchoInfo("Type :help for shell usage");
   console::EchoInfo("Quit the shell by typing Ctrl-D(eof) or :quit");
 
-  // int num_retries = 3; // this is related to the network retries not serialization retries
+  int num_retries = 3; // this is related to the network retries not serialization retries
   uint64_t batch_size = 1000;
-  // BAD: all queries have to be stored or at least N * batch_size
+  // All queries have to be stored or at least N * batch_size
   query::Batch batch;
   batch.queries.reserve(batch_size);
   std::vector<query::Batch> batches;
@@ -259,83 +259,88 @@ int main(int argc, char **argv) {
       continue;
     }
 
-    // TODO(gitbuda): Batch limited number of queries (based on the thread pool) and execute all in parallel with retries.
-    // IF batches.size() < thread_pool_size -> batch ELSE move on with the execution
-    if (batch.queries.size() < batch_size) {
-      batch.queries.emplace_back(query::Query{.line_number=0,.query_number=0,.query=*query});
-    } else {
-      batches.emplace_back(std::move(batch));
-      batch = query::Batch();
-      batch.queries.reserve(batch_size);
-    }
+    // TODO(gitbuda): Indexes are a problem because they can't be created in a multi-query transaction.
+    if (!console::is_a_tty(STDIN_FILENO)) { // reading from STDIN -> BATCHING
+      // TODO(gitbuda): Batch limited number of queries (based on the thread pool) and execute all in parallel with retries.
+      // IF batches.size() < thread_pool_size -> batch ELSE move on with the execution
+      if (batch.queries.size() < batch_size) {
+        batch.queries.emplace_back(query::Query{.line_number=0,.query_number=0,.query=*query});
+      } else {
+        auto ret = query::ExecuteBatch(session.get(), batch);
+        batches.emplace_back(std::move(batch));
+        batch = query::Batch();
+        batch.queries.reserve(batch_size);
+      }
 
-    // try {
-    //   auto ret = query::ExecuteQuery(session.get(), *query);
-    //   if (ret.records.size() > 0) {
-    //     Output(ret.header, ret.records, output_opts, csv_opts);
-    //   }
-    //
-    //   if (console::is_a_tty(STDIN_FILENO)) {
-    //     std::string summary;
-    //     if (ret.records.size() == 0) {
-    //       summary = "Empty set";
-    //     } else if (ret.records.size() == 1) {
-    //       summary = std::to_string(ret.records.size()) + " row in set";
-    //     } else {
-    //       summary = std::to_string(ret.records.size()) + " rows in set";
-    //     }
-    //     std::printf("%s (%.3lf sec)\n", summary.c_str(), ret.wall_time.count());
-    //     auto history_ret = save_history();
-    //     if (history_ret != 0) {
-    //       cleanup_resources();
-    //       return history_ret;
-    //     }
-    //     if (ret.notification) {
-    //       console::EchoNotification(ret.notification.value());
-    //     }
-    //     if (ret.stats) {
-    //       console::EchoStats(ret.stats.value());
-    //     }
-    //   }
-    // } catch (const utils::ClientQueryException &e) {
-    //   if (!console::is_a_tty(STDIN_FILENO)) {
-    //     console::EchoFailure("Failed query", *query);
-    //   }
-    //   console::EchoFailure("Client received exception", e.what());
-    //   if (!console::is_a_tty(STDIN_FILENO)) {
-    //     cleanup_resources();
-    //     return 1;
-    //   }
-    // } catch (const utils::ClientFatalException &e) {
-    //   console::EchoFailure("Client received exception", e.what());
-    //   console::EchoInfo("Trying to reconnect");
-    //   bool is_connected = false;
-    //   session.reset(nullptr);
-    //   while (num_retries > 0) {
-    //     --num_retries;
-    //     mg_session *session_tmp;
-    //     int status = mg_connect(params.get(), &session_tmp);
-    //     session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
-    //     if (status != 0) {
-    //       console::EchoFailure("Connection failure", mg_session_error(session.get()));
-    //       session.reset(nullptr);
-    //     } else {
-    //       is_connected = true;
-    //       break;
-    //     }
-    //     std::this_thread::sleep_for(std::chrono::seconds(1));
-    //   }
-    //   if (is_connected) {
-    //     num_retries = 3;
-    //     console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" + std::to_string(FLAGS_port) + "'");
-    //   } else {
-    //     console::EchoFailure("Couldn't connect to",
-    //                          "'memgraph://" + FLAGS_host + ":" + std::to_string(FLAGS_port) + "'");
-    //     cleanup_resources();
-    //     return 1;
-    //   }
-    // }
+    } else { // interactive mode -> NO BATCHING
+      try {
+        auto ret = query::ExecuteQuery(session.get(), *query);
+        if (ret.records.size() > 0) {
+          Output(ret.header, ret.records, output_opts, csv_opts);
+        }
+        if (console::is_a_tty(STDIN_FILENO)) {
+          std::string summary;
+          if (ret.records.size() == 0) {
+            summary = "Empty set";
+          } else if (ret.records.size() == 1) {
+            summary = std::to_string(ret.records.size()) + " row in set";
+          } else {
+            summary = std::to_string(ret.records.size()) + " rows in set";
+          }
+          std::printf("%s (%.3lf sec)\n", summary.c_str(), ret.wall_time.count());
+          auto history_ret = save_history();
+          if (history_ret != 0) {
+            cleanup_resources();
+            return history_ret;
+          }
+          if (ret.notification) {
+            console::EchoNotification(ret.notification.value());
+          }
+          if (ret.stats) {
+            console::EchoStats(ret.stats.value());
+          }
+        }
+      } catch (const utils::ClientQueryException &e) {
+        if (!console::is_a_tty(STDIN_FILENO)) {
+          console::EchoFailure("Failed query", *query);
+        }
+        console::EchoFailure("Client received exception", e.what());
+        if (!console::is_a_tty(STDIN_FILENO)) {
+          cleanup_resources();
+          return 1;
+        }
+      } catch (const utils::ClientFatalException &e) {
+        console::EchoFailure("Client received exception", e.what());
+        console::EchoInfo("Trying to reconnect");
+        bool is_connected = false;
+        session.reset(nullptr);
+        while (num_retries > 0) {
+          --num_retries;
+          mg_session *session_tmp;
+          int status = mg_connect(params.get(), &session_tmp);
+          session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
+          if (status != 0) {
+            console::EchoFailure("Connection failure", mg_session_error(session.get()));
+            session.reset(nullptr);
+          } else {
+            is_connected = true;
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        if (is_connected) {
+          num_retries = 3;
+          console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" + std::to_string(FLAGS_port) + "'");
+        } else {
+          console::EchoFailure("Couldn't connect to",
+                               "'memgraph://" + FLAGS_host + ":" + std::to_string(FLAGS_port) + "'");
+          cleanup_resources();
+          return 1;
+        }
+      }
+    }
   }
+
   cleanup_resources();
   return 0;
 }

@@ -827,7 +827,24 @@ QueryResult ExecuteQuery(mg_session *session, const std::string &query) {
 }
 
 BatchResult ExecuteBatch(mg_session *session, const Batch& batch) {
-  throw 1;
+  std::cout << batch.queries.size() << std::endl;
+  // TODO(gitbuda): Handler results properly
+  mg_result *result;
+  auto begin_status = mg_session_begin_transaction(session, nullptr);
+  if (begin_status != 0) {
+    auto error = mg_session_error(session);
+    std::cout << "Unable to start transaction: " << error << std::endl;
+  }
+  try {
+    for (const auto& query : batch.queries) {
+      auto ret = ExecuteQuery(session, query.query);
+    }
+  } catch (std::exception& e) {
+    std::cout << "exception " << e.what() << std::endl;
+    mg_session_rollback_transaction(session, &result);
+  }
+  mg_session_commit_transaction(session, &result);
+  return BatchResult{};
 }
 
 }  // namespace query

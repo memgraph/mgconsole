@@ -232,6 +232,8 @@ struct BatchResult {
   std::vector<QueryResult> results;
 };
 
+// Depends on the global static string because of ...; MATCH
+// The extra part is perserved for the next GetQuery call
 std::optional<std::string> GetQuery(Replxx *replxx_instance);
 
 QueryResult ExecuteQuery(mg_session *session, const std::string &query);
