@@ -229,6 +229,7 @@ struct QueryResult {
 };
 
 struct BatchResult {
+  bool is_executed;
   std::vector<QueryResult> results;
 };
 

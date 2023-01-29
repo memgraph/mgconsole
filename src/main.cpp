@@ -86,6 +86,35 @@ DEFINE_bool(no_history, false, "Do not save history.");
 
 DECLARE_int32(min_log_level);
 
+mg_memory::MgSessionPtr MakeBoltSession(const std::string& password) {
+  std::string bolt_client_version = "mg/"s + gflags::VersionString();
+  mg_memory::MgSessionParamsPtr params = mg_memory::MakeCustomUnique<mg_session_params>(mg_session_params_make());
+  if (!params) {
+    console::EchoFailure("Connection failure", "out of memory, failed to allocate `mg_session_params` struct");
+  }
+  mg_session_params_set_host(params.get(), FLAGS_host.c_str());
+  mg_session_params_set_port(params.get(), FLAGS_port);
+  if (!FLAGS_username.empty()) {
+    mg_session_params_set_username(params.get(), FLAGS_username.c_str());
+    mg_session_params_set_password(params.get(), password.c_str());
+  }
+  mg_session_params_set_user_agent(params.get(), bolt_client_version.c_str());
+  mg_session_params_set_sslmode(params.get(), FLAGS_use_ssl ? MG_SSLMODE_REQUIRE : MG_SSLMODE_DISABLE);
+  mg_memory::MgSessionPtr session = mg_memory::MakeCustomUnique<mg_session>(nullptr);
+  {
+    mg_session *session_tmp;
+    int status = mg_connect(params.get(), &session_tmp);
+    session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
+    if (status != 0) {
+      // TODO(gitbuda): The console echo should be moved outside MakeBoltSession
+      console::EchoFailure("Connection failure", mg_session_error(session.get()));
+      return mg_memory::MakeCustomUnique<mg_session>(nullptr);
+    }
+    return session;
+  }
+  return session;
+}
+
 int main(int argc, char **argv) {
   gflags::SetVersionString(version_string);
   gflags::SetUsageMessage(constants::kUsage);
@@ -211,30 +240,11 @@ int main(int argc, char **argv) {
 
 #endif /* _WIN32 */
 
- // TODO(gitbuda): Move all somewhere because we need multiple session objects.
-  std::string bolt_client_version = "mg/"s + gflags::VersionString();
-  mg_memory::MgSessionParamsPtr params = mg_memory::MakeCustomUnique<mg_session_params>(mg_session_params_make());
-  if (!params) {
-    console::EchoFailure("Connection failure", "out of memory, failed to allocate `mg_session_params` struct");
-  }
-  mg_session_params_set_host(params.get(), FLAGS_host.c_str());
-  mg_session_params_set_port(params.get(), FLAGS_port);
-  if (!FLAGS_username.empty()) {
-    mg_session_params_set_username(params.get(), FLAGS_username.c_str());
-    mg_session_params_set_password(params.get(), password.c_str());
-  }
-  mg_session_params_set_user_agent(params.get(), bolt_client_version.c_str());
-  mg_session_params_set_sslmode(params.get(), FLAGS_use_ssl ? MG_SSLMODE_REQUIRE : MG_SSLMODE_DISABLE);
-  mg_memory::MgSessionPtr session = mg_memory::MakeCustomUnique<mg_session>(nullptr);
-  {
-    mg_session *session_tmp;
-    int status = mg_connect(params.get(), &session_tmp);
-    session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
-    if (status != 0) {
-      console::EchoFailure("Connection failure", mg_session_error(session.get()));
-      cleanup_resources();
-      return 1;
-    }
+  auto session = MakeBoltSession(password);
+  // TODO(gitbuda): Refactor to become cleaner.
+  if (session.get() == nullptr) {
+    cleanup_resources();
+    return 1;
   }
 
   console::EchoInfo("mgconsole "s + gflags::VersionString());
@@ -242,8 +252,9 @@ int main(int argc, char **argv) {
   console::EchoInfo("Type :help for shell usage");
   console::EchoInfo("Quit the shell by typing Ctrl-D(eof) or :quit");
 
-  int num_retries = 3; // this is related to the network retries not serialization retries
+  // int num_retries = 3; // this is related to the network retries not serialization retries
   uint64_t batch_size = 1000;
+  uint64_t thread_pool_size = 8;
   // All queries have to be stored or at least N * batch_size
   query::Batch batch;
   batch.queries.reserve(batch_size);
@@ -266,7 +277,6 @@ int main(int argc, char **argv) {
       if (batch.queries.size() < batch_size) {
         batch.queries.emplace_back(query::Query{.line_number=0,.query_number=0,.query=*query});
       } else {
-        auto ret = query::ExecuteBatch(session.get(), batch);
         batches.emplace_back(std::move(batch));
         batch = query::Batch();
         batch.queries.reserve(batch_size);
@@ -314,22 +324,24 @@ int main(int argc, char **argv) {
         console::EchoInfo("Trying to reconnect");
         bool is_connected = false;
         session.reset(nullptr);
-        while (num_retries > 0) {
-          --num_retries;
-          mg_session *session_tmp;
-          int status = mg_connect(params.get(), &session_tmp);
-          session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
-          if (status != 0) {
-            console::EchoFailure("Connection failure", mg_session_error(session.get()));
-            session.reset(nullptr);
-          } else {
-            is_connected = true;
-            break;
-          }
-          std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
+
+        // // TODO(gitbuda): Retry depends on the connection params! Refacto!
+        // while (num_retries > 0) {
+        //   --num_retries;
+        //   mg_session *session_tmp;
+        //   int status = mg_connect(params.get(), &session_tmp);
+        //   session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
+        //   if (status != 0) {
+        //     console::EchoFailure("Connection failure", mg_session_error(session.get()));
+        //     session.reset(nullptr);
+        //   } else {
+        //     is_connected = true;
+        //     break;
+        //   }
+        //   std::this_thread::sleep_for(std::chrono::seconds(1));
+        // }
         if (is_connected) {
-          num_retries = 3;
+          // num_retries = 3;
           console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" + std::to_string(FLAGS_port) + "'");
         } else {
           console::EchoFailure("Couldn't connect to",
@@ -339,6 +351,65 @@ int main(int argc, char **argv) {
         }
       }
     }
+  }
+
+  if (!batches.empty()) {
+    // TODO(gitbuda): Try out batch shuffling.
+    std::vector<bool> done_batches(batches.size(), false);
+    std::vector<std::thread> threads;
+    threads.reserve(thread_pool_size);
+    std::vector<mg_memory::MgSessionPtr> sessions;
+    sessions.reserve(thread_pool_size);
+    for (uint64_t thread_i = 0; thread_i < thread_pool_size; ++thread_i) {
+      sessions[thread_i] = MakeBoltSession(password);
+      // TODO(gitbuda): Handle failed connections required for the thread pool.
+      if (!sessions[thread_i].get()) {
+        std::cout << "a session uninitialized" << std::endl;
+      }
+    }
+    std::cout << "all batching stuff initialized" << std::endl;
+
+    // NOTE: memgraph's thread pool would fit here in an amazing way, but life
+    //       thread_pool -> spin_lock -> as is now compiles only on Linux
+    //
+    // NOTE: A big problem with batched execution is that executing batches with
+    //       edges will pass on an empty database (with no nodes) without an error:
+    //         * edges have to come after nodes
+    //         * count how many elements is actually created from a given batch
+    //
+    // TODO(gitbuda): If this is executed multiple times -> bad session + unknown message type -> debug
+    // TODO(gitbuda): Figure out the right batched and parallel execution.
+    std::atomic<uint64_t> executed_batches = 0;
+    while (true) {
+      if (executed_batches.load() >= batches.size()) {
+        break;
+      }
+      uint64_t used_threads = 0;
+      for (uint64_t batch_i = 0; batch_i < done_batches.size(); ++batch_i) {
+        if (done_batches[batch_i]) {
+          continue;
+        }
+        auto thread_i = used_threads;
+        used_threads++;
+        threads[thread_i] = std::thread([&sessions, &batches, &done_batches, thread_i, batch_i, &executed_batches]() {
+          auto ret = query::ExecuteBatch(sessions[thread_i].get(), batches[batch_i]);
+          if (ret.is_executed) {
+            done_batches[batch_i] = true;
+            executed_batches++;
+            std::cout << "batch: " << batch_i << " done" << std::endl;
+          }
+        });
+        if (used_threads >= thread_pool_size) {
+          break;
+        }
+      }
+      for (uint64_t thread_i = 0; thread_i < thread_pool_size; ++thread_i) {
+        if (threads[thread_i].joinable()) {
+          threads[thread_i].join();
+        }
+      }
+    }
+    std::cout << executed_batches.load() << " batches done" << std::endl;
   }
 
   cleanup_resources();

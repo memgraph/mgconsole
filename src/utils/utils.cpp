@@ -827,13 +827,16 @@ QueryResult ExecuteQuery(mg_session *session, const std::string &query) {
 }
 
 BatchResult ExecuteBatch(mg_session *session, const Batch& batch) {
-  std::cout << batch.queries.size() << std::endl;
-  // TODO(gitbuda): Handler results properly
+  if (session == nullptr) {
+    std::cout << "Session uninitialized" << std::endl;
+    return BatchResult{.is_executed=false};
+  }
   mg_result *result;
   auto begin_status = mg_session_begin_transaction(session, nullptr);
   if (begin_status != 0) {
     auto error = mg_session_error(session);
     std::cout << "Unable to start transaction: " << error << std::endl;
+    return BatchResult{.is_executed=false};
   }
   try {
     for (const auto& query : batch.queries) {
@@ -842,9 +845,10 @@ BatchResult ExecuteBatch(mg_session *session, const Batch& batch) {
   } catch (std::exception& e) {
     std::cout << "exception " << e.what() << std::endl;
     mg_session_rollback_transaction(session, &result);
+    return BatchResult{.is_executed=false};
   }
   mg_session_commit_transaction(session, &result);
-  return BatchResult{};
+  return BatchResult{.is_executed=true};
 }
 
 }  // namespace query
