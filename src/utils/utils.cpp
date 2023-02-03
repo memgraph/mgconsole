@@ -838,16 +838,39 @@ BatchResult ExecuteBatch(mg_session *session, const Batch& batch) {
     std::cout << "Unable to start transaction: " << error << std::endl;
     return BatchResult{.is_executed=false};
   }
+  uint64_t nodes_created = 0;
+  uint64_t edges_created = 0;
   try {
     for (const auto& query : batch.queries) {
       auto ret = ExecuteQuery(session, query.query);
+      if (ret.stats) {
+        auto const &stats = *ret.stats;
+        if (stats.find("nodes-created") != stats.end()) {
+          if (stats.at("nodes-created") > 1) {
+            // std::cout << "NODES: " <<  stats.at("nodes-created") << std::endl;
+          }
+          nodes_created += stats.at("nodes-created");
+        }
+        if (stats.find("relationships-created") != stats.end()) {
+          if (stats.at("relationships-created") > 1) {
+            // std::cout << "EDGES: " << stats.at("relationships-created") << std::endl;
+          }
+          edges_created += stats.at("relationships-created");
+        }
+      }
     }
   } catch (std::exception& e) {
-    std::cout << "exception " << e.what() << std::endl;
+    std::cout << "Execution exception " << e.what() << std::endl;
     mg_session_rollback_transaction(session, &result);
     return BatchResult{.is_executed=false};
   }
-  mg_session_commit_transaction(session, &result);
+  // TODO(gitbuda): Assumption 1 line -> 1+ create -> ensure user can't make a mistake.
+  if (nodes_created + edges_created >= batch.queries.size()) {
+    mg_session_commit_transaction(session, &result);
+  } else {
+    mg_session_rollback_transaction(session, &result);
+    return BatchResult{.is_executed=false};
+  }
   return BatchResult{.is_executed=true};
 }
 

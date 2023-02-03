@@ -19,6 +19,7 @@
 #include <iostream>
 #include <optional>
 #include <thread>
+#include <random>
 
 #include <signal.h>
 
@@ -253,10 +254,11 @@ int main(int argc, char **argv) {
   console::EchoInfo("Quit the shell by typing Ctrl-D(eof) or :quit");
 
   // int num_retries = 3; // this is related to the network retries not serialization retries
-  uint64_t batch_size = 1000;
+  uint64_t batch_size = 500;
   uint64_t thread_pool_size = 8;
   // All queries have to be stored or at least N * batch_size
-  query::Batch batch;
+  int64_t batch_index = 0;
+  query::Batch batch{.index=batch_index, .is_executed=false};
   batch.queries.reserve(batch_size);
   std::vector<query::Batch> batches;
 
@@ -277,8 +279,9 @@ int main(int argc, char **argv) {
       if (batch.queries.size() < batch_size) {
         batch.queries.emplace_back(query::Query{.line_number=0,.query_number=0,.query=*query});
       } else {
+        batch_index += 1;
         batches.emplace_back(std::move(batch));
-        batch = query::Batch();
+        batch = query::Batch{.index=batch_index, .is_executed=false};
         batch.queries.reserve(batch_size);
       }
 
@@ -354,8 +357,6 @@ int main(int argc, char **argv) {
   }
 
   if (!batches.empty()) {
-    // TODO(gitbuda): Try out batch shuffling.
-    std::vector<bool> done_batches(batches.size(), false);
     std::vector<std::thread> threads;
     threads.reserve(thread_pool_size);
     std::vector<mg_memory::MgSessionPtr> sessions;
@@ -369,6 +370,11 @@ int main(int argc, char **argv) {
     }
     std::cout << "all batching stuff initialized" << std::endl;
 
+    std::random_device rd;
+    std::default_random_engine rng(rd());
+    std::uniform_int_distribution<> dist(2, 10);
+    std::shuffle(batches.begin(), batches.end(), rng);
+
     // NOTE: memgraph's thread pool would fit here in an amazing way, but life
     //       thread_pool -> spin_lock -> as is now compiles only on Linux
     //
@@ -377,26 +383,47 @@ int main(int argc, char **argv) {
     //         * edges have to come after nodes
     //         * count how many elements is actually created from a given batch
     //
+    // NOTE: Tactics to deal with the retry of serialization errors
+    //   * backoff
+    //   * serial execution
+    //
     // TODO(gitbuda): If this is executed multiple times -> bad session + unknown message type -> debug
+    // TODO(gitbuda): The biggest issue seems to be that a few conflicting batches can end up in constant serialization conflict.
     // TODO(gitbuda): Figure out the right batched and parallel execution.
+
     std::atomic<uint64_t> executed_batches = 0;
     while (true) {
       if (executed_batches.load() >= batches.size()) {
         break;
       }
+      std::cout << "EXECUTED BATCHES: " << executed_batches << std::endl;
       uint64_t used_threads = 0;
-      for (uint64_t batch_i = 0; batch_i < done_batches.size(); ++batch_i) {
-        if (done_batches[batch_i]) {
+      for (uint64_t batch_i = 0; batch_i < batches.size(); ++batch_i) {
+        if (batches[batch_i].is_executed) {
           continue;
         }
         auto thread_i = used_threads;
         used_threads++;
-        threads[thread_i] = std::thread([&sessions, &batches, &done_batches, thread_i, batch_i, &executed_batches]() {
-          auto ret = query::ExecuteBatch(sessions[thread_i].get(), batches[batch_i]);
+        threads[thread_i] = std::thread([&sessions, &batches, thread_i, batch_i, &executed_batches, &password, &dist, &rng]() {
+          auto& batch = batches[batch_i];
+          if (batch.backoff > 1) {
+            std::cout << "sleeping for: " << batch.backoff << "ms" << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(batch.backoff));
+          }
+          auto ret = query::ExecuteBatch(sessions[thread_i].get(), batch);
           if (ret.is_executed) {
-            done_batches[batch_i] = true;
+            batch.is_executed = true;
             executed_batches++;
             std::cout << "batch: " << batch_i << " done" << std::endl;
+          } else {
+            batch.backoff *= dist(rng);
+            if (batch.backoff > 100) {
+              batch.backoff = 1;
+            }
+          }
+          // TODO(gitbuda): session can end up in a bad state -> debug and fix
+          if (mg_session_status(sessions[thread_i].get()) == MG_SESSION_BAD) {
+            sessions[thread_i] = MakeBoltSession(password);
           }
         });
         if (used_threads >= thread_pool_size) {
