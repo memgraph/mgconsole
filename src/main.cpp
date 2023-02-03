@@ -254,7 +254,7 @@ int main(int argc, char **argv) {
   console::EchoInfo("Quit the shell by typing Ctrl-D(eof) or :quit");
 
   // int num_retries = 3; // this is related to the network retries not serialization retries
-  uint64_t batch_size = 500;
+  uint64_t batch_size = 1000;
   uint64_t thread_pool_size = 8;
   // All queries have to be stored or at least N * batch_size
   int64_t batch_index = 0;
@@ -393,13 +393,35 @@ int main(int argc, char **argv) {
 
     std::atomic<uint64_t> executed_batches = 0;
     while (true) {
+      std::cout << "EXECUTED BATCHES: " << executed_batches << std::endl;
       if (executed_batches.load() >= batches.size()) {
         break;
       }
-      std::cout << "EXECUTED BATCHES: " << executed_batches << std::endl;
+
+      // SERIAL EXECUTION to reduce the number of conflicting batches
+      for (uint64_t batch_i = 0; batch_i < batches.size(); ++batch_i) {
+        auto &batch = batches[batch_i];
+        if (batch.is_executed) {
+          continue;
+        }
+        if (batch.attempts > 2) {
+          auto ret = query::ExecuteBatch(session.get(), batch);
+          if (ret.is_executed) {
+            batch.is_executed = true;
+            executed_batches++;
+            std::cout << "batch: " << batch_i << " done (serial)" << std::endl;
+          }
+        }
+        // TODO(gitbuda): session can end up in a bad state -> debug and fix
+        if (mg_session_status(session.get()) == MG_SESSION_BAD) {
+          session = MakeBoltSession(password);
+        }
+      }
+
       uint64_t used_threads = 0;
       for (uint64_t batch_i = 0; batch_i < batches.size(); ++batch_i) {
-        if (batches[batch_i].is_executed) {
+        auto &batch = batches[batch_i];
+        if (batch.is_executed) {
           continue;
         }
         auto thread_i = used_threads;
@@ -420,6 +442,7 @@ int main(int argc, char **argv) {
             if (batch.backoff > 100) {
               batch.backoff = 1;
             }
+            batch.attempts += 1;
           }
           // TODO(gitbuda): session can end up in a bad state -> debug and fix
           if (mg_session_status(sessions[thread_i].get()) == MG_SESSION_BAD) {

@@ -221,6 +221,7 @@ struct Batch {
   std::vector<Query> queries;
   bool is_executed;
   int64_t backoff = 1;
+  int64_t attempts = 0;
 };
 
 struct QueryResult {
