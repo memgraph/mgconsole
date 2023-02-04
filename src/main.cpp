@@ -259,7 +259,7 @@ int main(int argc, char **argv) {
 
   // int num_retries = 3; // this is related to the network retries not serialization retries
   uint64_t batch_size = 1000;
-  int64_t max_concurrent_executions = 4;
+  int64_t max_concurrent_executions = 16;
   uint64_t thread_pool_size = 16;
   // All queries have to be stored or at least N * batch_size
   int64_t batch_index = 0;
@@ -278,10 +278,9 @@ int main(int argc, char **argv) {
       continue;
     }
 
+    // TODO(gitbuda): Batch LIMITED number of queries (based on the thread pool) and execute all in parallel with retries.
     // TODO(gitbuda): Indexes are a problem because they can't be created in a multi-query transaction.
     if (!console::is_a_tty(STDIN_FILENO)) { // reading from STDIN -> BATCHING
-      // TODO(gitbuda): Batch limited number of queries (based on the thread pool) and execute all in parallel with retries.
-      // IF batches.size() < thread_pool_size -> batch ELSE move on with the execution
       if (batch.queries.size() < batch_size) {
         batch.queries.emplace_back(query::Query{.line_number=0,.query_number=0,.query=*query});
       } else {
@@ -385,6 +384,7 @@ int main(int argc, char **argv) {
     std::random_device rd;
     std::default_random_engine rng(rd());
     std::uniform_int_distribution<> dist(2, 10);
+    // dist(rng) // to generate random int
     // std::shuffle(batches.begin(), batches.end(), rng);
     query::PrintBatchesInfo(batches);
 
@@ -451,7 +451,7 @@ int main(int argc, char **argv) {
         std::function<void()> fill_notifier = [readiness_token, &notifier]() { notifier.Notify(readiness_token); };
         auto [future, promise] = utils::FuturePromisePairWithNotifications<bool>(nullptr, fill_notifier);
         auto shared_promise = std::make_shared<decltype(promise)>(std::move(promise));
-        thread_pool.AddTask([&sessions, &batches, thread_i, batch_i, &executed_batches, &password, &dist, &rng, promise = std::move(shared_promise)]() mutable {
+        thread_pool.AddTask([&sessions, &batches, thread_i, batch_i, &executed_batches, &password, promise = std::move(shared_promise)]() mutable {
           auto& batch = batches.at(batch_i);
           if (batch.backoff > 1) {
             std::cout << "executing batch: " << batch.index << " sleeping for: " << batch.backoff << "ms" << std::endl;
@@ -464,7 +464,7 @@ int main(int argc, char **argv) {
             std::cout << "batch: " << batch_i << " done" << std::endl;
             promise->Fill(true);
           } else {
-            batch.backoff *= dist(rng);
+            batch.backoff *= 2;
             if (batch.backoff > 100) {
               batch.backoff = 1;
             }
