@@ -826,6 +826,13 @@ QueryResult ExecuteQuery(mg_session *session, const std::string &query) {
   return ret;
 }
 
+
+void PrintBatchesInfo(const std::vector<Batch>& batches) {
+  for (const auto& batch : batches) {
+    std::cout << "batch: " << batch.index << " capacity: " << batch.capacity << " size: " << batch.queries.size() << std::endl;
+  }
+}
+
 BatchResult ExecuteBatch(mg_session *session, const Batch& batch) {
   if (session == nullptr) {
     std::cout << "Session uninitialized" << std::endl;
@@ -868,6 +875,7 @@ BatchResult ExecuteBatch(mg_session *session, const Batch& batch) {
   if (nodes_created + edges_created >= batch.queries.size()) {
     mg_session_commit_transaction(session, &result);
   } else {
+    std::cout << "Rollback transaction because nodes+edges=" << nodes_created + edges_created << " batch index: " << batch.index << " batch size: " << batch.queries.size() << std::endl;
     mg_session_rollback_transaction(session, &result);
     return BatchResult{.is_executed=false};
   }

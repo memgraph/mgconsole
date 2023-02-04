@@ -20,6 +20,7 @@
 #include <optional>
 #include <thread>
 #include <random>
+#include <unordered_map>
 
 #include <signal.h>
 
@@ -41,6 +42,9 @@
 
 #include "utils/constants.hpp"
 #include "utils/utils.hpp"
+#include "utils/thread_pool.hpp"
+#include "utils/notifier.hpp"
+#include "utils/future.hpp"
 #include "version.hpp"
 
 using namespace std::string_literals;
@@ -255,12 +259,14 @@ int main(int argc, char **argv) {
 
   // int num_retries = 3; // this is related to the network retries not serialization retries
   uint64_t batch_size = 1000;
-  uint64_t thread_pool_size = 8;
+  int64_t max_concurrent_executions = 4;
+  uint64_t thread_pool_size = 16;
   // All queries have to be stored or at least N * batch_size
   int64_t batch_index = 0;
-  query::Batch batch{.index=batch_index, .is_executed=false};
-  batch.queries.reserve(batch_size);
+  query::Batch batch(batch_size, batch_index);
   std::vector<query::Batch> batches;
+  utils::ThreadPool thread_pool(thread_pool_size);
+  utils::Notifier notifier;
 
   while (true) {
     auto query = query::GetQuery(replxx_instance);
@@ -281,8 +287,8 @@ int main(int argc, char **argv) {
       } else {
         batch_index += 1;
         batches.emplace_back(std::move(batch));
-        batch = query::Batch{.index=batch_index, .is_executed=false};
-        batch.queries.reserve(batch_size);
+        batch = query::Batch(batch_size, batch_index);
+        batch.queries.emplace_back(query::Query{.line_number=0,.query_number=0,.query=*query});
       }
 
     } else { // interactive mode -> NO BATCHING
@@ -357,6 +363,12 @@ int main(int argc, char **argv) {
   }
 
   if (!batches.empty()) {
+    // Add last batch if it's missing!
+    if (batch.queries.size() > 0 && batch.queries.size() < batch_size) {
+      batches.emplace_back(std::move(batch));
+    }
+    query::PrintBatchesInfo(batches);
+
     std::vector<std::thread> threads;
     threads.reserve(thread_pool_size);
     std::vector<mg_memory::MgSessionPtr> sessions;
@@ -373,7 +385,8 @@ int main(int argc, char **argv) {
     std::random_device rd;
     std::default_random_engine rng(rd());
     std::uniform_int_distribution<> dist(2, 10);
-    std::shuffle(batches.begin(), batches.end(), rng);
+    // std::shuffle(batches.begin(), batches.end(), rng);
+    query::PrintBatchesInfo(batches);
 
     // NOTE: memgraph's thread pool would fit here in an amazing way, but life
     //       thread_pool -> spin_lock -> as is now compiles only on Linux
@@ -398,38 +411,50 @@ int main(int argc, char **argv) {
         break;
       }
 
-      // SERIAL EXECUTION to reduce the number of conflicting batches
-      for (uint64_t batch_i = 0; batch_i < batches.size(); ++batch_i) {
-        auto &batch = batches[batch_i];
-        if (batch.is_executed) {
-          continue;
-        }
-        if (batch.attempts > 2) {
-          auto ret = query::ExecuteBatch(session.get(), batch);
-          if (ret.is_executed) {
-            batch.is_executed = true;
-            executed_batches++;
-            std::cout << "batch: " << batch_i << " done (serial)" << std::endl;
-          }
-        }
-        // TODO(gitbuda): session can end up in a bad state -> debug and fix
-        if (mg_session_status(session.get()) == MG_SESSION_BAD) {
-          session = MakeBoltSession(password);
-        }
-      }
+      // // SERIAL EXECUTION to reduce the number of conflicting batches
+      // for (uint64_t batch_i = 0; batch_i < batches.size(); ++batch_i) {
+      //   auto &batch = batches.at(batch_i);
+      //   std::cout << "Batch " << batch_i << " " << batch.attempts << std::endl;
+      //   if (batch.is_executed) {
+      //     continue;
+      //   }
+      //   std::cout << "Batch " << batch_i << " " << batch.attempts << std::endl;
+      //   if (batch.attempts > 2) {
+      //     auto ret = query::ExecuteBatch(session.get(), batch);
+      //     if (ret.is_executed) {
+      //       batch.is_executed = true;
+      //       executed_batches++;
+      //       std::cout << "batch: " << batch_i << " done (serial)" << std::endl;
+      //     } else {
+      //       std::cout << "batch FAILED " << batch_i << std::endl;
+      //     }
+      //   }
+      //   // TODO(gitbuda): session can end up in a bad state -> debug and fix
+      //   if (mg_session_status(session.get()) == MG_SESSION_BAD) {
+      //     session = MakeBoltSession(password);
+      //   }
+      // }
 
-      uint64_t used_threads = 0;
+      std::unordered_map<size_t, utils::Future<bool>> f_execs;
+      int64_t used_threads = 0;
       for (uint64_t batch_i = 0; batch_i < batches.size(); ++batch_i) {
-        auto &batch = batches[batch_i];
+        if (used_threads >= max_concurrent_executions) {
+          break;
+        }
+        auto &batch = batches.at(batch_i);
         if (batch.is_executed) {
           continue;
         }
         auto thread_i = used_threads;
         used_threads++;
-        threads[thread_i] = std::thread([&sessions, &batches, thread_i, batch_i, &executed_batches, &password, &dist, &rng]() {
-          auto& batch = batches[batch_i];
+        utils::ReadinessToken readiness_token{static_cast<size_t>(batch_i)};
+        std::function<void()> fill_notifier = [readiness_token, &notifier]() { notifier.Notify(readiness_token); };
+        auto [future, promise] = utils::FuturePromisePairWithNotifications<bool>(nullptr, fill_notifier);
+        auto shared_promise = std::make_shared<decltype(promise)>(std::move(promise));
+        thread_pool.AddTask([&sessions, &batches, thread_i, batch_i, &executed_batches, &password, &dist, &rng, promise = std::move(shared_promise)]() mutable {
+          auto& batch = batches.at(batch_i);
           if (batch.backoff > 1) {
-            std::cout << "sleeping for: " << batch.backoff << "ms" << std::endl;
+            std::cout << "executing batch: " << batch.index << " sleeping for: " << batch.backoff << "ms" << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(batch.backoff));
           }
           auto ret = query::ExecuteBatch(sessions[thread_i].get(), batch);
@@ -437,27 +462,28 @@ int main(int argc, char **argv) {
             batch.is_executed = true;
             executed_batches++;
             std::cout << "batch: " << batch_i << " done" << std::endl;
+            promise->Fill(true);
           } else {
             batch.backoff *= dist(rng);
             if (batch.backoff > 100) {
               batch.backoff = 1;
             }
             batch.attempts += 1;
+            promise->Fill(false);
           }
           // TODO(gitbuda): session can end up in a bad state -> debug and fix
           if (mg_session_status(sessions[thread_i].get()) == MG_SESSION_BAD) {
             sessions[thread_i] = MakeBoltSession(password);
           }
         });
-        if (used_threads >= thread_pool_size) {
-          break;
-        }
+        f_execs.insert_or_assign(thread_i, std::move(future));
       }
-      for (uint64_t thread_i = 0; thread_i < thread_pool_size; ++thread_i) {
-        if (threads[thread_i].joinable()) {
-          threads[thread_i].join();
-        }
+      int64_t no = used_threads;
+      while (no > 0) {
+        notifier.Await();
+        --no;
       }
+
     }
     std::cout << executed_batches.load() << " batches done" << std::endl;
   }

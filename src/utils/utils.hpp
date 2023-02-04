@@ -217,12 +217,23 @@ struct Query {
 };
 
 struct Batch {
+  explicit Batch(int64_t capacity, int64_t index) : capacity(capacity), index(index) {
+    queries.reserve(capacity);
+  }
+  Batch() = delete;
+  Batch(const Batch&) = delete;
+  Batch& operator=(const Batch&) = delete;
+  Batch(Batch&&) = default;
+  Batch& operator=(Batch&&) = default;
+
+  int64_t capacity;
   int64_t index;
   std::vector<Query> queries;
-  bool is_executed;
+  bool is_executed = false;
   int64_t backoff = 1;
   int64_t attempts = 0;
 };
+void PrintBatchesInfo(const std::vector<Batch>&);
 
 struct QueryResult {
   std::vector<std::string> header;
@@ -231,6 +242,10 @@ struct QueryResult {
   std::optional<std::map<std::string, std::string>> notification;
   std::optional<std::map<std::string, std::int64_t>> stats;
 };
+
+// std::ostream& operator<<(std::ostream& os, const QueryResult&) {
+//   return os;
+// }
 
 struct BatchResult {
   bool is_executed;
