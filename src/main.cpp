@@ -42,6 +42,7 @@
 
 #include "batch_import.hpp"
 #include "interactive.hpp"
+#include "parsing.hpp"
 #include "serial_import.hpp"
 #include "utils/constants.hpp"
 #include "utils/utils.hpp"
@@ -165,9 +166,11 @@ int main(int argc, char **argv) {
   if (console::is_a_tty(STDIN_FILENO)) {  // INTERACTIVE
     return mode::interactive::Run(bolt_config, FLAGS_history, FLAGS_no_history, csv_opts, output_opts);
   } else if (false) {
-    return mode::serial_import::Run(bolt_config, csv_opts, output_opts);
-  } else {
+    return mode::parsing::Run();
+  } else if (false) {
     return mode::batch_import::Run(bolt_config);
+  } else {
+    return mode::serial_import::Run(bolt_config, csv_opts, output_opts);
   }
 
   return 0;
