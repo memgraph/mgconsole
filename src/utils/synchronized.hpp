@@ -1,13 +1,17 @@
-// Copyright 2022 Memgraph Ltd.
+// Copyright (C) 2016-2023 Memgraph Ltd. [https://memgraph.com]
 //
-// Use of this software is governed by the Business Source License
-// included in the file licenses/BSL.txt; by using this file, you agree to be bound by the terms of the Business Source
-// License, and you may not use this file except in compliance with the Business Source License.
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
 //
-// As of the Change Date specified in that file, in accordance with
-// the Business Source License, use of this software will be governed
-// by the Apache License, Version 2.0, included in the file
-// licenses/APL.txt.
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #pragma once
 
@@ -20,11 +24,11 @@ namespace utils {
 
 template <typename TMutex>
 concept SharedMutex = requires(TMutex mutex) {
-  mutex.lock();
-  mutex.unlock();
-  mutex.lock_shared();
-  mutex.unlock_shared();
-};
+                        mutex.lock();
+                        mutex.unlock();
+                        mutex.lock_shared();
+                        mutex.unlock_shared();
+                      };
 
 /// A simple utility for easier mutex-based concurrency (influenced by
 /// Facebook's Folly)
@@ -120,19 +124,26 @@ class Synchronized {
   LockedPtr operator->() { return LockedPtr(&object_, &mutex_); }
 
   template <typename = void>
-  requires SharedMutex<TMutex> ReadLockedPtr ReadLock()
-  const { return ReadLockedPtr(&object_, &mutex_); }
+    requires SharedMutex<TMutex>
+  ReadLockedPtr ReadLock() const {
+    return ReadLockedPtr(&object_, &mutex_);
+  }
 
   template <class TCallable>
-  requires SharedMutex<TMutex>
-  decltype(auto) WithReadLock(TCallable &&callable) const { return callable(*ReadLock()); }
+    requires SharedMutex<TMutex> decltype(auto)
+  WithReadLock(TCallable &&callable) const {
+    return callable(*ReadLock());
+  }
 
   template <typename = void>
-  requires SharedMutex<TMutex> ReadLockedPtr operator->() const { return ReadLockedPtr(&object_, &mutex_); }
+    requires SharedMutex<TMutex>
+  ReadLockedPtr operator->() const {
+    return ReadLockedPtr(&object_, &mutex_);
+  }
 
  private:
   T object_;
   mutable TMutex mutex_;
 };
 
-}  // namespace memgraph::utils
+}  // namespace utils

@@ -749,6 +749,10 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
   return query.str();
 }
 
+void PrintQueryInfo(const Query &query) {
+  std::cout << "line: " << query.line_number << " index: " << query.index << " query: " << query.query << std::endl;
+}
+
 QueryResult ExecuteQuery(mg_session *session, const std::string &query) {
   int status = mg_session_run(session, query.c_str(), nullptr, nullptr, nullptr, nullptr);
   auto start = std::chrono::system_clock::now();
@@ -826,29 +830,29 @@ QueryResult ExecuteQuery(mg_session *session, const std::string &query) {
   return ret;
 }
 
-
-void PrintBatchesInfo(const std::vector<Batch>& batches) {
-  for (const auto& batch : batches) {
-    std::cout << "batch: " << batch.index << " capacity: " << batch.capacity << " size: " << batch.queries.size() << std::endl;
+void PrintBatchesInfo(const std::vector<Batch> &batches) {
+  for (const auto &batch : batches) {
+    std::cout << "batch: " << batch.index << " capacity: " << batch.capacity << " size: " << batch.queries.size()
+              << std::endl;
   }
 }
 
-BatchResult ExecuteBatch(mg_session *session, const Batch& batch) {
+BatchResult ExecuteBatch(mg_session *session, const Batch &batch) {
   if (session == nullptr) {
     std::cout << "Session uninitialized" << std::endl;
-    return BatchResult{.is_executed=false};
+    return BatchResult{.is_executed = false};
   }
   mg_result *result;
   auto begin_status = mg_session_begin_transaction(session, nullptr);
   if (begin_status != 0) {
     auto error = mg_session_error(session);
     std::cout << "Unable to start transaction: " << error << std::endl;
-    return BatchResult{.is_executed=false};
+    return BatchResult{.is_executed = false};
   }
   uint64_t nodes_created = 0;
   uint64_t edges_created = 0;
   try {
-    for (const auto& query : batch.queries) {
+    for (const auto &query : batch.queries) {
       auto ret = ExecuteQuery(session, query.query);
       if (ret.stats) {
         auto const &stats = *ret.stats;
@@ -866,20 +870,21 @@ BatchResult ExecuteBatch(mg_session *session, const Batch& batch) {
         }
       }
     }
-  } catch (std::exception& e) {
+  } catch (std::exception &e) {
     std::cout << "Execution exception " << e.what() << std::endl;
     mg_session_rollback_transaction(session, &result);
-    return BatchResult{.is_executed=false};
+    return BatchResult{.is_executed = false};
   }
   // TODO(gitbuda): Assumption 1 line -> 1+ create -> ensure user can't make a mistake.
   if (nodes_created + edges_created >= batch.queries.size()) {
     mg_session_commit_transaction(session, &result);
   } else {
-    std::cout << "Rollback transaction because nodes+edges=" << nodes_created + edges_created << " batch index: " << batch.index << " batch size: " << batch.queries.size() << std::endl;
+    std::cout << "Rollback transaction because nodes+edges=" << nodes_created + edges_created
+              << " batch index: " << batch.index << " batch size: " << batch.queries.size() << std::endl;
     mg_session_rollback_transaction(session, &result);
-    return BatchResult{.is_executed=false};
+    return BatchResult{.is_executed = false};
   }
-  return BatchResult{.is_executed=true};
+  return BatchResult{.is_executed = true};
 }
 
 }  // namespace query

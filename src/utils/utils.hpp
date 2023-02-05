@@ -1,3 +1,18 @@
+// Copyright (C) 2016-2023 Memgraph Ltd. [https://memgraph.com]
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 #pragma once
 
 #include <cstdint>
@@ -212,19 +227,18 @@ struct Line {
 
 struct Query {
   int64_t line_number;
-  int64_t query_number;
+  int64_t index;
   std::string query;
 };
+void PrintQueryInfo(const Query &);
 
 struct Batch {
-  explicit Batch(int64_t capacity, int64_t index) : capacity(capacity), index(index) {
-    queries.reserve(capacity);
-  }
+  explicit Batch(int64_t capacity, int64_t index) : capacity(capacity), index(index) { queries.reserve(capacity); }
   Batch() = delete;
-  Batch(const Batch&) = delete;
-  Batch& operator=(const Batch&) = delete;
-  Batch(Batch&&) = default;
-  Batch& operator=(Batch&&) = default;
+  Batch(const Batch &) = delete;
+  Batch &operator=(const Batch &) = delete;
+  Batch(Batch &&) = default;
+  Batch &operator=(Batch &&) = default;
 
   int64_t capacity;
   int64_t index;
@@ -233,7 +247,7 @@ struct Batch {
   int64_t backoff = 1;
   int64_t attempts = 0;
 };
-void PrintBatchesInfo(const std::vector<Batch>&);
+void PrintBatchesInfo(const std::vector<Batch> &);
 
 struct QueryResult {
   std::vector<std::string> header;
@@ -257,7 +271,7 @@ struct BatchResult {
 std::optional<std::string> GetQuery(Replxx *replxx_instance);
 
 QueryResult ExecuteQuery(mg_session *session, const std::string &query);
-BatchResult ExecuteBatch(mg_session *session, const Batch& batch);
+BatchResult ExecuteBatch(mg_session *session, const Batch &batch);
 
 }  // namespace query
 
