@@ -30,33 +30,41 @@ namespace mode::batch_import {
 
 using namespace std::string_literals;
 
+// NOTE: A big problem with batched execution is that executing batches with
+//       edges will pass on an empty database (with no nodes) without an error:
+//         * edges have to come after nodes
+//         * count how many elements is actually created from a given batch
+//
+// TODO(gitbuda): All queries have to be stored or at least N * batch_size
+// TODO(gitbuda): If this is executed multiple times -> bad session + unknown message type -> debug
+// TODO(gitbuda): The biggest issue seems to be that a few conflicting batches can end up in constant serialization
+// conflict.
+// TODO(gitbuda): Figure out the right batched and parallel execution.
 // TODO(gitbuda): Figure out how to print batch execution result.
+// TODO(gitbuda): Indexes are a problem because they can't be created in a multi-query transaction.
+// TODO(gitbuda): Inject proper batch and query indexes.
 
-int Run(const utils::bolt::Config &bolt_config) {
-  // int num_retries = 3; // this is related to the network retries not serialization retries
-  uint64_t batch_size = 1000;
-  int64_t max_concurrent_executions = 16;
-  uint64_t thread_pool_size = 16;
-  // All queries have to be stored or at least N * batch_size
-  int64_t batch_index = 0;
+std::vector<query::Batch> FetchBatches(uint64_t batch_size, uint64_t max_batches) {
+  uint64_t query_index = 0;
+  uint64_t batch_index = 0;
+
   query::Batch batch(batch_size, batch_index);
   std::vector<query::Batch> batches;
-  utils::ThreadPool thread_pool(thread_pool_size);
-  utils::Notifier notifier;
+  batches.reserve(max_batches);
 
   while (true) {
+    if (query_index + 1 >= batch_size * max_batches) {
+      break;
+    }
     auto query = query::GetQuery(nullptr);
     if (!query) {
-      console::EchoInfo("Bye");
       break;
     }
     if (query->empty()) {
       continue;
     }
+    query_index += 1;
 
-    // TODO(gitbuda): Batch LIMITED number of queries (based on the thread pool) and execute all in parallel with
-    // retries.
-    // TODO(gitbuda): Indexes are a problem because they can't be created in a multi-query transaction.
     if (batch.queries.size() < batch_size) {
       batch.queries.emplace_back(query::Query{.line_number = 0, .index = 0, .query = *query});
     } else {
@@ -66,49 +74,42 @@ int Run(const utils::bolt::Config &bolt_config) {
       batch.queries.emplace_back(query::Query{.line_number = 0, .index = 0, .query = *query});
     }
   }
-
   // Add last batch if it's missing!
   if (batch.queries.size() > 0 && batch.queries.size() < batch_size) {
     batches.emplace_back(std::move(batch));
   }
 
-  if (!batches.empty()) {
-    std::vector<std::thread> threads;
-    threads.reserve(thread_pool_size);
-    std::vector<mg_memory::MgSessionPtr> sessions;
-    sessions.reserve(thread_pool_size);
-    for (uint64_t thread_i = 0; thread_i < thread_pool_size; ++thread_i) {
-      sessions[thread_i] = MakeBoltSession(bolt_config);
-      // TODO(gitbuda): Handle failed connections required for the thread pool.
-      if (!sessions[thread_i].get()) {
-        std::cout << "a session uninitialized" << std::endl;
-      }
+  return batches;
+}
+
+int Run(const utils::bolt::Config &bolt_config) {
+  uint64_t batch_size = 100;
+  uint64_t max_batches = 20;
+  int64_t max_concurrent_executions = 16;
+  uint64_t thread_pool_size = 16;
+
+  utils::ThreadPool thread_pool(thread_pool_size);
+  utils::Notifier notifier;
+  std::vector<mg_memory::MgSessionPtr> sessions;
+  sessions.reserve(thread_pool_size);
+  for (uint64_t thread_i = 0; thread_i < thread_pool_size; ++thread_i) {
+    sessions[thread_i] = MakeBoltSession(bolt_config);
+    // TODO(gitbuda): Handle failed connections required for the thread pool.
+    if (!sessions[thread_i].get()) {
+      std::cout << "a session uninitialized" << std::endl;
     }
-    std::cout << "all batching stuff initialized" << std::endl;
+  }
+  std::random_device rd;
+  std::default_random_engine rng(rd());
+  std::uniform_int_distribution<> dist(2, 10);
+  // dist(rng) // to generate random int
 
-    std::random_device rd;
-    std::default_random_engine rng(rd());
-    std::uniform_int_distribution<> dist(2, 10);
-    // dist(rng) // to generate random int
-    // std::shuffle(batches.begin(), batches.end(), rng);
-    query::PrintBatchesInfo(batches);
-
-    // NOTE: memgraph's thread pool would fit here in an amazing way, but life
-    //       thread_pool -> spin_lock -> as is now compiles only on Linux
-    //
-    // NOTE: A big problem with batched execution is that executing batches with
-    //       edges will pass on an empty database (with no nodes) without an error:
-    //         * edges have to come after nodes
-    //         * count how many elements is actually created from a given batch
-    //
-    // NOTE: Tactics to deal with the retry of serialization errors
-    //   * backoff
-    //   * serial execution
-    //
-    // TODO(gitbuda): If this is executed multiple times -> bad session + unknown message type -> debug
-    // TODO(gitbuda): The biggest issue seems to be that a few conflicting batches can end up in constant serialization
-    // conflict.
-    // TODO(gitbuda): Figure out the right batched and parallel execution.
+  while (true) {
+    auto batches = FetchBatches(batch_size, max_batches);
+    if (batches.empty()) {
+      break;
+    }
+    std::shuffle(batches.begin(), batches.end(), rng);
 
     std::atomic<uint64_t> executed_batches = 0;
     while (true) {
@@ -116,30 +117,6 @@ int Run(const utils::bolt::Config &bolt_config) {
       if (executed_batches.load() >= batches.size()) {
         break;
       }
-
-      // // SERIAL EXECUTION to reduce the number of conflicting batches
-      // for (uint64_t batch_i = 0; batch_i < batches.size(); ++batch_i) {
-      //   auto &batch = batches.at(batch_i);
-      //   std::cout << "Batch " << batch_i << " " << batch.attempts << std::endl;
-      //   if (batch.is_executed) {
-      //     continue;
-      //   }
-      //   std::cout << "Batch " << batch_i << " " << batch.attempts << std::endl;
-      //   if (batch.attempts > 2) {
-      //     auto ret = query::ExecuteBatch(session.get(), batch);
-      //     if (ret.is_executed) {
-      //       batch.is_executed = true;
-      //       executed_batches++;
-      //       std::cout << "batch: " << batch_i << " done (serial)" << std::endl;
-      //     } else {
-      //       std::cout << "batch FAILED " << batch_i << std::endl;
-      //     }
-      //   }
-      //   // TODO(gitbuda): session can end up in a bad state -> debug and fix
-      //   if (mg_session_status(session.get()) == MG_SESSION_BAD) {
-      //     session = MakeBoltSession(password);
-      //   }
-      // }
 
       std::unordered_map<size_t, utils::Future<bool>> f_execs;
       int64_t used_threads = 0;
@@ -191,9 +168,8 @@ int Run(const utils::bolt::Config &bolt_config) {
         --no;
       }
     }
-    std::cout << executed_batches.load() << " batches done" << std::endl;
+    std::cout << executed_batches.load() << " batches executed" << std::endl;
   }
-
   return 0;
 }
 
