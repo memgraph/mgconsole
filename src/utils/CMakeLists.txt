@@ -4,6 +4,8 @@ ExternalProject_Add(replxx-proj
         GIT_TAG release-0.0.3
         CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
         "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+        "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
         INSTALL_DIR "${PROJECT_BINARY_DIR}/replxx")
 
 ExternalProject_Get_Property(replxx-proj install_dir)
