@@ -13,20 +13,28 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#pragma once
+#include "parsing.hpp"
 
-#include "utils.hpp"
+#include "utils/utils.hpp"
 
-namespace utils::bolt {
+namespace mode::parsing {
 
-struct Config {
-  std::string host;
-  int port;
-  std::string username;
-  std::string password;
-  bool use_ssl;
-};
+using namespace std::string_literals;
 
-mg_memory::MgSessionPtr MakeBoltSession(const Config &config);
+int Run() {
+  int64_t query_index = 0;
+  while (true) {
+    auto query = query::GetQuery(nullptr);
+    if (!query) {
+      break;
+    }
+    if (query->empty()) {
+      continue;
+    }
+    ++query_index;
+  }
+  std::cout << "Parsed " << query_index << " queries" << std::endl;
+  return 0;
+}
 
-}  // namespace utils::bolt
+}  // namespace mode::parsing

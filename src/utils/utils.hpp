@@ -200,6 +200,12 @@ void SetStdinEcho(bool enable);
 
 std::optional<std::string> GetLine();
 
+struct ParseLineResult {
+  std::string line;
+  bool is_done;
+  bool has_vertex_create;
+  bool has_edge_create;
+};
 /// Helper function that parses user line input.
 /// @param line user input line.
 /// @param quote quote character or '\0'; if set line is inside quotation.

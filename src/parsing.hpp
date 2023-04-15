@@ -13,27 +13,10 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#include "utils/bolt.hpp"
-#include "utils/utils.hpp"
+#pragma once
 
 namespace mode::parsing {
 
-using namespace std::string_literals;
-
-int Run() {
-  int64_t query_index = 0;
-  while (true) {
-    auto query = query::GetQuery(nullptr);
-    if (!query) {
-      break;
-    }
-    if (query->empty()) {
-      continue;
-    }
-    ++query_index;
-  }
-  std::cout << "Parser " << query_index << " queries" << std::endl;
-  return 0;
-}
+int Run();
 
 }  // namespace mode::parsing

@@ -13,45 +13,14 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#pragma once
+
 #include "utils/bolt.hpp"
 #include "utils/utils.hpp"
 
 namespace mode::serial_import {
 
-using namespace std::string_literals;
-
 int Run(const utils::bolt::Config &bolt_config, const format::CsvOptions &csv_opts,
-        const format::OutputOptions &output_opts) {
-  auto session = MakeBoltSession(bolt_config);
-  if (session.get() == nullptr) {
-    return 1;
-  }
-
-  while (true) {
-    auto query = query::GetQuery(nullptr);
-    if (!query) {
-      break;
-    }
-    if (query->empty()) {
-      continue;
-    }
-
-    try {
-      auto ret = query::ExecuteQuery(session.get(), *query);
-      if (ret.records.size() > 0) {
-        Output(ret.header, ret.records, output_opts, csv_opts);
-      }
-    } catch (const utils::ClientQueryException &e) {
-      console::EchoFailure("Failed query", *query);
-      console::EchoFailure("Client received query exception", e.what());
-      return 1;
-    } catch (const utils::ClientFatalException &e) {
-      console::EchoFailure("Client received connection exception", e.what());
-      return 1;
-    }
-  }
-
-  return 0;
-}
+        const format::OutputOptions &output_opts);
 
 }  // namespace mode::serial_import

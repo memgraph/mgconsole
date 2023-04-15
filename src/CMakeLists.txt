@@ -111,7 +111,7 @@ if(MGCONSOLE_ON_WINDOWS)
   add_compile_options(-Wno-narrowing)
 endif()
 
-add_executable(mgconsole main.cpp)
+add_executable(mgconsole main.cpp interactive.cpp serial_import.cpp batch_import.cpp parsing.cpp)
 target_compile_definitions(mgconsole PRIVATE MGCLIENT_STATIC_DEFINE)
 target_include_directories(mgconsole
   PRIVATE
