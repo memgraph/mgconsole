@@ -652,7 +652,7 @@ std::optional<std::string> GetLine() {
   return line;
 }
 
-std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, bool *escaped) {
+ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, bool collect_info) {
   // Parse line.
   bool is_done = false;
   std::stringstream parsed_line;
@@ -672,7 +672,7 @@ std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, boo
     parsed_line << c;
     *escaped = false;
   }
-  return std::make_pair(parsed_line.str(), is_done);
+  return ParseLineResult{.line = parsed_line.str(), .is_done = is_done};
 }
 
 std::optional<std::string> ReadLine(Replxx *replxx_instance, const std::string &prompt) {
@@ -698,10 +698,10 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
   char quote = '\0';
   bool escaped = false;
   auto ret = console::ParseLine(default_text, &quote, &escaped);
-  if (ret.second) {
-    auto idx = ret.first.size() + 1;
+  if (ret.is_done) {
+    auto idx = ret.line.size() + 1;
     default_text = utils::Trim(default_text.substr(idx));
-    return ret.first;
+    return ret.line;
   }
   std::stringstream query;
   std::optional<std::string> line;
@@ -732,9 +732,9 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
     if (!line) return std::nullopt;
     if (line->empty()) continue;
     auto ret = console::ParseLine(*line, &quote, &escaped);
-    query << ret.first;
-    auto char_count = ret.first.size();
-    if (ret.second) {
+    query << ret.line;
+    auto char_count = ret.line.size();
+    if (ret.is_done) {
       is_done = true;
       char_count += 1;  // ';' sign
     } else {

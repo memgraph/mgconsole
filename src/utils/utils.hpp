@@ -200,19 +200,24 @@ void SetStdinEcho(bool enable);
 
 std::optional<std::string> GetLine();
 
+struct ParseLineInfo {
+  // encode the full state because of a query across more line
+  bool has_vertex_create;
+  bool has_edge_create;
+};
 struct ParseLineResult {
   std::string line;
   bool is_done;
-  bool has_vertex_create;
-  bool has_edge_create;
+  // In the case when caller is interested in more info.
+  std::optional<ParseLineInfo> info;
 };
 /// Helper function that parses user line input.
 /// @param line user input line.
 /// @param quote quote character or '\0'; if set line is inside quotation.
 /// @param escaped if set, next character should be escaped.
-/// @return pair of string and bool. string is parsed line and bool marks
-/// if query finished(Query finishes with ';') with this line.
-std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, bool *escaped);
+/// @return ParseLineResult a pair of string and bool. string is parsed line and bool marks
+/// if query finished(Query finishes with ';') with this line. + optionally info about what line contains
+ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, bool collect_info = false);
 
 /// Helper function that reads a line from the
 /// standard input using the 'readline' lib.
