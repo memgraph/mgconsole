@@ -8,7 +8,7 @@ jobs:
   build_and_test_ubuntu:
     strategy:
       matrix:
-        platform: [ubuntu-20.04]
+        platform: [ubuntu-22.04]
         mg_version:
           - "2.1.1"
     runs-on: ${{ matrix.platform }}
@@ -65,7 +65,7 @@ jobs:
   build_apple:
     strategy:
       matrix:
-        platform: [macos-10.15]
+        platform: [macos-latest]
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Set-up repository
