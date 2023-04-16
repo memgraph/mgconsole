@@ -204,8 +204,8 @@ std::optional<std::string> GetLine();
 
 struct ParseLineInfo {
   // encode the full state because of a query across more line
-  bool has_vertex_create;
-  bool has_edge_create;
+  bool has_vertex_create{false};
+  bool has_edge_create{false};
 };
 struct ParseLineResult {
   std::string line;
@@ -237,11 +237,25 @@ struct Line {
   int64_t line_number;
   std::string line;
 };
-
+struct QueryInfo {
+  bool has_vertex_create{false};
+  bool has_edge_create{false};
+};
+inline std::optional<QueryInfo> QueryInfoFromParseLineInfo(const std::optional<console::ParseLineInfo> &line_info) {
+  // TODO(gitbuda): This logic is wrong (correct only if there is a controlled input), after test change. Also make it
+  // work from the GetQuery() in all cases.
+  if (line_info) {
+    return QueryInfo{.has_vertex_create = line_info->has_vertex_create,
+                     .has_edge_create = !line_info->has_vertex_create};
+  } else {
+    return std::nullopt;
+  }
+}
 struct Query {
-  int64_t line_number;
-  int64_t index;
-  std::string query;
+  int64_t line_number{0};
+  int64_t index{0};
+  std::string query{""};
+  std::optional<QueryInfo> info{std::nullopt};
 };
 void PrintQueryInfo(const Query &);
 
@@ -282,7 +296,7 @@ struct BatchResult {
 
 // Depends on the global static string because of ...; MATCH
 // The extra part is perserved for the next GetQuery call
-std::optional<std::string> GetQuery(Replxx *replxx_instance);
+std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info = false);
 
 QueryResult ExecuteQuery(mg_session *session, const std::string &query);
 BatchResult ExecuteBatch(mg_session *session, const Batch &batch);

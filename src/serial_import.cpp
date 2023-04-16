@@ -31,17 +31,17 @@ int Run(const utils::bolt::Config &bolt_config, const format::CsvOptions &csv_op
     if (!query) {
       break;
     }
-    if (query->empty()) {
+    if (query->query.empty()) {
       continue;
     }
 
     try {
-      auto ret = query::ExecuteQuery(session.get(), *query);
+      auto ret = query::ExecuteQuery(session.get(), query->query);
       if (ret.records.size() > 0) {
         Output(ret.header, ret.records, output_opts, csv_opts);
       }
     } catch (const utils::ClientQueryException &e) {
-      console::EchoFailure("Failed query", *query);
+      console::EchoFailure("Failed query", query->query);
       console::EchoFailure("Client received query exception", e.what());
       return 1;
     } catch (const utils::ClientFatalException &e) {

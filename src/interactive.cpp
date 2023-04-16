@@ -25,8 +25,8 @@ namespace mode::interactive {
 
 using namespace std::string_literals;
 
-int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool no_history, bool verbose_execution_info,
-        const format::CsvOptions &csv_opts, const format::OutputOptions &output_opts) {
+int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool no_history,
+        bool verbose_execution_info, const format::CsvOptions &csv_opts, const format::OutputOptions &output_opts) {
   Replxx *replxx_instance = InitAndSetupReplxx();
 
   bool resources_cleaned_up = false;
@@ -109,12 +109,12 @@ int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool
       console::EchoInfo("Bye");
       break;
     }
-    if (query->empty()) {
+    if (query->query.empty()) {
       continue;
     }
 
     try {
-      auto ret = query::ExecuteQuery(session.get(), *query);
+      auto ret = query::ExecuteQuery(session.get(), query->query);
       if (ret.records.size() > 0) {
         Output(ret.header, ret.records, output_opts, csv_opts);
       }

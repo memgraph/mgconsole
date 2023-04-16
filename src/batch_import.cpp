@@ -62,18 +62,18 @@ std::vector<query::Batch> FetchBatches(uint64_t batch_size, uint64_t max_batches
     if (!query) {
       break;
     }
-    if (query->empty()) {
+    if (query->query.empty()) {
       continue;
     }
     query_index += 1;
 
     if (batch.queries.size() < batch_size) {
-      batch.queries.emplace_back(query::Query{.line_number = 0, .index = 0, .query = *query});
+      batch.queries.emplace_back(query::Query{.line_number = 0, .index = 0, .query = query->query});
     } else {
       batch_index += 1;
       batches.emplace_back(std::move(batch));
       batch = query::Batch(batch_size, batch_index);
-      batch.queries.emplace_back(query::Query{.line_number = 0, .index = 0, .query = *query});
+      batch.queries.emplace_back(query::Query{.line_number = 0, .index = 0, .query = query->query});
     }
   }
   // Add last batch if it's missing!

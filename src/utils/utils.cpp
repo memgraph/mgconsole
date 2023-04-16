@@ -670,11 +670,107 @@ std::optional<std::string> GetLine() {
   return line;
 }
 
+// Let's have a party with simple state machines!
+// TODO(gitbuda): If the simple state machines will work, come up with proper state machines.
+enum class VCreateSeq {
+  NONE,
+  C,
+  CR,
+  CRE,
+  CREA,
+  CREAT,
+  CREATE,
+  CREATE_,
+  CREATE_B,
+  CREATE_B_,
+  CREATE_B_B,
+  CREATE_B_B_,
+};
+std::ostream &operator<<(std::ostream &os, const VCreateSeq &v) {
+  if (v == VCreateSeq::NONE) {
+    os << "VCreateSeq::NONE";
+  }
+  if (v == VCreateSeq::C) {
+    os << "VCreateSeq::C";
+  }
+  if (v == VCreateSeq::CR) {
+    os << "VCreateSeq::CR";
+  }
+  if (v == VCreateSeq::CRE) {
+    os << "VCreateSeq::CRE";
+  }
+  if (v == VCreateSeq::CREA) {
+    os << "VCreateSeq::CREA";
+  }
+  if (v == VCreateSeq::CREAT) {
+    os << "VCreateSeq::CREAT";
+  }
+  if (v == VCreateSeq::CREATE) {
+    os << "VCreateSeq::CREATE";
+  }
+  if (v == VCreateSeq::CREATE_) {
+    os << "VCreateSeq::CREATE_";
+  }
+  if (v == VCreateSeq::CREATE_B) {
+    os << "VCreateSeq::CREATE_(";
+  }
+  if (v == VCreateSeq::CREATE_B_) {
+    os << "VCreateSeq::CREATE_(_";
+  }
+  if (v == VCreateSeq::CREATE_B_B) {
+    os << "VCreateSeq::CREATE_(_)";
+  }
+  if (v == VCreateSeq::CREATE_B_B_) {
+    os << "VCreateSeq::CREATE_(_)_";
+  }
+  return os;
+}
+// TODO(gitbuda): Implemente the ParseLineInfo when query spreads across many lines.
 ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, bool collect_info) {
   // Parse line.
   bool is_done = false;
   std::stringstream parsed_line;
+
+  ParseLineInfo line_info;
+  VCreateSeq vcreate = VCreateSeq::NONE;
   for (auto c : line) {
+    // Used to deduce query type later on
+    if (collect_info) {
+      // Create VERTEX sequence of chars.
+      if (!*quote && (c == 'C' || c == 'c') && vcreate == VCreateSeq::NONE) {
+        vcreate = VCreateSeq::C;
+      } else if (!*quote && (c == 'R' || c == 'r') && vcreate == VCreateSeq::C) {
+        vcreate = VCreateSeq::CR;
+      } else if (!*quote && (c == 'E' || c == 'e') && vcreate == VCreateSeq::CR) {
+        vcreate = VCreateSeq::CRE;
+      } else if (!*quote && (c == 'A' || c == 'a') && vcreate == VCreateSeq::CRE) {
+        vcreate = VCreateSeq::CREA;
+      } else if (!*quote && (c == 'T' || c == 't') && vcreate == VCreateSeq::CREA) {
+        vcreate = VCreateSeq::CREAT;
+      } else if (!*quote && (c == 'E' || c == 'e') && vcreate == VCreateSeq::CREAT) {
+        vcreate = VCreateSeq::CREATE;
+      } else if (!*quote && (c == ' ' || c == '\t') && vcreate == VCreateSeq::CREATE) {
+        vcreate = VCreateSeq::CREATE_;
+      } else if (!*quote && (c == '(') && vcreate == VCreateSeq::CREATE_) {
+        vcreate = VCreateSeq::CREATE_B;
+      } else if (vcreate == VCreateSeq::CREATE_B && c != ')') {
+        vcreate = VCreateSeq::CREATE_B_;
+      } else if (vcreate == VCreateSeq::CREATE_B && c == ')') {
+        vcreate = VCreateSeq::CREATE_B_B;
+      } else if (!*quote && vcreate == VCreateSeq::CREATE_B_ && c == ')') {
+        vcreate = VCreateSeq::CREATE_B_B;
+      } else if (!*quote && vcreate == VCreateSeq::CREATE_B_B && c != '-') {
+        vcreate = VCreateSeq::CREATE_B_B_;
+      } else {
+        vcreate = VCreateSeq::NONE;
+      }
+      if (vcreate == VCreateSeq::CREATE_B_B_) {
+        line_info.has_vertex_create = true;
+        vcreate = VCreateSeq::NONE;
+      }
+      // TODO(gitbuda): Cover the CREATE ()CREATE case.
+    }
+
     if (*quote && c == '\\') {
       // Escaping is only used inside quotation to not end the quote
       // when quotation char is escaped.
@@ -690,7 +786,11 @@ ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, b
     parsed_line << c;
     *escaped = false;
   }
-  return ParseLineResult{.line = parsed_line.str(), .is_done = is_done};
+  if (collect_info) {
+    return ParseLineResult{.line = parsed_line.str(), .is_done = is_done, .info = line_info};
+  } else {
+    return ParseLineResult{.line = parsed_line.str(), .is_done = is_done};
+  }
 }
 
 std::optional<std::string> ReadLine(Replxx *replxx_instance, const std::string &prompt) {
@@ -712,16 +812,17 @@ std::optional<std::string> ReadLine(Replxx *replxx_instance, const std::string &
 
 namespace query {
 
-std::optional<std::string> GetQuery(Replxx *replxx_instance) {
+std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info) {
   char quote = '\0';
   bool escaped = false;
-  auto ret = console::ParseLine(default_text, &quote, &escaped);
+  auto ret = console::ParseLine(default_text, &quote, &escaped, collect_info);
   if (ret.is_done) {
     auto idx = ret.line.size() + 1;
     default_text = utils::Trim(default_text.substr(idx));
-    return ret.line;
+    return Query{.query = ret.line, .info = QueryInfoFromParseLineInfo(ret.info)};
   }
   std::stringstream query;
+  std::optional<console::ParseLineInfo> line_info;
   std::optional<std::string> line;
   int line_cnt = 0;
   auto is_done = false;
@@ -736,20 +837,21 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
           return std::nullopt;
         } else if (trimmed_line == constants::kCommandHelp) {
           console::PrintHelp();
-          return "";
+          return Query{};
         } else if (trimmed_line == constants::kCommandDocs) {
           console::PrintDocs();
-          return "";
+          return Query{};
         } else {
           console::EchoFailure("Unsupported command", trimmed_line);
           console::PrintHelp();
-          return "";
+          return Query{};
         }
       }
     }
     if (!line) return std::nullopt;
     if (line->empty()) continue;
-    auto ret = console::ParseLine(*line, &quote, &escaped);
+    auto ret = console::ParseLine(*line, &quote, &escaped, collect_info);
+    line_info = std::move(ret.info);
     query << ret.line;
     auto char_count = ret.line.size();
     if (ret.is_done) {
@@ -764,7 +866,7 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
     }
     ++line_cnt;
   }
-  return query.str();
+  return Query{.query = query.str(), .info = QueryInfoFromParseLineInfo(line_info)};
 }
 
 void PrintQueryInfo(const Query &query) {

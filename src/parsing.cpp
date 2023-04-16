@@ -24,13 +24,16 @@ using namespace std::string_literals;
 int Run() {
   int64_t query_index = 0;
   while (true) {
-    auto query = query::GetQuery(nullptr);
+    auto query = query::GetQuery(nullptr, true);
     if (!query) {
       break;
     }
-    if (query->empty()) {
+    if (query->query.empty()) {
       continue;
     }
+    std::cout << query->query << " "
+              << "is_create_vertex: " << query->info->has_vertex_create << " "
+              << "is_create_edge: " << query->info->has_edge_create << " " << std::endl;
     ++query_index;
   }
   std::cout << "Parsed " << query_index << " queries" << std::endl;
