@@ -8,9 +8,9 @@ ExternalProject_Add(replxx-proj
         "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
         INSTALL_DIR "${PROJECT_BINARY_DIR}/replxx")
 
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+if(CMAKE_BUILD_TYPE_LOWERCASE STREQUAL "debug")
   set(REPLXX_LIB_POSTFIX "-d")
-elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+elseif(CMAKE_BUILD_TYPE_LOWERCASE STREQUAL "relwithdebinfo")
   set(REPLXX_LIB_POSTFIX "-rd")
 else()
   set(REPLXX_LIB_POSTFIX "")
