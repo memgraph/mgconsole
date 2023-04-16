@@ -20,7 +20,7 @@
 
 namespace mode::interactive {
 
-int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool no_history,
+int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool no_history, bool verbose_execution_info,
         const format::CsvOptions &csv_opts, const format::OutputOptions &output_opts);
 
 }  // namespace mode::interactive

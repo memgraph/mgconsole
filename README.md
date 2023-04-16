@@ -22,7 +22,7 @@ apt-get install -y git cmake make gcc g++ libssl-dev
 On RedHat / CentOS / Fedora:
 
 ```
-yum install -y git cmake make gcc gcc-c++ openssl-devel
+yum install -y git cmake make gcc gcc-c++ openssl-devel libstdc++-static
 ```
 
 On MacOS, first make sure you have [XCode](https://developer.apple.com/xcode/) and [Homebrew](https://brew.sh) installed. Then, in the terminal, paste:

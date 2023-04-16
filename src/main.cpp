@@ -15,14 +15,14 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <signal.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <iostream>
 #include <optional>
 #include <thread>
 #include <unordered_map>
-
-#include <signal.h>
 
 #ifdef _WIN32
 
@@ -64,6 +64,8 @@ DEFINE_bool(term_colors, false, "Use terminal colors syntax highlighting.");
 DEFINE_string(output_format, "tabular",
               "Query output format. Can be csv/tabular. If output format is "
               "other than tabular `fit-to-screen` flag is ignored.");
+DEFINE_bool(verbose_execution_info, false,
+            "Output the additional information about query such is query cost, parsing, planning and execution times.");
 DEFINE_validator(output_format, [](const char *, const std::string &value) {
   if (value == constants::kCsvFormat || value == constants::kTabularFormat) {
     return true;
@@ -164,7 +166,7 @@ int main(int argc, char **argv) {
   };
 
   if (console::is_a_tty(STDIN_FILENO)) {  // INTERACTIVE
-    return mode::interactive::Run(bolt_config, FLAGS_history, FLAGS_no_history, csv_opts, output_opts);
+    return mode::interactive::Run(bolt_config, FLAGS_history, FLAGS_no_history, FLAGS_verbose_execution_info, csv_opts, output_opts);
   } else if (false) {
     return mode::parsing::Run();
   } else if (false) {

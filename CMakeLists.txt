@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 cmake_minimum_required(VERSION 3.4)
-project(mgconsole VERSION 1.2)
+project(mgconsole VERSION 1.3)
 include(CTest)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${PROJECT_SOURCE_DIR}/cmake)
@@ -28,6 +28,8 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release")
 endif()
 message(STATUS "CMake build type: ${CMAKE_BUILD_TYPE}")
+# Config of some libraries (e.g. replxx) depends on the build type.
+string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LOWERCASE)
 
 # Set default instalation directory to '/usr'
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)

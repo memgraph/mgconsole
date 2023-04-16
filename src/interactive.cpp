@@ -25,7 +25,7 @@ namespace mode::interactive {
 
 using namespace std::string_literals;
 
-int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool no_history,
+int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool no_history, bool verbose_execution_info,
         const format::CsvOptions &csv_opts, const format::OutputOptions &output_opts) {
   Replxx *replxx_instance = InitAndSetupReplxx();
 
@@ -126,7 +126,7 @@ int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool
       } else {
         summary = std::to_string(ret.records.size()) + " rows in set";
       }
-      std::printf("%s (%.3lf sec)\n", summary.c_str(), ret.wall_time.count());
+      std::printf("%s (round trip in %.3lf sec)\n", summary.c_str(), ret.wall_time.count());
       auto history_ret = save_history();
       if (history_ret != 0) {
         cleanup_resources();
@@ -137,6 +137,9 @@ int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool
       }
       if (ret.stats) {
         console::EchoStats(ret.stats.value());
+      }
+      if (verbose_execution_info && ret.execution_info) {
+        console::EchoExecutionInfo(ret.execution_info.value());
       }
     } catch (const utils::ClientQueryException &e) {
       console::EchoFailure("Client received query exception", e.what());
