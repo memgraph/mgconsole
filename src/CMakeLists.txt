@@ -84,7 +84,7 @@ add_dependencies(${GFLAGS_LIBRARY} gflags-proj)
 ExternalProject_Add(mgclient-proj
   PREFIX mgclient
   GIT_REPOSITORY https://github.com/memgraph/mgclient.git
-  GIT_TAG v1.3.0
+  GIT_TAG v1.4.1
   CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
   "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
   ${MACOSX_OPENSSL_ROOTDIR_FLAG}
