@@ -10,16 +10,16 @@ jobs:
       matrix:
         platform: [ubuntu-22.04]
         mg_version:
-          - "2.1.1"
+          - "2.7.0"
     runs-on: ${{ matrix.platform }}
     steps:
-      - name: Install dependencies (Ubuntu 20.04)
-        if: matrix.platform == 'ubuntu-20.04'
+      - name: Install dependencies (Ubuntu 22.04)
+        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt install -y git cmake make gcc g++ libssl-dev # mgconsole deps
-          sudo apt install -y libpython3.8 python3-pip # memgraph deps
+          sudo apt install -y libpython3.10 python3-pip # memgraph deps
           mkdir ~/memgraph
-          curl -L https://download.memgraph.com/memgraph/v${{ matrix.mg_version }}/ubuntu-20.04/memgraph_${{ matrix.mg_version }}-1_amd64.deb > ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
+          curl -L https://download.memgraph.com/memgraph/v${{ matrix.mg_version }}/ubuntu-22.04/memgraph_${{ matrix.mg_version }}-1_amd64.deb > ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
           sudo systemctl mask memgraph
           sudo dpkg -i ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
 
