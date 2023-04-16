@@ -9,7 +9,11 @@ ExternalProject_Add(replxx-proj
 ExternalProject_Get_Property(replxx-proj install_dir)
 set(REPLXX_ROOT ${install_dir})
 set(REPLXX_INCLUDE_DIRS ${REPLXX_ROOT}/include)
-set(REPLXX_LIBRARY_PATH ${REPLXX_ROOT}/${MG_INSTALL_LIB_DIR}/libreplxx.a)
+if(CMAKE_BUILD_TYPE_CASE_INSENSITIVE STREQUAL "debug")
+  set(REPLXX_LIBRARY_PATH ${REPLXX_ROOT}/${MG_INSTALL_LIB_DIR}/libreplxx-d.a)
+else()
+  set(REPLXX_LIBRARY_PATH ${REPLXX_ROOT}/${MG_INSTALL_LIB_DIR}/libreplxx.a)
+endif()
 set(REPLXX_LIBRARY replxx)
 
 add_library(${REPLXX_LIBRARY} STATIC IMPORTED GLOBAL)
