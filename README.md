@@ -122,3 +122,10 @@ memgraph> MATCH (t:Turtle) RETURN t;
 memgraph> :quit
 Bye
 ```
+
+## Parallelized and batched import (experimental)
+
+```
+TODO(gitbuda): Explain how to run mgconsole in the batched mode.
+
+```
