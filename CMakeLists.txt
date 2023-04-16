@@ -29,7 +29,7 @@ if (NOT CMAKE_BUILD_TYPE)
 endif()
 message(STATUS "CMake build type: ${CMAKE_BUILD_TYPE}")
 # Config of some libraries (e.g. replxx) depends on the build type.
-string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_CASE_INSENSITIVE)
+string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LOWERCASE)
 
 # Set default instalation directory to '/usr'
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)

@@ -4,16 +4,22 @@ ExternalProject_Add(replxx-proj
         GIT_TAG release-0.0.3
         CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
         "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
+        "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
         INSTALL_DIR "${PROJECT_BINARY_DIR}/replxx")
 
-ExternalProject_Get_Property(replxx-proj install_dir)
-set(REPLXX_ROOT ${install_dir})
-set(REPLXX_INCLUDE_DIRS ${REPLXX_ROOT}/include)
-if(CMAKE_BUILD_TYPE_CASE_INSENSITIVE STREQUAL "debug")
-  set(REPLXX_LIBRARY_PATH ${REPLXX_ROOT}/${MG_INSTALL_LIB_DIR}/libreplxx-d.a)
+if(CMAKE_BUILD_TYPE_LOWERCASE STREQUAL "debug")
+  set(REPLXX_LIB_POSTFIX "-d")
+elseif(CMAKE_BUILD_TYPE_LOWERCASE STREQUAL "relwithdebinfo")
+  set(REPLXX_LIB_POSTFIX "-rd")
 else()
-  set(REPLXX_LIBRARY_PATH ${REPLXX_ROOT}/${MG_INSTALL_LIB_DIR}/libreplxx.a)
+  set(REPLXX_LIB_POSTFIX "")
 endif()
+
+ExternalProject_Get_Property(replxx-proj INSTALL_DIR)
+set(REPLXX_ROOT ${INSTALL_DIR})
+set(REPLXX_INCLUDE_DIRS ${REPLXX_ROOT}/include)
+set(REPLXX_LIBRARY_PATH ${REPLXX_ROOT}/${MG_INSTALL_LIB_DIR}/libreplxx${REPLXX_LIB_POSTFIX}.a)
 set(REPLXX_LIBRARY replxx)
 
 add_library(${REPLXX_LIBRARY} STATIC IMPORTED GLOBAL)
