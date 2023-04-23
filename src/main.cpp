@@ -166,7 +166,8 @@ int main(int argc, char **argv) {
   };
 
   if (console::is_a_tty(STDIN_FILENO)) {  // INTERACTIVE
-    return mode::interactive::Run(bolt_config, FLAGS_history, FLAGS_no_history, FLAGS_verbose_execution_info, csv_opts, output_opts);
+    return mode::interactive::Run(bolt_config, FLAGS_history, FLAGS_no_history, FLAGS_verbose_execution_info, csv_opts,
+                                  output_opts);
   } else if (false) {
     return mode::parsing::Run();
   } else if (false) {

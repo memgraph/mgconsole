@@ -1,3 +1,18 @@
+// Copyright (C) 2016-2023 Memgraph Ltd. [https://memgraph.com]
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 #include <string.h>
 
 #include <algorithm>
@@ -40,6 +55,7 @@
 #include "constants.hpp"
 #include "date.hpp"
 #include "mgclient.h"
+#include "query_type.hpp"
 #include "utils.hpp"
 
 namespace utils {
@@ -670,105 +686,29 @@ std::optional<std::string> GetLine() {
   return line;
 }
 
-// Let's have a party with simple state machines!
-// TODO(gitbuda): If the simple state machines will work, come up with proper state machines.
-enum class VCreateSeq {
-  NONE,
-  C,
-  CR,
-  CRE,
-  CREA,
-  CREAT,
-  CREATE,
-  CREATE_,
-  CREATE_B,
-  CREATE_B_,
-  CREATE_B_B,
-  CREATE_B_B_,
-};
-std::ostream &operator<<(std::ostream &os, const VCreateSeq &v) {
-  if (v == VCreateSeq::NONE) {
-    os << "VCreateSeq::NONE";
-  }
-  if (v == VCreateSeq::C) {
-    os << "VCreateSeq::C";
-  }
-  if (v == VCreateSeq::CR) {
-    os << "VCreateSeq::CR";
-  }
-  if (v == VCreateSeq::CRE) {
-    os << "VCreateSeq::CRE";
-  }
-  if (v == VCreateSeq::CREA) {
-    os << "VCreateSeq::CREA";
-  }
-  if (v == VCreateSeq::CREAT) {
-    os << "VCreateSeq::CREAT";
-  }
-  if (v == VCreateSeq::CREATE) {
-    os << "VCreateSeq::CREATE";
-  }
-  if (v == VCreateSeq::CREATE_) {
-    os << "VCreateSeq::CREATE_";
-  }
-  if (v == VCreateSeq::CREATE_B) {
-    os << "VCreateSeq::CREATE_(";
-  }
-  if (v == VCreateSeq::CREATE_B_) {
-    os << "VCreateSeq::CREATE_(_";
-  }
-  if (v == VCreateSeq::CREATE_B_B) {
-    os << "VCreateSeq::CREATE_(_)";
-  }
-  if (v == VCreateSeq::CREATE_B_B_) {
-    os << "VCreateSeq::CREATE_(_)_";
-  }
-  return os;
-}
 // TODO(gitbuda): Implemente the ParseLineInfo when query spreads across many lines.
 ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, bool collect_info) {
   // Parse line.
   bool is_done = false;
   std::stringstream parsed_line;
 
-  ParseLineInfo line_info;
-  VCreateSeq vcreate = VCreateSeq::NONE;
+  query::line::CollectedClauses collected_clauses;
+  query::line::ClauseState clause_state = query::line::ClauseState::NONE;
   for (auto c : line) {
-    // Used to deduce query type later on
     if (collect_info) {
-      // Create VERTEX sequence of chars.
-      if (!*quote && (c == 'C' || c == 'c') && vcreate == VCreateSeq::NONE) {
-        vcreate = VCreateSeq::C;
-      } else if (!*quote && (c == 'R' || c == 'r') && vcreate == VCreateSeq::C) {
-        vcreate = VCreateSeq::CR;
-      } else if (!*quote && (c == 'E' || c == 'e') && vcreate == VCreateSeq::CR) {
-        vcreate = VCreateSeq::CRE;
-      } else if (!*quote && (c == 'A' || c == 'a') && vcreate == VCreateSeq::CRE) {
-        vcreate = VCreateSeq::CREA;
-      } else if (!*quote && (c == 'T' || c == 't') && vcreate == VCreateSeq::CREA) {
-        vcreate = VCreateSeq::CREAT;
-      } else if (!*quote && (c == 'E' || c == 'e') && vcreate == VCreateSeq::CREAT) {
-        vcreate = VCreateSeq::CREATE;
-      } else if (!*quote && (c == ' ' || c == '\t') && vcreate == VCreateSeq::CREATE) {
-        vcreate = VCreateSeq::CREATE_;
-      } else if (!*quote && (c == '(') && vcreate == VCreateSeq::CREATE_) {
-        vcreate = VCreateSeq::CREATE_B;
-      } else if (vcreate == VCreateSeq::CREATE_B && c != ')') {
-        vcreate = VCreateSeq::CREATE_B_;
-      } else if (vcreate == VCreateSeq::CREATE_B && c == ')') {
-        vcreate = VCreateSeq::CREATE_B_B;
-      } else if (!*quote && vcreate == VCreateSeq::CREATE_B_ && c == ')') {
-        vcreate = VCreateSeq::CREATE_B_B;
-      } else if (!*quote && vcreate == VCreateSeq::CREATE_B_B && c != '-') {
-        vcreate = VCreateSeq::CREATE_B_B_;
-      } else {
-        vcreate = VCreateSeq::NONE;
+      clause_state = query::line::NextState(quote, c, clause_state);
+      if (clause_state == query::line::ClauseState::MATCH) {
+        collected_clauses.has_match = true;
+        clause_state = query::line::ClauseState::NONE;
       }
-      if (vcreate == VCreateSeq::CREATE_B_B_) {
-        line_info.has_vertex_create = true;
-        vcreate = VCreateSeq::NONE;
+      if (clause_state == query::line::ClauseState::MERGE) {
+        collected_clauses.has_merge = true;
+        clause_state = query::line::ClauseState::NONE;
       }
-      // TODO(gitbuda): Cover the CREATE ()CREATE case.
+      if (clause_state == query::line::ClauseState::CREATE) {
+        collected_clauses.has_create = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
     }
 
     if (*quote && c == '\\') {
@@ -787,7 +727,8 @@ ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, b
     *escaped = false;
   }
   if (collect_info) {
-    return ParseLineResult{.line = parsed_line.str(), .is_done = is_done, .info = line_info};
+    return ParseLineResult{
+        .line = parsed_line.str(), .is_done = is_done, .info = ParseLineInfo{.collected_clauses = collected_clauses}};
   } else {
     return ParseLineResult{.line = parsed_line.str(), .is_done = is_done};
   }

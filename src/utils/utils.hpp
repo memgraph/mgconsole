@@ -16,11 +16,10 @@
 #pragma once
 
 #include <cstdint>
-#include <iostream>
-#include <memory>
-
 #include <filesystem>
+#include <iostream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,6 +30,8 @@
 
 #include "mgclient.h"
 #include "replxx.h"
+
+#include "query_type.hpp"
 
 namespace fs = std::filesystem;
 
@@ -203,9 +204,7 @@ void SetStdinEcho(bool enable);
 std::optional<std::string> GetLine();
 
 struct ParseLineInfo {
-  // encode the full state because of a query across more line
-  bool has_vertex_create{false};
-  bool has_edge_create{false};
+  query::line::CollectedClauses collected_clauses;
 };
 struct ParseLineResult {
   std::string line;
@@ -237,20 +236,27 @@ struct Line {
   int64_t line_number;
   std::string line;
 };
+
 struct QueryInfo {
-  bool has_vertex_create{false};
-  bool has_edge_create{false};
+  bool has_match{false};
+  bool has_create{false};
+  bool has_merge{false};
 };
+
 inline std::optional<QueryInfo> QueryInfoFromParseLineInfo(const std::optional<console::ParseLineInfo> &line_info) {
   // TODO(gitbuda): This logic is wrong (correct only if there is a controlled input), after test change. Also make it
   // work from the GetQuery() in all cases.
   if (line_info) {
-    return QueryInfo{.has_vertex_create = line_info->has_vertex_create,
-                     .has_edge_create = !line_info->has_vertex_create};
+    return QueryInfo{
+        .has_create = line_info->collected_clauses.has_create,
+        .has_match = line_info->collected_clauses.has_match,
+        .has_merge = line_info->collected_clauses.has_merge,
+    };
   } else {
     return std::nullopt;
   }
 }
+
 struct Query {
   int64_t line_number{0};
   int64_t index{0};

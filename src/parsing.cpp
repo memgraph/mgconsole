@@ -32,8 +32,9 @@ int Run() {
       continue;
     }
     std::cout << query->query << " "
-              << "is_create_vertex: " << query->info->has_vertex_create << " "
-              << "is_create_edge: " << query->info->has_edge_create << " " << std::endl;
+              << "has_create: " << query->info->has_create << " "
+              << "has_match: " << query->info->has_match << " "
+              << "has_merge: " << query->info->has_merge << " " << std::endl;
     ++query_index;
   }
   std::cout << "Parsed " << query_index << " queries" << std::endl;
