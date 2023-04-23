@@ -238,8 +238,8 @@ struct Line {
 };
 
 struct QueryInfo {
-  bool has_match{false};
   bool has_create{false};
+  bool has_match{false};
   bool has_merge{false};
 };
 
