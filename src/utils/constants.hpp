@@ -38,6 +38,11 @@ constexpr const std::string_view kCommandDocs = ":docs";
 constexpr const std::string_view kCsvFormat = "csv";
 constexpr const std::string_view kTabularFormat = "tabular";
 
+// Supported modes.
+constexpr const std::string_view kSerialMode = "serial";
+constexpr const std::string_view kBatchedParallel = "batched-parallel";
+constexpr const std::string_view kParserMode = "parser";
+
 // History default directory.
 static const std::string kDefaultHistoryBaseDir = "~";
 static const std::string kDefaultHistoryMemgraphDir = ".memgraph";

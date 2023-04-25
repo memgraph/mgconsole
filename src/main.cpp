@@ -44,6 +44,7 @@
 #include "interactive.hpp"
 #include "parsing.hpp"
 #include "serial_import.hpp"
+#include "utils/assert.hpp"
 #include "utils/constants.hpp"
 #include "utils/utils.hpp"
 #include "version.hpp"
@@ -59,6 +60,7 @@ DEFINE_string(username, "", "Username for the database");
 DEFINE_string(password, "", "Password for the database");
 DEFINE_bool(use_ssl, false, "Use SSL when connecting to the server.");
 
+// output
 DEFINE_bool(fit_to_screen, false, "Fit output width to screen width.");
 DEFINE_bool(term_colors, false, "Use terminal colors syntax highlighting.");
 DEFINE_string(output_format, "tabular",
@@ -91,6 +93,21 @@ DEFINE_bool(csv_doublequote, true,
 // history
 DEFINE_string(history, "~/.memgraph", "Use the specified directory for saving history.");
 DEFINE_bool(no_history, false, "Do not save history.");
+
+DEFINE_string(
+    import_mode, "serial",
+    "Import mode defines the way how the queries will be executed. `serial` mode will try to execute queries in the "
+    "specified input order. `batched-parallel` will batched and parallelize query execution. NOTE: batched-parallel is "
+    "an experimental feature, the behavior might be unexpected because it depends on how the underlying database "
+    "system is configured (e.g., in the transactional setup there might be many serialization errors, while in the "
+    "analytical setup, ordering of nodes/edges is very important. `parser` mode will just print info about the "
+    "provided queries. NOTE: `parser` mode won't execute any query against the underlying database system.");
+DEFINE_validator(import_mode, [](const char *, const std::string &value) {
+  if (value == constants::kSerialMode || value == constants::kBatchedParallel || value == constants::kParserMode) {
+    return true;
+  }
+  return false;
+});
 
 DECLARE_int32(min_log_level);
 
@@ -168,12 +185,14 @@ int main(int argc, char **argv) {
   if (console::is_a_tty(STDIN_FILENO)) {  // INTERACTIVE
     return mode::interactive::Run(bolt_config, FLAGS_history, FLAGS_no_history, FLAGS_verbose_execution_info, csv_opts,
                                   output_opts);
-  } else if (false) {
+  } else if (FLAGS_import_mode == constants::kParserMode) {
     return mode::parsing::Run();
-  } else if (false) {
+  } else if (FLAGS_import_mode == constants::kBatchedParallel) {
     return mode::batch_import::Run(bolt_config);
-  } else {
+  } else if (FLAGS_import_mode == constants::kSerialMode) {
     return mode::serial_import::Run(bolt_config, csv_opts, output_opts);
+  } else {
+    MG_FAIL("Unknown import mode!");
   }
 
   return 0;
