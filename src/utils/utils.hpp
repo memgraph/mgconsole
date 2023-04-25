@@ -176,7 +176,10 @@ void PrintValue(std::ostream &os, const mg_value *value);
 // Unfinished query text from previous input.
 // e.g. Previous input was MATCH(n) RETURN n; MATCH
 // then default_text would be set to MATCH for next query.
-static std::string default_text;
+static std::string mgconsole_global_default_text;
+// The following variables are used to track the line number and index (number specifying order) of the processed query.
+static int64_t mgconsole_global_line_number{0};
+static int64_t mgconsole_global_query_index{0};
 
 namespace console {
 

@@ -681,8 +681,9 @@ std::optional<std::string> GetLine() {
   std::string line;
   std::getline(std::cin, line);
   if (std::cin.eof()) return std::nullopt;
-  line = default_text + line;
-  default_text = "";
+  mgconsole_global_line_number++;
+  line = mgconsole_global_default_text + line;
+  mgconsole_global_default_text = "";
   return line;
 }
 
@@ -735,11 +736,11 @@ ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, b
 }
 
 std::optional<std::string> ReadLine(Replxx *replxx_instance, const std::string &prompt) {
-  if (!default_text.empty()) {
-    replxx_set_preload_buffer(replxx_instance, default_text.c_str());
+  if (!mgconsole_global_default_text.empty()) {
+    replxx_set_preload_buffer(replxx_instance, mgconsole_global_default_text.c_str());
   }
   const char *line = replxx_input(replxx_instance, prompt.c_str());
-  default_text = "";
+  mgconsole_global_default_text = "";
   if (!line) {
     return std::nullopt;
   }
@@ -756,11 +757,15 @@ namespace query {
 std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info) {
   char quote = '\0';
   bool escaped = false;
-  auto ret = console::ParseLine(default_text, &quote, &escaped, collect_info);
+  auto ret = console::ParseLine(mgconsole_global_default_text, &quote, &escaped, collect_info);
   if (ret.is_done) {
     auto idx = ret.line.size() + 1;
-    default_text = utils::Trim(default_text.substr(idx));
-    return Query{.query = ret.line, .info = QueryInfoFromParseLineInfo(ret.info)};
+    mgconsole_global_default_text = utils::Trim(mgconsole_global_default_text.substr(idx));
+    mgconsole_global_query_index++;
+    return Query{.line_number = mgconsole_global_line_number,
+                 .index = mgconsole_global_query_index,
+                 .query = ret.line,
+                 .info = QueryInfoFromParseLineInfo(ret.info)};
   }
   std::stringstream query;
   std::optional<console::ParseLineInfo> line_info;
@@ -803,11 +808,15 @@ std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info) {
       query << "\n";
     }
     if (char_count < line->size()) {
-      default_text = utils::Trim(line->substr(char_count));
+      mgconsole_global_default_text = utils::Trim(line->substr(char_count));
     }
     ++line_cnt;
   }
-  return Query{.query = query.str(), .info = QueryInfoFromParseLineInfo(line_info)};
+  mgconsole_global_query_index++;
+  return Query{.line_number = mgconsole_global_line_number,
+               .index = mgconsole_global_query_index,
+               .query = query.str(),
+               .info = QueryInfoFromParseLineInfo(line_info)};
 }
 
 void PrintQueryInfo(const Query &query) {
