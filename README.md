@@ -123,9 +123,30 @@ memgraph> :quit
 Bye
 ```
 
-## Parallelized and batched import (experimental)
+## Batched and parallelized import (EXPERIMENTAL)
+
+Since Memgraph v2 expects vertices to come first (vertices has to exist to
+create an edge), and serial import can be slow, the goal with batching and
+parallelization is to improve the import speed when ingesting queries in the
+text format.
 
 ```
-TODO(gitbuda): Explain how to run mgconsole in the batched mode.
-
+// TODO(gitbuda): Explain how to run mgconsole in the batched mode.
+cat data.cypherl | mgconsole --import-mode=batched-parallel
 ```
+
+### Memgraph in TRANSACTIONAL mode TODO(gitbuda): Add link to docs
+
+In TRANSACTIONAL mode, batching and parallelization might help, but since there are high chances for
+serialization errors, the execution might be similar of even slower compared to
+the serial mode.
+
+### Memgraph in ANALYTICAL mode TODO(gitbuda): Add link to the docs
+
+In ANALYTICAL mode, batching and parallelization will mostly likely help
+massively because serialization errors don't exist, but since Memgraph will
+accept any query (e.g., on edge create failure, vertices could be created
+multiple times), special care is required:
+  - queries with pure create vertices have to be specified first
+  - please use only import statements using simple MATCH, CREATE, MERGE statements.
+If you encounter any issue, please create a new Github issue.

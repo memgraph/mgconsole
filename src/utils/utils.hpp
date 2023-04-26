@@ -282,6 +282,9 @@ struct Batch {
   bool is_executed = false;
   int64_t backoff = 1;
   int64_t attempts = 0;
+
+  // TODO(gitbuda): Batch::only_nodes is a hack -> change.
+  bool has_pure_nodes = false;
 };
 void PrintBatchesInfo(const std::vector<Batch> &);
 

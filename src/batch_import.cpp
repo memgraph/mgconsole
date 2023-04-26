@@ -47,6 +47,7 @@ using namespace std::string_literals;
 // TODO(gitbuda): Inject proper batch and query indexes.
 
 std::vector<query::Batch> FetchBatches(uint64_t batch_size, uint64_t max_batches) {
+  // TODO(gitbuda): Query index in FetchBatches is misleading -> rename.
   uint64_t query_index = 0;
   uint64_t batch_index = 0;
 
@@ -58,7 +59,7 @@ std::vector<query::Batch> FetchBatches(uint64_t batch_size, uint64_t max_batches
     if (query_index + 1 >= batch_size * max_batches) {
       break;
     }
-    auto query = query::GetQuery(nullptr);
+    auto query = query::GetQuery(nullptr, true);
     if (!query) {
       break;
     }
@@ -67,13 +68,23 @@ std::vector<query::Batch> FetchBatches(uint64_t batch_size, uint64_t max_batches
     }
     query_index += 1;
 
+    // TODO(gitbuda): Any processing Batch::apply(query) logic could be moved into the batch.
+    auto updata_batch_type = [](const query::Query &query, query::Batch &batch) {
+      batch.has_pure_nodes =
+          batch.has_pure_nodes || (query.info->has_create && !query.info->has_match && !query.info->has_merge);
+    };
+
     if (batch.queries.size() < batch_size) {
-      batch.queries.emplace_back(query::Query{.line_number = 0, .index = 0, .query = query->query});
+      // TODO(gitbuda): Duplicated "batch type" logic -> centralize.
+      updata_batch_type(*query, batch);
+      batch.queries.emplace_back(std::move(*query));
     } else {
       batch_index += 1;
       batches.emplace_back(std::move(batch));
       batch = query::Batch(batch_size, batch_index);
-      batch.queries.emplace_back(query::Query{.line_number = 0, .index = 0, .query = query->query});
+      // TODO(gitbuda): Duplicated "batch type" logic -> centralize.
+      updata_batch_type(*query, batch);
+      batch.queries.emplace_back(std::move(*query));
     }
   }
   // Add last batch if it's missing!
@@ -83,6 +94,8 @@ std::vector<query::Batch> FetchBatches(uint64_t batch_size, uint64_t max_batches
 
   return batches;
 }
+
+// TODO(gitbuda): Implement ExecuteBatches function.
 
 int Run(const utils::bolt::Config &bolt_config) {
   uint64_t batch_size = 100;
@@ -111,7 +124,8 @@ int Run(const utils::bolt::Config &bolt_config) {
     if (batches.empty()) {
       break;
     }
-    std::shuffle(batches.begin(), batches.end(), rng);
+    // TODO(gitbuda): shuffle is not suitable for analytics mode.
+    // std::shuffle(batches.begin(), batches.end(), rng);
 
     std::atomic<uint64_t> executed_batches = 0;
     while (true) {
@@ -120,6 +134,10 @@ int Run(const utils::bolt::Config &bolt_config) {
         break;
       }
 
+      // TODO(gitbuda): Batches with "pure" nodes should come first.
+      // Option 1: split pure create batches and execute them first (FetchBatches could immediately return pair)
+      // Option 2: add more magic in already magic below code xD
+      // Option 1 seems much better.
       std::unordered_map<size_t, utils::Future<bool>> f_execs;
       int64_t used_threads = 0;
       for (uint64_t batch_i = 0; batch_i < batches.size(); ++batch_i) {

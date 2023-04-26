@@ -21,6 +21,8 @@
 // A more modular choice would be some lexer analyzer or Antlr, but that would add a lot of build complexity + would
 // likely be slower.
 
+// TODO(gitbuda): Add CREATE INDEX and DETACH DELETE to the state machine.
+
 namespace query::line {
 
 struct CollectedClauses {
