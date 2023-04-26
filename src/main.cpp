@@ -59,7 +59,7 @@ DEFINE_string(output_format, "tabular",
               "Query output format. Can be csv/tabular. If output format is "
               "other than tabular `fit-to-screen` flag is ignored.");
 DEFINE_bool(verbose_execution_info, false,
-            "Output the additional information about query such is query cost, parsing, planning and execution times.");
+            "Output the additional information about query such as query cost, parsing, planning and execution times.");
 DEFINE_validator(output_format, [](const char *, const std::string &value) {
   if (value == constants::kCsvFormat || value == constants::kTabularFormat) {
     return true;
