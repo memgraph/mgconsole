@@ -48,16 +48,16 @@ volatile sig_atomic_t is_shutting_down = 0;
 
 // connection
 DEFINE_string(host, "127.0.0.1", "Server address. It can be a DNS resolvable hostname.");
-DEFINE_int32(port, 7687, "Server port");
-DEFINE_string(username, "", "Username for the database");
-DEFINE_string(password, "", "Password for the database");
+DEFINE_int32(port, 7687, "Server port.");
+DEFINE_string(username, "", "Database username.");
+DEFINE_string(password, "", "Database password.");
 DEFINE_bool(use_ssl, false, "Use SSL when connecting to the server.");
 
 DEFINE_bool(fit_to_screen, false, "Fit output width to screen width.");
 DEFINE_bool(term_colors, false, "Use terminal colors syntax highlighting.");
 DEFINE_string(output_format, "tabular",
-              "Query output format. Can be csv/tabular. If output format is "
-              "other than tabular `fit-to-screen` flag is ignored.");
+              "Query output format can be csv or tabular. If output format is "
+              "not tabular `fit-to-screen` flag is ignored.");
 DEFINE_bool(verbose_execution_info, false,
             "Output the additional information about query such as query cost, parsing, planning and execution times.");
 DEFINE_validator(output_format, [](const char *, const std::string &value) {
@@ -75,15 +75,15 @@ DEFINE_validator(csv_delimiter, [](const char *, const std::string &value) {
   }
   return true;
 });
-DEFINE_string(csv_escapechar, "", "Character used to escape the quotechar(\") if csv-doublequote is false.");
+DEFINE_string(csv_escapechar, "", "Character used to escape the quotechar(\") if the `csv-doublequote` flag is false.");
 DEFINE_bool(csv_doublequote, true,
             "Controls how instances of quotechar(\") appearing inside a field should "
             "themselves be quoted. When true, the character is doubled. When false, "
             "the escapechar is used as a prefix to the quotechar. "
-            "If csv-doublequote is false 'csv-escapechar' must be set.");
+            "If `csv-doublequote` is false, 'csv-escapechar' must be set.");
 
 // history
-DEFINE_string(history, "~/.memgraph", "Use the specified directory for saving history.");
+DEFINE_string(history, "~/.memgraph", "Use the specified directory to save history.");
 DEFINE_bool(no_history, false, "Do not save history.");
 
 DECLARE_int32(min_log_level);
