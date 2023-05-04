@@ -710,6 +710,14 @@ ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, b
         collected_clauses.has_create = true;
         clause_state = query::line::ClauseState::NONE;
       }
+      if (clause_state == query::line::ClauseState::CREATE_INDEX) {
+        collected_clauses.has_create_index = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
+      if (clause_state == query::line::ClauseState::DETACH_DELETE) {
+        collected_clauses.has_detach_delete = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
     }
 
     if (*quote && c == '\\') {

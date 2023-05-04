@@ -20,8 +20,8 @@
 // Let's have a party with simple state machines!
 // A more modular choice would be some lexer analyzer or Antlr, but that would add a lot of build complexity + would
 // likely be slower.
-
-// TODO(gitbuda): Add CREATE INDEX and DETACH DELETE to the state machine.
+// Consider implementing some simple but fast state machine or at least try to be DRY (in this case makes a lot of
+// sense.)
 
 namespace query::line {
 
@@ -29,15 +29,29 @@ struct CollectedClauses {
   bool has_match{false};
   bool has_create{false};
   bool has_merge{false};
+  bool has_create_index{false};
+  bool has_detach_delete{false};
 };
 
-enum class ClauseState { NONE, C, CR, CRE, CREA, CREAT, CREATE, M, MA, MAT, MATC, MATCH, ME, MER, MERG, MERGE };
+// clang-format off
+enum class ClauseState {
+  NONE,                                  // CREATE_(
+  C, CR, CRE, CREA, CREAT, CREATE, CREATE_, CREATE_P,
+                                            CREATE_I, CREATE_IN, CREATE_IND, CREATE_INDE, CREATE_INDEX,
+  M, MA, MAT, MATC, MATCH,         MATCH_, MATCH_P,
+     ME, MER, MERG, MERGE,         MERGE_, MERGE_P,
+  D, DE, DET, DETA, DETAC, DETACH, DETACH_, DETACH_D, DETACH_DE, DETACH_DEL, DETACH_DELE, DETACH_DELET, DETACH_DELETE,
+};
+// clang-format on
+
+inline bool IsWhitespace(char c) { return c == ' ' || c == '\t' || c == '\n'; }
 
 inline ClauseState NextState(char *quote, char c, const ClauseState state) {
-  if (c == ' ' || c == '\t') {
+  if (IsWhitespace(c)) {
     return state;
   }
 
+  // CREATE
   if (!*quote && (c == 'C' || c == 'c') && state == ClauseState::NONE) {
     return ClauseState::C;
   } else if (!*quote && (c == 'R' || c == 'r') && state == ClauseState::C) {
@@ -50,7 +64,24 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
     return ClauseState::CREAT;
   } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::CREAT) {
     return ClauseState::CREATE;
+  } else if (!*quote && IsWhitespace(c) && state == ClauseState::CREATE) {
+    return ClauseState::CREATE_;
+  } else if (!*quote && c == '(' && (state == ClauseState::CREATE || state == ClauseState::CREATE_)) {
+    return ClauseState::CREATE_P;
 
+    // CREATE INDEX
+  } else if (!*quote && (c == 'I' || c == 'i') && state == ClauseState::CREATE_) {
+    return ClauseState::CREATE_I;
+  } else if (!*quote && (c == 'N' || c == 'n') && state == ClauseState::CREATE_I) {
+    return ClauseState::CREATE_IN;
+  } else if (!*quote && (c == 'D' || c == 'd') && state == ClauseState::CREATE_IN) {
+    return ClauseState::CREATE_IND;
+  } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::CREATE_IND) {
+    return ClauseState::CREATE_INDE;
+  } else if (!*quote && (c == 'X' || c == 'x') && state == ClauseState::CREATE_INDE) {
+    return ClauseState::CREATE_INDEX;
+
+    // MATCH
   } else if (!*quote && (c == 'M' || c == 'm') && state == ClauseState::NONE) {
     return ClauseState::M;
   } else if (!*quote && (c == 'A' || c == 'a') && state == ClauseState::M) {
@@ -61,7 +92,12 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
     return ClauseState::MATC;
   } else if (!*quote && (c == 'H' || c == 'h') && state == ClauseState::MATC) {
     return ClauseState::MATCH;
+  } else if (!*quote && IsWhitespace(c) && state == ClauseState::MATCH) {
+    return ClauseState::MATCH_;
+  } else if (!*quote && c == '(' && (state == ClauseState::MATCH || state == ClauseState::MATCH_)) {
+    return ClauseState::MATCH_P;
 
+    // MERGE
   } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::M) {
     return ClauseState::ME;
   } else if (!*quote && (c == 'R' || c == 'r') && state == ClauseState::ME) {
@@ -70,6 +106,38 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
     return ClauseState::MERG;
   } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::MERG) {
     return ClauseState::MERGE;
+  } else if (!*quote && IsWhitespace(c) && state == ClauseState::MERGE) {
+    return ClauseState::MERGE_;
+  } else if (!*quote && c == '(' && (state == ClauseState::MERGE || state == ClauseState::MERGE_)) {
+    return ClauseState::MERGE_P;
+
+    // DETACH DELETE
+  } else if (!*quote && (c == 'D' || c == 'd') && state == ClauseState::NONE) {
+    return ClauseState::D;
+  } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::D) {
+    return ClauseState::DE;
+  } else if (!*quote && (c == 'T' || c == 't') && state == ClauseState::DE) {
+    return ClauseState::DET;
+  } else if (!*quote && (c == 'A' || c == 'a') && state == ClauseState::DET) {
+    return ClauseState::DETA;
+  } else if (!*quote && (c == 'C' || c == 'c') && state == ClauseState::DETA) {
+    return ClauseState::DETAC;
+  } else if (!*quote && (c == 'H' || c == 'h') && state == ClauseState::DETAC) {
+    return ClauseState::DETACH;
+  } else if (!*quote && IsWhitespace(c) && state == ClauseState::DETACH) {
+    return ClauseState::DETACH_;
+  } else if (!*quote && (c == 'D' || c == 'd') && state == ClauseState::DETACH_) {
+    return ClauseState::DETACH_D;
+  } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::DETACH_D) {
+    return ClauseState::DETACH_DE;
+  } else if (!*quote && (c == 'L' || c == 'e') && state == ClauseState::DETACH_DE) {
+    return ClauseState::DETACH_DEL;
+  } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::DETACH_DEL) {
+    return ClauseState::DETACH_DELE;
+  } else if (!*quote && (c == 'T' || c == 'e') && state == ClauseState::DETACH_DELE) {
+    return ClauseState::DETACH_DELET;
+  } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::DETACH_DELET) {
+    return ClauseState::DETACH_DELETE;
 
   } else {
     return ClauseState::NONE;
@@ -77,6 +145,7 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
 }
 
 inline std::ostream &operator<<(std::ostream &os, const ClauseState &s) {
+  // TODO(gitbuda): Finish the impl of operator<< for ClauseState
   if (s == ClauseState::CREATE) {
     os << "ClauseState(CREATE)";
   } else if (s == ClauseState::MATCH) {
