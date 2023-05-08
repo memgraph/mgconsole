@@ -31,8 +31,8 @@ int Run() {
     if (query->query.empty()) {
       continue;
     }
-    std::cout << "L: " << query->line_number << " "
-              << "I: " << query->index << " "
+    std::cout << "Line: " << query->line_number << " "
+              << "Index: " << query->index << " "
               << "has_create: " << query->info->has_create << " "
               << "has_match: " << query->info->has_match << " "
               << "has_merge: " << query->info->has_merge << " "

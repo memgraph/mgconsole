@@ -17,11 +17,13 @@
 
 #include "iostream"
 
-// Let's have a party with simple state machines!
-// A more modular choice would be some lexer analyzer or Antlr, but that would add a lot of build complexity + would
-// likely be slower.
-// Consider implementing some simple but fast state machine or at least try to be DRY (in this case makes a lot of
-// sense.)
+// Let's have a party with simple state machine! The intention here is to
+// implement something simple to understand and fast; to experiment with the
+// batched and parallelization execution mode.
+// A more modular choice would be some lexer analyzer or Antlr, but that would
+// add a lot of build complexity + would likely be slower.
+// Consider implementing some simple but fast state machine or at least try to
+// be DRY (in this case makes a lot of sense).
 
 namespace query::line {
 
@@ -41,14 +43,25 @@ enum class ClauseState {
   M, MA, MAT, MATC, MATCH,         MATCH_, MATCH_P,
      ME, MER, MERG, MERGE,         MERGE_, MERGE_P,
   D, DE, DET, DETA, DETAC, DETACH, DETACH_, DETACH_D, DETACH_DE, DETACH_DEL, DETACH_DELE, DETACH_DELET, DETACH_DELETE,
+  // TODO(gitbuda): DROP INDEX and )_REMOVE is missing.
 };
 // clang-format on
 
 inline bool IsWhitespace(char c) { return c == ' ' || c == '\t' || c == '\n'; }
 
 inline ClauseState NextState(char *quote, char c, const ClauseState state) {
-  if (IsWhitespace(c)) {
-    return state;
+  if (!*quote && IsWhitespace(c)) {
+    if (state == ClauseState::CREATE) {
+      return ClauseState::CREATE_;
+    } else if (state == ClauseState::MATCH) {
+      return ClauseState::MATCH_;
+    } else if (state == ClauseState::MERGE) {
+      return ClauseState::MERGE_;
+    } else if (state == ClauseState::DETACH) {
+      return ClauseState::DETACH_;
+    } else {
+      return state;
+    }
   }
 
   // CREATE
@@ -64,8 +77,6 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
     return ClauseState::CREAT;
   } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::CREAT) {
     return ClauseState::CREATE;
-  } else if (!*quote && IsWhitespace(c) && state == ClauseState::CREATE) {
-    return ClauseState::CREATE_;
   } else if (!*quote && c == '(' && (state == ClauseState::CREATE || state == ClauseState::CREATE_)) {
     return ClauseState::CREATE_P;
 
@@ -92,8 +103,6 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
     return ClauseState::MATC;
   } else if (!*quote && (c == 'H' || c == 'h') && state == ClauseState::MATC) {
     return ClauseState::MATCH;
-  } else if (!*quote && IsWhitespace(c) && state == ClauseState::MATCH) {
-    return ClauseState::MATCH_;
   } else if (!*quote && c == '(' && (state == ClauseState::MATCH || state == ClauseState::MATCH_)) {
     return ClauseState::MATCH_P;
 
@@ -106,8 +115,6 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
     return ClauseState::MERG;
   } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::MERG) {
     return ClauseState::MERGE;
-  } else if (!*quote && IsWhitespace(c) && state == ClauseState::MERGE) {
-    return ClauseState::MERGE_;
   } else if (!*quote && c == '(' && (state == ClauseState::MERGE || state == ClauseState::MERGE_)) {
     return ClauseState::MERGE_P;
 
@@ -124,8 +131,6 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
     return ClauseState::DETAC;
   } else if (!*quote && (c == 'H' || c == 'h') && state == ClauseState::DETAC) {
     return ClauseState::DETACH;
-  } else if (!*quote && IsWhitespace(c) && state == ClauseState::DETACH) {
-    return ClauseState::DETACH_;
   } else if (!*quote && (c == 'D' || c == 'd') && state == ClauseState::DETACH_) {
     return ClauseState::DETACH_D;
   } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::DETACH_D) {
@@ -145,13 +150,16 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
 }
 
 inline std::ostream &operator<<(std::ostream &os, const ClauseState &s) {
-  // TODO(gitbuda): Finish the impl of operator<< for ClauseState
-  if (s == ClauseState::CREATE) {
-    os << "ClauseState(CREATE)";
-  } else if (s == ClauseState::MATCH) {
-    os << "ClauseState(MATCH)";
-  } else if (s == ClauseState::MERGE) {
-    os << "ClauseState(MERGE)";
+  if (s == ClauseState::CREATE_P) {
+    os << "CREATE_(";
+  } else if (s == ClauseState::MATCH_P) {
+    os << "MATCH_(";
+  } else if (s == ClauseState::MERGE_P) {
+    os << "MERGE_(";
+  } else if (s == ClauseState::CREATE_INDEX) {
+    os << "CREATE_INDEX";
+  } else if (s == ClauseState::DETACH_DELETE) {
+    os << "DETACH_DELETE";
   } else {
     os << "ClauseState";
   }

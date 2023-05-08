@@ -702,11 +702,11 @@ ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, b
         collected_clauses.has_match = true;
         clause_state = query::line::ClauseState::NONE;
       }
-      if (clause_state == query::line::ClauseState::MERGE) {
+      if (clause_state == query::line::ClauseState::MERGE_P) {
         collected_clauses.has_merge = true;
         clause_state = query::line::ClauseState::NONE;
       }
-      if (clause_state == query::line::ClauseState::CREATE) {
+      if (clause_state == query::line::ClauseState::CREATE_P) {
         collected_clauses.has_create = true;
         clause_state = query::line::ClauseState::NONE;
       }
