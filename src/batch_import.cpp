@@ -32,17 +32,6 @@ namespace mode::batch_import {
 
 using namespace std::string_literals;
 
-// NOTE: A big problem with batched execution is that executing batches with
-//       edges will pass on an empty database (with no nodes) without an error:
-//         * edges have to come after nodes
-//         * count how many elements is actually created from a given batch
-//
-// TODO(gitbuda): If this is executed multiple times -> bad session + unknown message type -> debug
-// TODO(gitbuda): The biggest issue seems to be that a few conflicting batches can end up in constant serialization
-// conflict.
-// TODO(gitbuda): Indexes are a problem because they can't be created in a multi-query transaction.
-// TODO(gitbuda): Inject proper batch and query indexes.
-
 struct Batches {
   Batches() = delete;
   Batches(const Batches &) = delete;
@@ -50,15 +39,85 @@ struct Batches {
   Batches(Batches &&) = default;
   Batches &operator=(Batches &&) = default;
 
-  explicit Batches(uint64_t max_size) {
-    pure_vertices.reserve(max_size);
-    others.reserve(max_size);
+  explicit Batches(uint64_t batch_size, uint64_t max_batches)
+      : batch_size(batch_size), pure_vertices_batch(batch_size, 0), others_batch(batch_size, 1) {
+    batch_index = 1;
+    pure_vertices.reserve(max_batches);
+    others.reserve(max_batches);
   }
   bool Empty() const { return pure_vertices.empty() && others.empty(); }
 
+  void AddQuery(query::Query query) {
+    auto is_pure_vertex_query = [](const query::Query &query) {
+      return query.info->has_create && !query.info->has_match && !query.info->has_merge;
+    };
+    if (is_pure_vertex_query(query)) {
+      if (pure_vertices_batch.queries.size() < batch_size) {
+        pure_vertices_batch.queries.emplace_back(std::move(query));
+      } else {
+        batch_index += 1;
+        pure_vertices.emplace_back(std::move(pure_vertices_batch));
+        pure_vertices_batch = query::Batch(batch_size, batch_index);
+        pure_vertices_batch.queries.emplace_back(std::move(query));
+      }
+    } else {
+      if (others_batch.queries.size() < batch_size) {
+        others_batch.queries.emplace_back(std::move(query));
+      } else {
+        batch_index += 1;
+        others.emplace_back(std::move(others_batch));
+        others_batch = query::Batch(batch_size, batch_index);
+        others_batch.queries.emplace_back(std::move(query));
+      }
+    }
+  }
+
+  // Add last batch if it's missing!
+  void Finalize() {
+    if (pure_vertices_batch.queries.size() > 0 && pure_vertices_batch.queries.size() < batch_size) {
+      pure_vertices.emplace_back(std::move(pure_vertices_batch));
+    }
+    if (others_batch.queries.size() > 0 && others_batch.queries.size() < batch_size) {
+      others.emplace_back(std::move(others_batch));
+    }
+  }
+
+  uint64_t VertexQueryNo() const {
+    uint64_t no = 0;
+    for (const auto &b : pure_vertices) {
+      no += b.queries.size();
+    }
+    return no;
+  }
+  uint64_t OthersNo() const {
+    uint64_t no = 0;
+    for (const auto &b : others) {
+      no += b.queries.size();
+    }
+    return no;
+  }
+  uint64_t TotalQueryNo() const { return VertexQueryNo() + OthersNo(); }
+
+  uint64_t batch_size;
+  uint64_t batch_index{0};
+  query::Batch pure_vertices_batch;
+  query::Batch others_batch;
   std::vector<query::Batch> pure_vertices;
   std::vector<query::Batch> others;
 };
+
+inline std::ostream &operator<<(std::ostream &os, const Batches &bs) {
+  os << "Batches .pure_vertices " << bs.pure_vertices.size() << " .others " << bs.others.size() << '\n';
+  os << "  pure_vertices" << '\n';
+  for (const auto &b : bs.pure_vertices) {
+    os << "  " << b.queries.size() << '\n';
+  }
+  os << "  others" << '\n';
+  for (const auto &b : bs.others) {
+    os << "  " << b.queries.size() << '\n';
+  }
+  return os;
+}
 
 struct BatchExecutionContext {
   BatchExecutionContext() = delete;
@@ -94,9 +153,7 @@ struct BatchExecutionContext {
 Batches FetchBatches(BatchExecutionContext &execution_context) {
   // TODO(gitbuda): Query index in FetchBatches is misleading -> rename.
   uint64_t query_index = 0;
-  uint64_t batch_index = 0;
-  query::Batch batch(execution_context.batch_size, batch_index);
-  Batches batches(execution_context.max_batches);
+  Batches batches(execution_context.batch_size, execution_context.max_batches);
   while (true) {
     if (query_index + 1 >= execution_context.batch_size * execution_context.max_batches) {
       break;
@@ -109,49 +166,18 @@ Batches FetchBatches(BatchExecutionContext &execution_context) {
       continue;
     }
     query_index += 1;
-    // TODO(gitbuda): Any processing Batch::apply(query) logic could be moved into the batch.
-    auto updata_batch_type = [](const query::Query &query, query::Batch &batch) {
-      batch.has_pure_nodes =
-          batch.has_pure_nodes || (query.info->has_create && !query.info->has_match && !query.info->has_merge);
-    };
-    if (batch.queries.size() < execution_context.batch_size) {
-      // TODO(gitbuda): Duplicated "batch type" logic -> centralize.
-      updata_batch_type(*query, batch);
-      batch.queries.emplace_back(std::move(*query));
-    } else {
-      batch_index += 1;
-      // TODO(gitbuda): Duplicated batches routing logic -> centralize.
-      if (batch.has_pure_nodes) {
-        batches.pure_vertices.emplace_back(std::move(batch));
-      } else {
-        batches.others.emplace_back(std::move(batch));
-      }
-      batch = query::Batch(execution_context.batch_size, batch_index);
-      // TODO(gitbuda): Duplicated "batch type" logic -> centralize.
-      updata_batch_type(*query, batch);
-      batch.queries.emplace_back(std::move(*query));
-    }
+    batches.AddQuery(std::move(*query));
   }
-  // Add last batch if it's missing!
-  if (batch.queries.size() > 0 && batch.queries.size() < execution_context.batch_size) {
-    // TODO(gitbuda): Duplicated batches routing logic -> centralize.
-    if (batch.has_pure_nodes) {
-      batches.pure_vertices.emplace_back(std::move(batch));
-    } else {
-      batches.others.emplace_back(std::move(batch));
-    }
-  }
+  batches.Finalize();
   return batches;
 }
 
-// TODO(gitbuda): Implement ExecuteBatches function.
 /// returns the number of executed batches.
 uint64_t ExecuteBatchesParallel(std::vector<query::Batch> &batches, BatchExecutionContext &execution_context,
                                 const utils::bolt::Config &bolt_config) {
   if (batches.empty()) return 0;
   std::atomic<uint64_t> executed_batches = 0;
   while (true) {
-    std::cout << "EXECUTED BATCHES: " << executed_batches << std::endl;
     if (executed_batches.load() >= batches.size()) {
       break;
     }
@@ -180,15 +206,12 @@ uint64_t ExecuteBatchesParallel(std::vector<query::Batch> &batches, BatchExecuti
                                              &bolt_config, promise = std::move(shared_promise)]() mutable {
         auto &batch = batches.at(batch_i);
         if (batch.backoff > 1) {
-          // TODO(gitbuda): Replace with proper logging.
-          std::cout << "executing batch: " << batch.index << " sleeping for: " << batch.backoff << "ms" << std::endl;
           std::this_thread::sleep_for(std::chrono::milliseconds(batch.backoff));
         }
         auto ret = query::ExecuteBatch(execution_context.sessions[thread_i].get(), batch);
         if (ret.is_executed) {
           batch.is_executed = true;
           executed_batches++;
-          std::cout << "batch: " << batch_i << " done" << std::endl;
           promise->Fill(true);
         } else {
           batch.backoff *= 2;
@@ -218,21 +241,13 @@ uint64_t ExecuteBatchesParallel(std::vector<query::Batch> &batches, BatchExecuti
 
 int Run(const utils::bolt::Config &bolt_config) {
   BatchExecutionContext execution_context(100, 20, 16, bolt_config);
-  std::random_device rd;
-  std::default_random_engine rng(rd());
-  std::uniform_int_distribution<> dist(2, 10);
-  // TODO(gitbuda): shuffle is not suitable for analytics mode.
-  // dist(rng) // to generate random int
-  // std::shuffle(batches.begin(), batches.end(), rng);
-
   while (true) {
     auto batches = FetchBatches(execution_context);
     if (batches.Empty()) {
       break;
     }
-    auto pure_vertices_batch_executed = ExecuteBatchesParallel(batches.pure_vertices, execution_context, bolt_config);
-    auto others_batch_executed = ExecuteBatchesParallel(batches.others, execution_context, bolt_config);
-    std::cout << pure_vertices_batch_executed + others_batch_executed << " batches executed" << std::endl;
+    ExecuteBatchesParallel(batches.pure_vertices, execution_context, bolt_config);
+    ExecuteBatchesParallel(batches.others, execution_context, bolt_config);
   }
   return 0;
 }

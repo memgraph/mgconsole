@@ -178,8 +178,8 @@ void PrintValue(std::ostream &os, const mg_value *value);
 // then default_text would be set to MATCH for next query.
 static std::string mgconsole_global_default_text;
 // The following variables are used to track the line number and index (number specifying order) of the processed query.
-static int64_t mgconsole_global_line_number{0};
-static int64_t mgconsole_global_query_index{0};
+[[maybe_unused]] static int64_t mgconsole_global_line_number{0};
+[[maybe_unused]] static int64_t mgconsole_global_query_index{0};
 
 namespace console {
 
@@ -288,7 +288,7 @@ struct Batch {
   int64_t attempts = 0;
 
   // TODO(gitbuda): Batch::only_nodes is a hack -> change.
-  bool has_pure_nodes = false;
+  // bool has_pure_nodes = false;
 };
 void PrintBatchesInfo(const std::vector<Batch> &);
 
