@@ -33,17 +33,21 @@ struct CollectedClauses {
   bool has_merge{false};
   bool has_create_index{false};
   bool has_detach_delete{false};
+  bool has_remove{false};
+  bool has_drop_index{false};
 };
 
 // clang-format off
 enum class ClauseState {
-  NONE,                                  // CREATE_(
-  C, CR, CRE, CREA, CREAT, CREATE, CREATE_, CREATE_P,
-                                            CREATE_I, CREATE_IN, CREATE_IND, CREATE_INDE, CREATE_INDEX,
-  M, MA, MAT, MATC, MATCH,         MATCH_, MATCH_P,
-     ME, MER, MERG, MERGE,         MERGE_, MERGE_P,
-  D, DE, DET, DETA, DETAC, DETACH, DETACH_, DETACH_D, DETACH_DE, DETACH_DEL, DETACH_DELE, DETACH_DELET, DETACH_DELETE,
-  // TODO(gitbuda): DROP INDEX and )_REMOVE is missing.
+   NONE,                                  // CREATE_(
+   C, CR, CRE, CREA, CREAT, CREATE, CREATE_, CREATE_P,
+                                             CREATE_I, CREATE_IN, CREATE_IND, CREATE_INDE, CREATE_INDEX,
+   M, MA, MAT, MATC, MATCH,         MATCH_, MATCH_P,
+      ME, MER, MERG, MERGE,         MERGE_, MERGE_P,
+   D, DE, DET, DETA, DETAC, DETACH, DETACH_, DETACH_D, DETACH_DE, DETACH_DEL, DETACH_DELE, DETACH_DELET, DETACH_DELETE,
+      DR, DRO, DROP, DROP_, DROP_I, DROP_IN, DROP_IND, DROP_INDE, DROP_INDEX,
+// )_REMOVE
+   P, P_, P_R, P_RE, P_REM, P_REMO, P_REMOV, P_REMOVE,
 };
 // clang-format on
 
@@ -59,6 +63,10 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
       return ClauseState::MERGE_;
     } else if (state == ClauseState::DETACH) {
       return ClauseState::DETACH_;
+    } else if (state == ClauseState::DROP) {
+      return ClauseState::DROP_;
+    } else if (state == ClauseState::P) {
+      return ClauseState::P_;
     } else {
       return state;
     }
@@ -144,6 +152,40 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
   } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::DETACH_DELET) {
     return ClauseState::DETACH_DELETE;
 
+    // DROP INDEX
+  } else if (!*quote && (c == 'R' || c == 'r') && state == ClauseState::D) {
+    return ClauseState::DR;
+  } else if (!*quote && (c == 'O' || c == 'o') && state == ClauseState::DR) {
+    return ClauseState::DRO;
+  } else if (!*quote && (c == 'P' || c == 'p') && state == ClauseState::DRO) {
+    return ClauseState::DROP;
+  } else if (!*quote && (c == 'I' || c == 'i') && state == ClauseState::DROP_) {
+    return ClauseState::DROP_I;
+  } else if (!*quote && (c == 'N' || c == 'n') && state == ClauseState::DROP_I) {
+    return ClauseState::DROP_IN;
+  } else if (!*quote && (c == 'D' || c == 'd') && state == ClauseState::DROP_IN) {
+    return ClauseState::DROP_IND;
+  } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::DROP_IND) {
+    return ClauseState::DROP_INDE;
+  } else if (!*quote && (c == 'X' || c == 'x') && state == ClauseState::DROP_INDE) {
+    return ClauseState::DROP_INDEX;
+
+    // ) REMOVE
+  } else if (!*quote && c == ')' && state == ClauseState::NONE) {
+    return ClauseState::P;
+  } else if (!*quote && (c == 'R' || c == 'r') && state == ClauseState::P_) {
+    return ClauseState::P_R;
+  } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::P_R) {
+    return ClauseState::P_RE;
+  } else if (!*quote && (c == 'M' || c == 'm') && state == ClauseState::P_RE) {
+    return ClauseState::P_REM;
+  } else if (!*quote && (c == 'O' || c == 'o') && state == ClauseState::P_REM) {
+    return ClauseState::P_REMO;
+  } else if (!*quote && (c == 'V' || c == 'v') && state == ClauseState::P_REMO) {
+    return ClauseState::P_REMOV;
+  } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::P_REMOV) {
+    return ClauseState::P_REMOVE;
+
   } else {
     return ClauseState::NONE;
   }
@@ -160,8 +202,12 @@ inline std::ostream &operator<<(std::ostream &os, const ClauseState &s) {
     os << "CREATE_INDEX";
   } else if (s == ClauseState::DETACH_DELETE) {
     os << "DETACH_DELETE";
+  } else if (s == ClauseState::DROP_INDEX) {
+    os << "DROP_INDEX";
+  } else if (s == ClauseState::P_REMOVE) {
+    os << ")_REMOVE";
   } else {
-    os << "ClauseState";
+    os << "Some ClauseState";
   }
   return os;
 }

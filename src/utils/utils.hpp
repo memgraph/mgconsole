@@ -240,12 +240,15 @@ struct Line {
   std::string line;
 };
 
+// TODO(gitbuda): Try to merge QueryInfo with CollectedClauses.
 struct QueryInfo {
   bool has_create{false};
   bool has_match{false};
   bool has_merge{false};
   bool has_detach_delete{false};
   bool has_create_index{false};
+  bool has_drop_index{false};
+  bool has_remove{false};
 };
 
 inline std::optional<QueryInfo> QueryInfoFromParseLineInfo(const std::optional<console::ParseLineInfo> &line_info) {
@@ -258,6 +261,8 @@ inline std::optional<QueryInfo> QueryInfoFromParseLineInfo(const std::optional<c
         .has_merge = line_info->collected_clauses.has_merge,
         .has_detach_delete = line_info->collected_clauses.has_detach_delete,
         .has_create_index = line_info->collected_clauses.has_create_index,
+        .has_drop_index = line_info->collected_clauses.has_drop_index,
+        .has_remove = line_info->collected_clauses.has_remove,
     };
   } else {
     return std::nullopt;
