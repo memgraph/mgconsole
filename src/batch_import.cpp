@@ -40,80 +40,92 @@ struct Batches {
   Batches &operator=(Batches &&) = default;
 
   explicit Batches(uint64_t batch_size, uint64_t max_batches)
-      : batch_size(batch_size), pure_vertices_batch(batch_size, 0), others_batch(batch_size, 1) {
+      : batch_size(batch_size), vertices_batch(batch_size, 0), edges_batch(batch_size, 1) {
     batch_index = 1;
-    pure_vertices.reserve(max_batches);
-    others.reserve(max_batches);
+    vertex_batches.reserve(max_batches);
+    edge_batches.reserve(max_batches);
   }
-  bool Empty() const { return pure_vertices.empty() && others.empty(); }
+  bool Empty() const { return vertex_batches.empty() && edge_batches.empty(); }
 
   void AddQuery(query::Query query) {
-    auto is_pure_vertex_query = [](const query::Query &query) {
+    // TODO(gitbuda): The problem with AddQuery are all other queries -> fall back to serial.
+    auto is_pre_query = [](const query::Query &query) { return query.info->has_create_index; };
+    auto is_vertex_query = [](const query::Query &query) {
       return query.info->has_create && !query.info->has_match && !query.info->has_merge;
     };
-    if (is_pure_vertex_query(query)) {
-      if (pure_vertices_batch.queries.size() < batch_size) {
-        pure_vertices_batch.queries.emplace_back(std::move(query));
+    auto is_edge_query = [](const query::Query &query) { return query.info->has_match && query.info->has_create; };
+
+    if (is_pre_query(query)) {
+      pre_queries.emplace_back(std::move(query));
+    } else if (is_vertex_query(query)) {
+      if (vertices_batch.queries.size() < batch_size) {
+        vertices_batch.queries.emplace_back(std::move(query));
       } else {
         batch_index += 1;
-        pure_vertices.emplace_back(std::move(pure_vertices_batch));
-        pure_vertices_batch = query::Batch(batch_size, batch_index);
-        pure_vertices_batch.queries.emplace_back(std::move(query));
+        vertex_batches.emplace_back(std::move(vertices_batch));
+        vertices_batch = query::Batch(batch_size, batch_index);
+        vertices_batch.queries.emplace_back(std::move(query));
+      }
+    } else if (is_edge_query(query)) {
+      if (edges_batch.queries.size() < batch_size) {
+        edges_batch.queries.emplace_back(std::move(query));
+      } else {
+        batch_index += 1;
+        edge_batches.emplace_back(std::move(edges_batch));
+        edges_batch = query::Batch(batch_size, batch_index);
+        edges_batch.queries.emplace_back(std::move(query));
       }
     } else {
-      if (others_batch.queries.size() < batch_size) {
-        others_batch.queries.emplace_back(std::move(query));
-      } else {
-        batch_index += 1;
-        others.emplace_back(std::move(others_batch));
-        others_batch = query::Batch(batch_size, batch_index);
-        others_batch.queries.emplace_back(std::move(query));
-      }
+      post_queries.emplace_back(std::move(query));
     }
   }
 
   // Add last batch if it's missing!
   void Finalize() {
-    if (pure_vertices_batch.queries.size() > 0 && pure_vertices_batch.queries.size() < batch_size) {
-      pure_vertices.emplace_back(std::move(pure_vertices_batch));
+    if (vertices_batch.queries.size() > 0 && vertices_batch.queries.size() < batch_size) {
+      vertex_batches.emplace_back(std::move(vertices_batch));
     }
-    if (others_batch.queries.size() > 0 && others_batch.queries.size() < batch_size) {
-      others.emplace_back(std::move(others_batch));
+    if (edges_batch.queries.size() > 0 && edges_batch.queries.size() < batch_size) {
+      edge_batches.emplace_back(std::move(edges_batch));
     }
   }
 
   uint64_t VertexQueryNo() const {
     uint64_t no = 0;
-    for (const auto &b : pure_vertices) {
+    for (const auto &b : vertex_batches) {
       no += b.queries.size();
     }
     return no;
   }
-  uint64_t OthersNo() const {
+  uint64_t EdgesNo() const {
     uint64_t no = 0;
-    for (const auto &b : others) {
+    for (const auto &b : edge_batches) {
       no += b.queries.size();
     }
     return no;
   }
-  uint64_t TotalQueryNo() const { return VertexQueryNo() + OthersNo(); }
+  uint64_t TotalQueryNo() const { return VertexQueryNo() + EdgesNo(); }
 
   uint64_t batch_size;
   uint64_t batch_index{0};
-  query::Batch pure_vertices_batch;
-  query::Batch others_batch;
-  std::vector<query::Batch> pure_vertices;
-  std::vector<query::Batch> others;
+
+  // An assumption here that there is a few setup queryes.
+  std::vector<query::Query> pre_queries;
+  query::Batch vertices_batch;
+  query::Batch edges_batch;
+  std::vector<query::Batch> vertex_batches;
+  std::vector<query::Batch> edge_batches;
+  std::vector<query::Query> post_queries;
 };
 
 inline std::ostream &operator<<(std::ostream &os, const Batches &bs) {
-  os << "Batches .pure_vertices " << bs.pure_vertices.size() << " .others " << bs.others.size() << '\n';
-  os << "  pure_vertices" << '\n';
-  for (const auto &b : bs.pure_vertices) {
+  os << "Batches .vertex_batches " << bs.vertex_batches.size() << " .edge_batches " << bs.edge_batches.size() << '\n';
+  os << "  vertex_batches" << '\n';
+  for (const auto &b : bs.vertex_batches) {
     os << "  " << b.queries.size() << '\n';
   }
-  os << "  others" << '\n';
-  for (const auto &b : bs.others) {
+  os << "  edge_batches" << '\n';
+  for (const auto &b : bs.edge_batches) {
     os << "  " << b.queries.size() << '\n';
   }
   return os;
@@ -170,6 +182,14 @@ Batches FetchBatches(BatchExecutionContext &execution_context) {
   }
   batches.Finalize();
   return batches;
+}
+
+// TODO
+void ExecuteSerial(const std::vector<query::Query> &queries, BatchExecutionContext &context) {
+  for (const auto &query : queries) {
+    // TODO(gitbuda): Wrap ExecuteQuery in try-catch block.
+    query::ExecuteQuery(context.sessions[0].get(), query.query);
+  }
 }
 
 /// returns the number of executed batches.
@@ -246,8 +266,10 @@ int Run(const utils::bolt::Config &bolt_config) {
     if (batches.Empty()) {
       break;
     }
-    ExecuteBatchesParallel(batches.pure_vertices, execution_context, bolt_config);
-    ExecuteBatchesParallel(batches.others, execution_context, bolt_config);
+    ExecuteSerial(batches.pre_queries, execution_context);
+    ExecuteBatchesParallel(batches.vertex_batches, execution_context, bolt_config);
+    ExecuteBatchesParallel(batches.edge_batches, execution_context, bolt_config);
+    ExecuteSerial(batches.post_queries, execution_context);
   }
   return 0;
 }

@@ -37,7 +37,9 @@ int Run() {
               << "has_match: " << query->info->has_match << " "
               << "has_merge: " << query->info->has_merge << " "
               << "has_detach_delete: " << query->info->has_detach_delete << " "
-              << "has_create_index: " << query->info->has_create_index << " " << std::endl;
+              << "has_create_index: " << query->info->has_create_index << " "
+              << "has_drop_index: " << query->info->has_drop_index << " "
+              << "has_remove: " << query->info->has_remove << " " << std::endl;
     ++query_index;
   }
   std::cout << "Parsed " << query_index << " queries" << std::endl;
