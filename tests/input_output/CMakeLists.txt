@@ -14,4 +14,13 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-add_subdirectory(input_output)
+set(MEMGRAPH_PATH "/usr/lib/memgraph/memgraph" CACHE FILEPATH
+        "Path to Memgraph binary for client tests")
+
+add_test(NAME mgconsole-test
+        COMMAND ./run-tests.sh ${MEMGRAPH_PATH} ${PROJECT_BINARY_DIR}/src/mgconsole
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_test(NAME mgconsole-secure-test
+        COMMAND ./run-tests.sh --use-ssl ${MEMGRAPH_PATH} ${PROJECT_BINARY_DIR}/src/mgconsole
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})

@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # mgconsole - console client for Memgraph database
 # Copyright (C) 2016-2023 Memgraph Ltd. [https://memgraph.com]
 #
@@ -14,4 +16,4 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-add_subdirectory(input_output)
+echo "mgconsole benchmarks"
