@@ -259,8 +259,8 @@ uint64_t ExecuteBatchesParallel(std::vector<query::Batch> &batches, BatchExecuti
   return executed_batches.load();
 }
 
-int Run(const utils::bolt::Config &bolt_config, int batch_size) {
-  BatchExecutionContext execution_context(batch_size, 20, 16, bolt_config);
+int Run(const utils::bolt::Config &bolt_config, int batch_size, int workers_number) {
+  BatchExecutionContext execution_context(batch_size, workers_number, workers_number, bolt_config);
   while (true) {
     auto batches = FetchBatches(execution_context);
     if (batches.Empty()) {

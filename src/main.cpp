@@ -109,6 +109,8 @@ DEFINE_validator(import_mode, [](const char *, const std::string &value) {
   return false;
 });
 DEFINE_int32(batch_size, 1000, "A single batch size only when --import-mode=batched-parallel.");
+DEFINE_int32(workers_number, 16,
+             "The number of threads to execute batches in parallel, only when --import-mode=batched-parallel");
 DEFINE_bool(collect_parser_stats, true, "Collect parsing statistics only when --import-mode=parser");
 DEFINE_bool(print_parser_stats, true, "Print parser statistics for each query only when --import-mode=parser");
 
@@ -191,7 +193,7 @@ int main(int argc, char **argv) {
   } else if (FLAGS_import_mode == constants::kParserMode) {
     return mode::parsing::Run(FLAGS_collect_parser_stats, FLAGS_print_parser_stats);
   } else if (FLAGS_import_mode == constants::kBatchedParallel) {
-    return mode::batch_import::Run(bolt_config, FLAGS_batch_size);
+    return mode::batch_import::Run(bolt_config, FLAGS_batch_size, FLAGS_workers_number);
   } else if (FLAGS_import_mode == constants::kSerialMode) {
     return mode::serial_import::Run(bolt_config, csv_opts, output_opts);
   } else {

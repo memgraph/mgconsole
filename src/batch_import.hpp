@@ -34,6 +34,6 @@
 
 namespace mode::batch_import {
 
-int Run(const utils::bolt::Config &bolt_config, int batch_size);
+int Run(const utils::bolt::Config &bolt_config, int batch_size, int workers_number);
 
 }  // namespace mode::batch_import

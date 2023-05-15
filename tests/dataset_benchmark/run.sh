@@ -39,6 +39,7 @@ function measure_parsing {
 }
 
 function measure_serial_import {
+  dataset_cypherl="$1"
   echo "MATCH (n) DETACH DELETE n;" | $mgconsole_binary
   echo "$dataset_cypherl SERIAL TIME"
   time cat $dataset_cypherl | $mgconsole_binary --import-mode="serial"
@@ -46,6 +47,7 @@ function measure_serial_import {
 }
 
 function measure_batched_parallel_import {
+  dataset_cypherl="$1"
   echo "MATCH (n) DETACH DELETE n;" | $mgconsole_binary
   echo "$dataset_cypherl BATCH-PARALLEL TIME"
   time cat $dataset_cypherl | $mgconsole_binary --import-mode="batched-parallel"
@@ -58,5 +60,5 @@ for dataset_url in "${DATASETS[@]}"; do
   dataset_cypherl="$(basename $dataset_gz .gz)"
   wget $dataset_url -O $dataset_gz
   gzip -df $dataset_gz
-  measure_parsing $dataset_cypherl
+  measure_batched_parallel_import $dataset_cypherl
 done
