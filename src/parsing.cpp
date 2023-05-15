@@ -21,25 +21,27 @@ namespace mode::parsing {
 
 using namespace std::string_literals;
 
-int Run() {
+int Run(bool collect_parsing_stats, bool print_parser_stats) {
   int64_t query_index = 0;
   while (true) {
-    auto query = query::GetQuery(nullptr, true);
+    auto query = query::GetQuery(nullptr, collect_parsing_stats);
     if (!query) {
       break;
     }
     if (query->query.empty()) {
       continue;
     }
-    std::cout << "Line: " << query->line_number << " "
-              << "Index: " << query->index << " "
-              << "has_create: " << query->info->has_create << " "
-              << "has_match: " << query->info->has_match << " "
-              << "has_merge: " << query->info->has_merge << " "
-              << "has_detach_delete: " << query->info->has_detach_delete << " "
-              << "has_create_index: " << query->info->has_create_index << " "
-              << "has_drop_index: " << query->info->has_drop_index << " "
-              << "has_remove: " << query->info->has_remove << " " << std::endl;
+    if (collect_parsing_stats && print_parser_stats) {
+      std::cout << "Line: " << query->line_number << " "
+                << "Index: " << query->index << " "
+                << "has_create: " << query->info->has_create << " "
+                << "has_match: " << query->info->has_match << " "
+                << "has_merge: " << query->info->has_merge << " "
+                << "has_detach_delete: " << query->info->has_detach_delete << " "
+                << "has_create_index: " << query->info->has_create_index << " "
+                << "has_drop_index: " << query->info->has_drop_index << " "
+                << "has_remove: " << query->info->has_remove << " " << std::endl;
+    }
     ++query_index;
   }
   std::cout << "Parsed " << query_index << " queries" << std::endl;

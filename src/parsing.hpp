@@ -17,6 +17,6 @@
 
 namespace mode::parsing {
 
-int Run();
+int Run(bool collect_parser_stats, bool print_parser_stats);
 
 }  // namespace mode::parsing
