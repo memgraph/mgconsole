@@ -21,6 +21,8 @@ cd "$DIR"
 
 MGCONSOLE_BINARY="${MGCONSOLE_BINARY:-$DIR/../../build/src/mgconsole}"
 MGCONSOLE_SETUP="${MGCONSOLE_SETUP:-STORAGE MODE IN_MEMORY_ANALYTICAL;}"
+MGCONSOLE_BATCH_SIZE="${MGCONSOLE_BATCH_SIZE:-1000}"
+MGCONSOLE_WORKERS="${MGCONSOLE_WORKERS:-16}"
 
 TIMEFORMAT=%R
 DATASETS=(
@@ -57,7 +59,7 @@ measure_batched_parallel_import() {
   nodes=$1
   edges=$2
   echo "MATCH (n) DETACH DELETE n;" | $MGCONSOLE_BINARY
-  import_time=$( { time cat $dataset_cypherl | $MGCONSOLE_BINARY --import-mode="batched-parallel"; } 2>&1 )
+  import_time=$( { time cat $dataset_cypherl | $MGCONSOLE_BINARY --import-mode="batched-parallel" --batch-size=$MGCONSOLE_BATCH_SIZE --workers-number=$MGCONSOLE_WORKERS; } 2>&1 )
   echo "$import_time"
 }
 
@@ -71,14 +73,16 @@ for dataset in "${DATASETS[@]}"; do
     gzip -df $dataset_gz
   fi
 
+  echo "$dataset_cypherl serial import..."
   serial_import_time=$(measure_serial_import $dataset_cypherl $nodes $edges)
   check_dataset $nodes $edges
   serial_tx=$(echo "($nodes + $edges)/$serial_import_time" | bc -l)
 
+  echo "$dataset_cypherl parallel import..."
   parallel_import_time=$(measure_batched_parallel_import $dataset_cypherl $nodes $edges)
   check_dataset $nodes $edges
   parallel_tx=$(echo "($nodes + $edges)/$parallel_import_time" | bc -l)
 
-  echo "dataset | nodes | edges | serial (nodes+edges)/s | parallel (nodes+edges)/s"
-  echo "$dataset_cypherl | $nodes | $edges | $serial_tx | $parallel_tx"
+  echo "dataset | nodes | edges | serial (nodes+edges)/s | parallel (nodes+edges)/s | batch size | workers number"
+  echo "$dataset_cypherl | $nodes | $edges | $serial_tx | $parallel_tx | $MGCONSOLE_BATCH_SIZE | $MGCONSOLE_WORKERS"
 done

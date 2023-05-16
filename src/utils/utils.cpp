@@ -687,9 +687,8 @@ std::optional<std::string> GetLine() {
   return line;
 }
 
-// TODO(gitbuda): Implemente the ParseLineInfo when query spreads across many lines.
+// TODO(gitbuda): Test and implemente the ParseLineInfo when query spreads across many lines.
 ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, bool collect_info) {
-  // Parse line.
   bool is_done = false;
   std::stringstream parsed_line;
 
@@ -955,15 +954,9 @@ BatchResult ExecuteBatch(mg_session *session, const Batch &batch) {
       if (ret.stats) {
         auto const &stats = *ret.stats;
         if (stats.find("nodes-created") != stats.end()) {
-          if (stats.at("nodes-created") > 1) {
-            // std::cout << "NODES: " <<  stats.at("nodes-created") << std::endl;
-          }
           nodes_created += stats.at("nodes-created");
         }
         if (stats.find("relationships-created") != stats.end()) {
-          if (stats.at("relationships-created") > 1) {
-            // std::cout << "EDGES: " << stats.at("relationships-created") << std::endl;
-          }
           edges_created += stats.at("relationships-created");
         }
       }
@@ -973,7 +966,7 @@ BatchResult ExecuteBatch(mg_session *session, const Batch &batch) {
     mg_session_rollback_transaction(session, &result);
     return BatchResult{.is_executed = false};
   }
-  // TODO(gitbuda): Assumption 1 line -> 1+ create -> ensure user can't make a mistake.
+  // NOTE: An assumption here is that each query in a batch has at least one CREATE.
   if (nodes_created + edges_created >= batch.queries.size()) {
     mg_session_commit_transaction(session, &result);
   } else {

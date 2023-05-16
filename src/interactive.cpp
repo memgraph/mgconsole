@@ -92,7 +92,6 @@ int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool
 
   int num_retries = 3;
   auto session = MakeBoltSession(bolt_config);
-  // TODO(gitbuda): Refactor to become cleaner.
   if (session.get() == nullptr) {
     cleanup_resources();
     return 1;

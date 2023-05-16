@@ -240,7 +240,8 @@ struct Line {
   std::string line;
 };
 
-// TODO(gitbuda): Try to merge QueryInfo with CollectedClauses.
+// NOTE: In theory it's possible to merge QueryInfo and CollectedClauses because they are the same, but it's not clear
+// what would be the best, leaving as is.
 struct QueryInfo {
   bool has_create{false};
   bool has_match{false};
@@ -252,8 +253,8 @@ struct QueryInfo {
 };
 
 inline std::optional<QueryInfo> QueryInfoFromParseLineInfo(const std::optional<console::ParseLineInfo> &line_info) {
-  // TODO(gitbuda): This logic is wrong (correct only if there is a controlled input), after test change. Also make it
-  // work from the GetQuery() in all cases.
+  // NOTE: The logic here is correct only if there is a controlled input, change to make batched and parallel import
+  // non-experimental feature.
   if (line_info) {
     return QueryInfo{
         .has_create = line_info->collected_clauses.has_create,
@@ -291,9 +292,6 @@ struct Batch {
   bool is_executed = false;
   int64_t backoff = 1;
   int64_t attempts = 0;
-
-  // TODO(gitbuda): Batch::only_nodes is a hack -> change.
-  // bool has_pure_nodes = false;
 };
 void PrintBatchesInfo(const std::vector<Batch> &);
 
@@ -305,10 +303,6 @@ struct QueryResult {
   std::optional<std::map<std::string, std::int64_t>> stats;
   std::optional<std::map<std::string, double>> execution_info;
 };
-
-// std::ostream& operator<<(std::ostream& os, const QueryResult&) {
-//   return os;
-// }
 
 struct BatchResult {
   bool is_executed;

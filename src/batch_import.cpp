@@ -48,12 +48,23 @@ struct Batches {
   bool Empty() const { return vertex_batches.empty() && edge_batches.empty(); }
 
   void AddQuery(query::Query query) {
-    // TODO(gitbuda): The problem with AddQuery are all other queries -> fall back to serial.
-    auto is_pre_query = [](const query::Query &query) { return query.info->has_create_index; };
-    auto is_vertex_query = [](const query::Query &query) {
-      return query.info->has_create && !query.info->has_match && !query.info->has_merge;
+    // NOTE: Take a look at what info /ref QueryInfo contains.
+    auto is_pre_query = [](const query::Query &query) {
+      MG_ASSERT(query.info, "QueryInfo is an empty optional");
+      const auto &info = *query.info;
+      return info.has_create_index;
     };
-    auto is_edge_query = [](const query::Query &query) { return query.info->has_match && query.info->has_create; };
+    auto is_vertex_query = [](const query::Query &query) {
+      MG_ASSERT(query.info, "QueryInfo is an empty optional");
+      const auto &info = *query.info;
+      return info.has_create && !info.has_match && !info.has_merge && !info.has_detach_delete &&
+             !info.has_create_index && !info.has_drop_index && !info.has_remove;
+    };
+    auto is_edge_query = [](const query::Query &query) {
+      MG_ASSERT(query.info, "QueryInfo is an empty optional");
+      const auto &info = *query.info;
+      return info.has_match && info.has_create;
+    };
 
     if (is_pre_query(query)) {
       pre_queries.emplace_back(std::move(query));
@@ -147,15 +158,17 @@ struct BatchExecutionContext {
     sessions.reserve(max_concurrent_executions);
     for (uint64_t thread_i = 0; thread_i < max_concurrent_executions; ++thread_i) {
       sessions[thread_i] = MakeBoltSession(bolt_config);
-      // TODO(gitbuda): Handle failed connections required for the thread pool.
       if (!sessions[thread_i].get()) {
-        std::cout << "a session uninitialized" << std::endl;
+        MG_FAIL("a session uninitialized");
       }
     }
   }
 
+  /// A single batch size / number of queries in a single batch.
   uint64_t batch_size;
+  /// Max number of batches loaded inside RAM at any given time.
   uint64_t max_batches;
+  /// Size of the thread pool used to execute batches against the database.
   uint64_t max_concurrent_executions;
   utils::ThreadPool thread_pool{max_concurrent_executions};
   utils::Notifier notifier;
@@ -163,11 +176,10 @@ struct BatchExecutionContext {
 };
 
 Batches FetchBatches(BatchExecutionContext &execution_context) {
-  // TODO(gitbuda): Query index in FetchBatches is misleading -> rename.
-  uint64_t query_index = 0;
+  uint64_t query_number = 0;
   Batches batches(execution_context.batch_size, execution_context.max_batches);
   while (true) {
-    if (query_index + 1 >= execution_context.batch_size * execution_context.max_batches) {
+    if (query_number + 1 >= execution_context.batch_size * execution_context.max_batches) {
       break;
     }
     auto query = query::GetQuery(nullptr, true);
@@ -177,18 +189,24 @@ Batches FetchBatches(BatchExecutionContext &execution_context) {
     if (query->query.empty()) {
       continue;
     }
-    query_index += 1;
+    query_number += 1;
     batches.AddQuery(std::move(*query));
   }
   batches.Finalize();
   return batches;
 }
 
-// TODO
 void ExecuteSerial(const std::vector<query::Query> &queries, BatchExecutionContext &context) {
   for (const auto &query : queries) {
-    // TODO(gitbuda): Wrap ExecuteQuery in try-catch block.
-    query::ExecuteQuery(context.sessions[0].get(), query.query);
+    try {
+      query::ExecuteQuery(context.sessions[0].get(), query.query);
+    } catch (const utils::ClientQueryException &e) {
+      console::EchoFailure("Client received query exception", e.what());
+      MG_FAIL("Unable to ExecuteSerial");
+    } catch (const utils::ClientFatalException &e) {
+      console::EchoFailure("Client received connection exception", e.what());
+      MG_FAIL("Unable to ExecuteSerial");
+    }
   }
 }
 
@@ -234,6 +252,9 @@ uint64_t ExecuteBatchesParallel(std::vector<query::Batch> &batches, BatchExecuti
           executed_batches++;
           promise->Fill(true);
         } else {
+          // NOTE: The magic numbers here are here because the idea was to avoid serialization errors in the
+          // transactional import mode. They were picked in a specific context (playing with a specific dataset). It's
+          // definitely possible to improve.
           batch.backoff *= 2;
           if (batch.backoff > 100) {
             batch.backoff = 1;
@@ -241,7 +262,6 @@ uint64_t ExecuteBatchesParallel(std::vector<query::Batch> &batches, BatchExecuti
           batch.attempts += 1;
           promise->Fill(false);
         }
-        // TODO(gitbuda): session can end up in a bad state -> debug and fix
         if (mg_session_status(execution_context.sessions[thread_i].get()) == MG_SESSION_BAD) {
           execution_context.sessions[thread_i] = MakeBoltSession(bolt_config);
         }
@@ -260,15 +280,21 @@ uint64_t ExecuteBatchesParallel(std::vector<query::Batch> &batches, BatchExecuti
 }
 
 int Run(const utils::bolt::Config &bolt_config, int batch_size, int workers_number) {
+  // NOTE: In the execution context it's possible to define size of the thread pool + how many different batches are
+  // held in RAM at any given time. For simplicity of runtime flags, these to are set to the same value
+  // (workers_number).
   BatchExecutionContext execution_context(batch_size, workers_number, workers_number, bolt_config);
   while (true) {
     auto batches = FetchBatches(execution_context);
     if (batches.Empty()) {
       break;
     }
+    // Stuff like CREATE INDEX.
     ExecuteSerial(batches.pre_queries, execution_context);
+    // Vertices have to come first because edges depend on vertices.
     ExecuteBatchesParallel(batches.vertex_batches, execution_context, bolt_config);
     ExecuteBatchesParallel(batches.edge_batches, execution_context, bolt_config);
+    // Any cleanup queries.
     ExecuteSerial(batches.post_queries, execution_context);
   }
   return 0;
