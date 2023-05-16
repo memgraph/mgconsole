@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -e
 
 # mgconsole - console client for Memgraph database
 # Copyright (C) 2016-2023 Memgraph Ltd. [https://memgraph.com]
@@ -16,49 +16,69 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-# Environment setup
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$DIR"
 
-mgconsole_binary="$DIR/../../build/src/mgconsole"
-mgconsole_exec_before="STORAGE MODE IN_MEMORY_ANALYTICAL;"
+MGCONSOLE_BINARY="${MGCONSOLE_BINARY:-$DIR/../../build/src/mgconsole}"
+MGCONSOLE_SETUP="${MGCONSOLE_SETUP:-STORAGE MODE IN_MEMORY_ANALYTICAL;}"
 
+TIMEFORMAT=%R
 DATASETS=(
-  "https://download.memgraph.com/datasets/cora-scientific-publications/cora-scientific-publications.cypherl.gz"
-  "https://download.memgraph.com/datasets/marvel-cinematic-universe/marvel-cinematic-universe.cypherl.gz"
+  "https://download.memgraph.com/datasets/cora-scientific-publications/cora-scientific-publications.cypherl.gz 2708 5278"
+  "https://download.memgraph.com/datasets/marvel-cinematic-universe/marvel-cinematic-universe.cypherl.gz 21732 682943"
 )
 
-function check_mg_status {
-  echo "MATCH (n) RETURN count(n);" | $mgconsole_binary
-  echo "MATCH (n)-[r]->(m) RETURN count(r);" | $mgconsole_binary
+function check_dataset {
+  expected_nodes=$1
+  expected_edges=$2
+  actual_nodes=$(echo "MATCH (n) RETURN count(n);" | $MGCONSOLE_BINARY --output-format=csv | tail -n 1 | tr -d '"')
+  actual_edges=$(echo "MATCH (n)-[r]->(m) RETURN count(r);" | $MGCONSOLE_BINARY --output-format=csv | tail -n 1 | tr -d '"')
+  if [[ $expected_nodes != $actual_nodes ]]; then
+    echo "The number of nodes is wrong, expected: $expected_nodes actual: $actual_nodes"
+    exit 1
+  fi
+  if [[ $expected_edges != $actual_edges ]]; then
+    echo "The number of edges is wrong, expected: $expected_edges actual: $actual_edges"
+    exit 1
+  fi
 }
 
-function measure_parsing {
-  dataset_cypherl="$1"
-  time cat $dataset_cypherl | $mgconsole_binary --import-mode="parser"
+measure_serial_import() {
+  dataset_cypherl=$1
+  nodes=$1
+  edges=$2
+  echo "MATCH (n) DETACH DELETE n;" | $MGCONSOLE_BINARY
+  import_time=$( { time cat $dataset_cypherl | $MGCONSOLE_BINARY --import-mode="serial"; } 2>&1 )
+  echo "$import_time"
 }
 
-function measure_serial_import {
-  dataset_cypherl="$1"
-  echo "MATCH (n) DETACH DELETE n;" | $mgconsole_binary
-  echo "$dataset_cypherl SERIAL TIME"
-  time cat $dataset_cypherl | $mgconsole_binary --import-mode="serial"
-  check_mg_status
+measure_batched_parallel_import() {
+  dataset_cypherl=$1
+  nodes=$1
+  edges=$2
+  echo "MATCH (n) DETACH DELETE n;" | $MGCONSOLE_BINARY
+  import_time=$( { time cat $dataset_cypherl | $MGCONSOLE_BINARY --import-mode="batched-parallel"; } 2>&1 )
+  echo "$import_time"
 }
 
-function measure_batched_parallel_import {
-  dataset_cypherl="$1"
-  echo "MATCH (n) DETACH DELETE n;" | $mgconsole_binary
-  echo "$dataset_cypherl BATCH-PARALLEL TIME"
-  time cat $dataset_cypherl | $mgconsole_binary --import-mode="batched-parallel"
-  check_mg_status
-}
-
-echo "$mgconsole_exec_before" | $mgconsole_binary
-for dataset_url in "${DATASETS[@]}"; do
+echo "$MGCONSOLE_SETUP" | $MGCONSOLE_BINARY
+for dataset in "${DATASETS[@]}"; do
+  set -- $dataset; dataset_url=$1; nodes=$2; edges=$3
   dataset_gz="$(basename $dataset_url)"
   dataset_cypherl="$(basename $dataset_gz .gz)"
-  wget $dataset_url -O $dataset_gz
-  gzip -df $dataset_gz
-  measure_batched_parallel_import $dataset_cypherl
+  if [[ ! -f $dataset_cypherl ]]; then
+    wget $dataset_url -O $dataset_gz
+    gzip -df $dataset_gz
+  fi
+
+  serial_import_time=$(measure_serial_import $dataset_cypherl $nodes $edges)
+  check_dataset $nodes $edges
+  serial_tx=$(echo "($nodes + $edges)/$serial_import_time" | bc -l)
+
+  parallel_import_time=$(measure_batched_parallel_import $dataset_cypherl $nodes $edges)
+  check_dataset $nodes $edges
+  parallel_tx=$(echo "($nodes + $edges)/$parallel_import_time" | bc -l)
+
+  echo "dataset | nodes | edges | serial (nodes+edges)/s | parallel (nodes+edges)/s"
+  echo "$dataset_cypherl | $nodes | $edges | $serial_tx | $parallel_tx"
 done
