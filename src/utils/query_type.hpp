@@ -37,6 +37,26 @@ struct CollectedClauses {
   bool has_drop_index{false};
 };
 
+inline std::ostream &operator<<(std::ostream &os, const CollectedClauses &cc) {
+  os << "CollectedClauses: ";
+  if (cc.has_match) {
+    os << "HAS_MATCH ";
+  } else if (cc.has_create) {
+    os << "HAS_CREATE ";
+  } else if (cc.has_merge) {
+    os << "HAS_MERGE ";
+  } else if (cc.has_create_index) {
+    os << "HAS_CREATE_INDEX ";
+  } else if (cc.has_detach_delete) {
+    os << "HAS_DETACH_DELETE ";
+  } else if (cc.has_remove) {
+    os << "HAS_REMOVE ";
+  } else if (cc.has_drop_index) {
+    os << "HAS_DROP_INDEX ";
+  }
+  return os;
+}
+
 // clang-format off
 enum class ClauseState {
    NONE,                                  // CREATE_(

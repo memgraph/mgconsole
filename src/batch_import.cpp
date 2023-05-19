@@ -120,7 +120,7 @@ struct Batches {
   uint64_t batch_size;
   uint64_t batch_index{0};
 
-  // An assumption here that there is a few setup queryes.
+  // An assumption here that there is a few setup queries.
   std::vector<query::Query> pre_queries;
   query::Batch vertices_batch;
   query::Batch edges_batch;

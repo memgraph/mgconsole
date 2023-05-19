@@ -772,6 +772,8 @@ namespace query {
 std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info) {
   char quote = '\0';
   bool escaped = false;
+  std::optional<console::ParseLineInfo> line_info;
+
   auto ret = console::ParseLine(mgconsole_global_default_text, &quote, &escaped, collect_info);
   if (ret.is_done) {
     auto idx = ret.line.size() + 1;
@@ -781,9 +783,11 @@ std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info) {
                  .index = mgconsole_global_query_index,
                  .query = ret.line,
                  .info = QueryInfoFromParseLineInfo(ret.info)};
+  } else {
+    line_info = ret.info;
   }
+
   std::stringstream query;
-  std::optional<console::ParseLineInfo> line_info;
   std::optional<std::string> line;
   int line_cnt = 0;
   auto is_done = false;
@@ -812,7 +816,9 @@ std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info) {
     if (!line) return std::nullopt;
     if (line->empty()) continue;
     auto ret = console::ParseLine(*line, &quote, &escaped, collect_info);
-    line_info = std::move(ret.info);
+    if (collect_info) {
+      line_info = console::MergeParseLineInfo(line_info, ret.info);
+    }
     query << ret.line;
     auto char_count = ret.line.size();
     if (ret.is_done) {
