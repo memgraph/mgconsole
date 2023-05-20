@@ -37,6 +37,7 @@ constexpr const std::string_view kCommandDocs = ":docs";
 // Supported formats.
 constexpr const std::string_view kCsvFormat = "csv";
 constexpr const std::string_view kTabularFormat = "tabular";
+constexpr const std::string_view kCypherlFormat = "cypherl";
 
 // Supported modes.
 constexpr const std::string_view kSerialMode = "serial";

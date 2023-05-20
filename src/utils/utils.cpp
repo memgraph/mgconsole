@@ -1186,12 +1186,26 @@ void PrintCsv(const std::vector<std::string> &header, const std::vector<mg_memor
   }
 }
 
+void PrintCypherl(const std::vector<std::string> &header, const std::vector<mg_memory::MgListPtr> &records) {
+  MG_ASSERT(header.size() == 1, "Cypherl output format required exactly 1 output column.");
+  for (size_t record_i = 0; record_i < records.size(); ++record_i) {
+    const auto &fields = records[record_i];
+    for (uint32_t field_i = 0; field_i < mg_list_size(fields.get()); ++field_i) {
+      const auto *query_ptr = mg_value_string(mg_list_at(fields.get(), field_i));
+      auto query = std::string(mg_string_data(query_ptr), mg_string_size(query_ptr));
+      std::cout << query << std::endl;
+    }
+  }
+}
+
 void Output(const std::vector<std::string> &header, const std::vector<mg_memory::MgListPtr> &records,
             const OutputOptions &out_opts, const CsvOptions &csv_opts) {
   if (out_opts.output_format == constants::kTabularFormat) {
     PrintTabular(header, records, out_opts.fit_to_screen);
   } else if (out_opts.output_format == constants::kCsvFormat) {
     PrintCsv(header, records, csv_opts);
+  } else if (out_opts.output_format == constants::kCypherlFormat) {
+    PrintCypherl(header, records);
   }
 }
 
