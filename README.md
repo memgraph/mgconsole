@@ -11,7 +11,7 @@ To build and install mgconsole from source you will need:
   - CMake version >= 3.4
   - OpenSSL version >= 1.0.2
   - C compiler supporting C11
-  - C++ compiler supporting C++17
+  - C++ compiler supporting C++20
 
 To install compile dependencies on Debian / Ubuntu:
 
