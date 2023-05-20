@@ -123,6 +123,19 @@ memgraph> :quit
 Bye
 ```
 
+## Export & import into Memgraph
+
+An interesting use-case for `mgconsole` is exporting and importing data.
+You can close the loop by running the following example queries:
+
+```
+# Export to cypherl formatted data file
+echo "DUMP DATABASE;" | mgconsole --output-format=cypherl > data.cypherl
+
+# Import from cypherl file
+cat data.cypherl | mgconsole
+```
+
 ## Batched and parallelized import (EXPERIMENTAL)
 
 Since Memgraph v2 expects vertices to come first (vertices has to exist to
@@ -137,7 +150,7 @@ leverage parallelism in the best possible way.
 
 ```
 cat data.cypherl | mgconsole --import-mode=batched-parallel
-// STORAGE MODE IN_MEMORY_ANALYTICAL; is optional
+# STORAGE MODE IN_MEMORY_ANALYTICAL; is optional
 ```
 
 IMPORTANT NOTE: Inside the import file, vertices always have to come first
