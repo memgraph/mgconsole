@@ -15,4 +15,12 @@
 
 #pragma once
 
-static const char *version_string = "@PROJECT_VERSION@";
+#include "utils/bolt.hpp"
+#include "utils/utils.hpp"
+
+namespace mode::serial_import {
+
+int Run(const utils::bolt::Config &bolt_config, const format::CsvOptions &csv_opts,
+        const format::OutputOptions &output_opts);
+
+}  // namespace mode::serial_import

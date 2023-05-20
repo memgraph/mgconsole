@@ -28,7 +28,7 @@ set_target_properties(${REPLXX_LIBRARY} PROPERTIES
         IMPORTED_LOCATION ${REPLXX_LIBRARY_PATH})
 
 add_dependencies(${REPLXX_LIBRARY} replxx-proj)
-add_library(utils STATIC utils.cpp)
+add_library(utils STATIC utils.cpp thread_pool.cpp bolt.cpp)
 add_dependencies(utils replxx gflags mgclient)
 target_compile_definitions(utils PUBLIC MGCLIENT_STATIC_DEFINE)
 target_include_directories(utils PUBLIC ${REPLXX_INCLUDE_DIRS} ${GFLAGS_INCLUDE_DIRS} ${MGCLIENT_INCLUDE_DIRS})

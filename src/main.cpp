@@ -1,5 +1,6 @@
 // mgconsole - console client for Memgraph database
-// Copyright (C) 2016-2021 Memgraph Ltd. [https://memgraph.com]
+//
+// Copyright (C) 2016-2023 Memgraph Ltd. [https://memgraph.com]
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +22,7 @@
 #include <iostream>
 #include <optional>
 #include <thread>
+#include <unordered_map>
 
 #ifdef _WIN32
 
@@ -38,6 +40,11 @@
 #include <mgclient.h>
 #include <replxx.h>
 
+#include "batch_import.hpp"
+#include "interactive.hpp"
+#include "parsing.hpp"
+#include "serial_import.hpp"
+#include "utils/assert.hpp"
 #include "utils/constants.hpp"
 #include "utils/utils.hpp"
 #include "version.hpp"
@@ -53,6 +60,7 @@ DEFINE_string(username, "", "Username for the database");
 DEFINE_string(password, "", "Password for the database");
 DEFINE_bool(use_ssl, false, "Use SSL when connecting to the server.");
 
+// output
 DEFINE_bool(fit_to_screen, false, "Fit output width to screen width.");
 DEFINE_bool(term_colors, false, "Use terminal colors syntax highlighting.");
 DEFINE_string(output_format, "tabular",
@@ -86,6 +94,26 @@ DEFINE_bool(csv_doublequote, true,
 DEFINE_string(history, "~/.memgraph", "Use the specified directory for saving history.");
 DEFINE_bool(no_history, false, "Do not save history.");
 
+DEFINE_string(
+    import_mode, "serial",
+    "Import mode defines the way how the queries will be executed. `serial` mode will try to execute queries in the "
+    "specified input order. `batched-parallel` will batched and parallelize query execution. NOTE: batched-parallel is "
+    "an experimental feature, the behavior might be unexpected because it depends on how the underlying database "
+    "system is configured (e.g., in the transactional setup there might be many serialization errors, while in the "
+    "analytical setup, ordering of nodes/edges is very important. `parser` mode will just print info about the "
+    "provided queries. NOTE: `parser` mode won't execute any query against the underlying database system.");
+DEFINE_validator(import_mode, [](const char *, const std::string &value) {
+  if (value == constants::kSerialMode || value == constants::kBatchedParallel || value == constants::kParserMode) {
+    return true;
+  }
+  return false;
+});
+DEFINE_int32(batch_size, 1000, "A single batch size only when --import-mode=batched-parallel.");
+DEFINE_int32(workers_number, 32,
+             "The number of threads to execute batches in parallel, only when --import-mode=batched-parallel");
+DEFINE_bool(collect_parser_stats, true, "Collect parsing statistics only when --import-mode=parser");
+DEFINE_bool(print_parser_stats, true, "Print parser statistics for each query only when --import-mode=parser");
+
 DECLARE_int32(min_log_level);
 
 int main(int argc, char **argv) {
@@ -109,68 +137,6 @@ int main(int argc, char **argv) {
     console::EchoFailure("Internal error", "Couldn't initialize all the resources");
     return 1;
   }
-  Replxx *replxx_instance = InitAndSetupReplxx();
-
-  bool resources_cleaned_up = false;
-  auto cleanup_resources = [replxx_instance, &resources_cleaned_up]() {
-    if (!resources_cleaned_up) {
-      replxx_end(replxx_instance);
-      resources_cleaned_up = true;
-    }
-  };
-
-  auto password = FLAGS_password;
-  if (console::is_a_tty(STDIN_FILENO) && FLAGS_username.size() > 0 && password.size() == 0) {
-    console::SetStdinEcho(false);
-    auto password_optional = console::ReadLine(replxx_instance, "Password: ");
-    std::cout << std::endl;
-    if (password_optional) {
-      password = *password_optional;
-    } else {
-      console::EchoFailure("Password not submitted", "Requested password for username " + FLAGS_username);
-      cleanup_resources();
-      return 1;
-    }
-    console::SetStdinEcho(true);
-  }
-
-  fs::path history_dir = FLAGS_history;
-  if (FLAGS_history == (constants::kDefaultHistoryBaseDir + "/" + constants::kDefaultHistoryMemgraphDir)) {
-    // Fetch home dir for user.
-    history_dir = utils::GetUserHomeDir() / constants::kDefaultHistoryMemgraphDir;
-  }
-  if (!utils::EnsureDir(history_dir)) {
-    console::EchoFailure("History directory doesn't exist", history_dir.string());
-    // Should program exit here or just continue with warning message?
-    cleanup_resources();
-    return 1;
-  }
-  fs::path history_file = history_dir / constants::kHistoryFilename;
-  // Read history file.
-  if (fs::exists(history_file)) {
-    auto ret = replxx_history_load(replxx_instance, history_file.string().c_str());
-    if (ret != 0) {
-      console::EchoFailure("Unable to read history file", history_file.string());
-      // Should program exit here or just continue with warning message?
-      cleanup_resources();
-      return 1;
-    }
-  }
-
-  // Save history function. Used to save replxx history after each query.
-  auto save_history = [&history_file, replxx_instance, &cleanup_resources] {
-    if (!FLAGS_no_history) {
-      // If there was no history, create history file.
-      // Otherwise, append to existing history.
-      auto ret = replxx_history_save(replxx_instance, history_file.string().c_str());
-      if (ret != 0) {
-        console::EchoFailure("Unable to save history to file", history_file.string());
-        cleanup_resources();
-        return 1;
-      }
-    }
-    return 0;
-  };
 
 #ifdef _WIN32
 // ToDo(the-joksim):
@@ -213,116 +179,26 @@ int main(int argc, char **argv) {
 
 #endif /* _WIN32 */
 
-  std::string bolt_client_version = "mg/"s + gflags::VersionString();
+  utils::bolt::Config bolt_config{
+      .host = FLAGS_host,
+      .port = FLAGS_port,
+      .username = FLAGS_username,
+      .password = FLAGS_password,
+      .use_ssl = FLAGS_use_ssl,
+  };
 
-  mg_memory::MgSessionParamsPtr params = mg_memory::MakeCustomUnique<mg_session_params>(mg_session_params_make());
-  if (!params) {
-    console::EchoFailure("Connection failure", "out of memory, failed to allocate `mg_session_params` struct");
-  }
-  mg_session_params_set_host(params.get(), FLAGS_host.c_str());
-  mg_session_params_set_port(params.get(), FLAGS_port);
-  if (!FLAGS_username.empty()) {
-    mg_session_params_set_username(params.get(), FLAGS_username.c_str());
-    mg_session_params_set_password(params.get(), password.c_str());
-  }
-  mg_session_params_set_user_agent(params.get(), bolt_client_version.c_str());
-  mg_session_params_set_sslmode(params.get(), FLAGS_use_ssl ? MG_SSLMODE_REQUIRE : MG_SSLMODE_DISABLE);
-
-  mg_memory::MgSessionPtr session = mg_memory::MakeCustomUnique<mg_session>(nullptr);
-  {
-    mg_session *session_tmp;
-    int status = mg_connect(params.get(), &session_tmp);
-    session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
-    if (status != 0) {
-      console::EchoFailure("Connection failure", mg_session_error(session.get()));
-      cleanup_resources();
-      return 1;
-    }
+  if (console::is_a_tty(STDIN_FILENO)) {  // INTERACTIVE
+    return mode::interactive::Run(bolt_config, FLAGS_history, FLAGS_no_history, FLAGS_verbose_execution_info, csv_opts,
+                                  output_opts);
+  } else if (FLAGS_import_mode == constants::kParserMode) {
+    return mode::parsing::Run(FLAGS_collect_parser_stats, FLAGS_print_parser_stats);
+  } else if (FLAGS_import_mode == constants::kBatchedParallel) {
+    return mode::batch_import::Run(bolt_config, FLAGS_batch_size, FLAGS_workers_number);
+  } else if (FLAGS_import_mode == constants::kSerialMode) {
+    return mode::serial_import::Run(bolt_config, csv_opts, output_opts);
+  } else {
+    MG_FAIL("Unknown import mode!");
   }
 
-  console::EchoInfo("mgconsole "s + gflags::VersionString());
-  console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" + std::to_string(FLAGS_port) + "'");
-  console::EchoInfo("Type :help for shell usage");
-  console::EchoInfo("Quit the shell by typing Ctrl-D(eof) or :quit");
-  int num_retries = 3;
-  while (true) {
-    auto query = query::GetQuery(replxx_instance);
-    if (!query) {
-      console::EchoInfo("Bye");
-      break;
-    }
-    if (query->empty()) {
-      continue;
-    }
-    try {
-      auto ret = query::ExecuteQuery(session.get(), *query);
-      if (ret.records.size() > 0) {
-        Output(ret.header, ret.records, output_opts, csv_opts);
-      }
-      if (console::is_a_tty(STDIN_FILENO)) {
-        std::string summary;
-        if (ret.records.size() == 0) {
-          summary = "Empty set";
-        } else if (ret.records.size() == 1) {
-          summary = std::to_string(ret.records.size()) + " row in set";
-        } else {
-          summary = std::to_string(ret.records.size()) + " rows in set";
-        }
-        std::printf("%s (round trip in %.3lf sec)\n", summary.c_str(), ret.wall_time.count());
-        auto history_ret = save_history();
-        if (history_ret != 0) {
-          cleanup_resources();
-          return history_ret;
-        }
-        if (ret.notification) {
-          console::EchoNotification(ret.notification.value());
-        }
-        if (ret.stats) {
-          console::EchoStats(ret.stats.value());
-        }
-        if (FLAGS_verbose_execution_info && ret.execution_info) {
-          console::EchoExecutionInfo(ret.execution_info.value());
-        }
-      }
-    } catch (const utils::ClientQueryException &e) {
-      if (!console::is_a_tty(STDIN_FILENO)) {
-        console::EchoFailure("Failed query", *query);
-      }
-      console::EchoFailure("Client received exception", e.what());
-      if (!console::is_a_tty(STDIN_FILENO)) {
-        cleanup_resources();
-        return 1;
-      }
-    } catch (const utils::ClientFatalException &e) {
-      console::EchoFailure("Client received exception", e.what());
-      console::EchoInfo("Trying to reconnect");
-      bool is_connected = false;
-      session.reset(nullptr);
-      while (num_retries > 0) {
-        --num_retries;
-        mg_session *session_tmp;
-        int status = mg_connect(params.get(), &session_tmp);
-        session = mg_memory::MakeCustomUnique<mg_session>(session_tmp);
-        if (status != 0) {
-          console::EchoFailure("Connection failure", mg_session_error(session.get()));
-          session.reset(nullptr);
-        } else {
-          is_connected = true;
-          break;
-        }
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-      }
-      if (is_connected) {
-        num_retries = 3;
-        console::EchoInfo("Connected to 'memgraph://" + FLAGS_host + ":" + std::to_string(FLAGS_port) + "'");
-      } else {
-        console::EchoFailure("Couldn't connect to",
-                             "'memgraph://" + FLAGS_host + ":" + std::to_string(FLAGS_port) + "'");
-        cleanup_resources();
-        return 1;
-      }
-    }
-  }
-  cleanup_resources();
   return 0;
 }

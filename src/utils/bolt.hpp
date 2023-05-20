@@ -15,4 +15,18 @@
 
 #pragma once
 
-static const char *version_string = "@PROJECT_VERSION@";
+#include "utils.hpp"
+
+namespace utils::bolt {
+
+struct Config {
+  std::string host;
+  int port;
+  std::string username;
+  std::string password;
+  bool use_ssl;
+};
+
+mg_memory::MgSessionPtr MakeBoltSession(const Config &config);
+
+}  // namespace utils::bolt

@@ -122,3 +122,49 @@ memgraph> MATCH (t:Turtle) RETURN t;
 memgraph> :quit
 Bye
 ```
+
+## Batched and parallelized import (EXPERIMENTAL)
+
+Since Memgraph v2 expects vertices to come first (vertices has to exist to
+create an edge), and serial import can be slow, the goal with batching and
+parallelization is to improve the import speed when ingesting queries in the
+text format.
+
+To enable faster import, use `--import-mode="batched-parallel"` flag when
+running `mgconsole` + put Memgraph into the `STORAGE MODE
+IN_MEMORY_ANALYTICAL;` (could be part of the `.cypherl` file) to be able to
+leverage parallelism in the best possible way.
+
+```
+cat data.cypherl | mgconsole --import-mode=batched-parallel
+// STORAGE MODE IN_MEMORY_ANALYTICAL; is optional
+```
+
+IMPORTANT NOTE: Inside the import file, vertices always have to come first
+because `mgconsole` will read the file serially and chunk by chunk.
+
+Additional useful runtime flags are:
+  - `--batch-size=10000`
+  - `--workers-number=64`
+
+### Memgraph in the TRANSACTIONAL mode
+
+In [TRANSACTIONAL
+mode](https://memgraph.com/docs/memgraph/reference-guide/storage-modes#transactional-storage-mode-default),
+batching and parallelization might help, but since there are high chances for
+serialization errors, the execution times might be similar or even slower
+compared to the serial mode.
+
+### Memgraph in ANALYTICAL mode
+
+In [ANALYTICAL
+mode](https://memgraph.com/docs/memgraph/reference-guide/storage-modes#analytical-storage-mode),
+batching and parallelization will mostly likely help massively because
+serialization errors don't exist, but since Memgraph will accept any query
+(e.g., on edge create failure, vertices could be created multiple times),
+special care is required:
+  - queries with pure create vertices have to be specified first
+  - please use only import statements using simple MATCH, CREATE, MERGE
+    statements.
+
+If you encounter any issue, please create a new [mgconsole Github issue](https://github.com/memgraph/mgconsole/issues).

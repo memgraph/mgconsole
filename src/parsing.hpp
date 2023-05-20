@@ -15,4 +15,8 @@
 
 #pragma once
 
-static const char *version_string = "@PROJECT_VERSION@";
+namespace mode::parsing {
+
+int Run(bool collect_parser_stats, bool print_parser_stats);
+
+}  // namespace mode::parsing

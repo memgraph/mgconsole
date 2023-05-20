@@ -15,4 +15,8 @@
 
 #pragma once
 
-static const char *version_string = "@PROJECT_VERSION@";
+// #define NDEBUG
+#include <cassert>
+// Use (void) to silence unused warnings.
+#define MG_ASSERT(exp, msg) assert(((void)msg, exp))
+#define MG_FAIL(msg) assert(((void)msg, false))

@@ -15,4 +15,12 @@
 
 #pragma once
 
-static const char *version_string = "@PROJECT_VERSION@";
+#include "utils/bolt.hpp"
+#include "utils/utils.hpp"
+
+namespace mode::interactive {
+
+int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool no_history, bool verbose_execution_info,
+        const format::CsvOptions &csv_opts, const format::OutputOptions &output_opts);
+
+}  // namespace mode::interactive

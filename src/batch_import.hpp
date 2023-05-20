@@ -15,4 +15,16 @@
 
 #pragma once
 
-static const char *version_string = "@PROJECT_VERSION@";
+#include "utils/bolt.hpp"
+
+// NOTE: Batched and parallel execution has many practical issue.
+//   * In the transactional mode, there are many serialization errors -> check if a transaction was successfully
+//     executed + retry are required.
+//   * In the analytical mode, almost any query will pass (e.g. edge creation won't fail if nodes are not there) / it's
+//     hard to detect any issue -> ordering of nodes and edges is the only way to correctly import data.
+
+namespace mode::batch_import {
+
+int Run(const utils::bolt::Config &bolt_config, int batch_size, int workers_number);
+
+}  // namespace mode::batch_import

@@ -86,7 +86,7 @@ add_dependencies(${GFLAGS_LIBRARY} gflags-proj)
 ExternalProject_Add(mgclient-proj
   PREFIX mgclient
   GIT_REPOSITORY https://github.com/memgraph/mgclient.git
-  GIT_TAG v1.3.0
+  GIT_TAG v1.4.1
   CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
   "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
   "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
@@ -115,7 +115,7 @@ if(MGCONSOLE_ON_WINDOWS)
   add_compile_options(-Wno-narrowing)
 endif()
 
-add_executable(mgconsole main.cpp)
+add_executable(mgconsole main.cpp interactive.cpp serial_import.cpp batch_import.cpp parsing.cpp)
 target_compile_definitions(mgconsole PRIVATE MGCLIENT_STATIC_DEFINE)
 target_include_directories(mgconsole
   PRIVATE

@@ -1,3 +1,18 @@
+// Copyright (C) 2016-2023 Memgraph Ltd. [https://memgraph.com]
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 #include <string.h>
 
 #include <algorithm>
@@ -11,6 +26,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include "assert.hpp"
 
 #ifdef __APPLE__
 
@@ -40,6 +56,7 @@
 #include "constants.hpp"
 #include "date.hpp"
 #include "mgclient.h"
+#include "query_type.hpp"
 #include "utils.hpp"
 
 namespace utils {
@@ -665,16 +682,55 @@ std::optional<std::string> GetLine() {
   std::string line;
   std::getline(std::cin, line);
   if (std::cin.eof()) return std::nullopt;
-  line = default_text + line;
-  default_text = "";
+  mgconsole_global_line_number++;
+  line = mgconsole_global_default_text + line;
+  mgconsole_global_default_text = "";
   return line;
 }
 
-std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, bool *escaped) {
-  // Parse line.
+ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, bool collect_info) {
   bool is_done = false;
   std::stringstream parsed_line;
+
+  query::line::CollectedClauses collected_clauses;
+  query::line::ClauseState clause_state = query::line::ClauseState::NONE;
   for (auto c : line) {
+    if (collect_info) {
+      clause_state = query::line::NextState(quote, c, clause_state);
+      if (clause_state == query::line::ClauseState::MATCH) {
+        collected_clauses.has_match = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
+      if (clause_state == query::line::ClauseState::MERGE_P) {
+        collected_clauses.has_merge = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
+      if (clause_state == query::line::ClauseState::CREATE_P) {
+        collected_clauses.has_create = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
+      if (clause_state == query::line::ClauseState::CREATE_INDEX) {
+        collected_clauses.has_create_index = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
+      if (clause_state == query::line::ClauseState::DETACH_DELETE) {
+        collected_clauses.has_detach_delete = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
+      if (clause_state == query::line::ClauseState::DROP_INDEX) {
+        collected_clauses.has_drop_index = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
+      if (clause_state == query::line::ClauseState::P_REMOVE) {
+        collected_clauses.has_remove = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
+      if (clause_state == query::line::ClauseState::STORAGE_MODE) {
+        collected_clauses.has_storage_mode = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
+    }
+
     if (*quote && c == '\\') {
       // Escaping is only used inside quotation to not end the quote
       // when quotation char is escaped.
@@ -690,15 +746,20 @@ std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, boo
     parsed_line << c;
     *escaped = false;
   }
-  return std::make_pair(parsed_line.str(), is_done);
+  if (collect_info) {
+    return ParseLineResult{
+        .line = parsed_line.str(), .is_done = is_done, .info = ParseLineInfo{.collected_clauses = collected_clauses}};
+  } else {
+    return ParseLineResult{.line = parsed_line.str(), .is_done = is_done};
+  }
 }
 
 std::optional<std::string> ReadLine(Replxx *replxx_instance, const std::string &prompt) {
-  if (!default_text.empty()) {
-    replxx_set_preload_buffer(replxx_instance, default_text.c_str());
+  if (!mgconsole_global_default_text.empty()) {
+    replxx_set_preload_buffer(replxx_instance, mgconsole_global_default_text.c_str());
   }
   const char *line = replxx_input(replxx_instance, prompt.c_str());
-  default_text = "";
+  mgconsole_global_default_text = "";
   if (!line) {
     return std::nullopt;
   }
@@ -712,15 +773,24 @@ std::optional<std::string> ReadLine(Replxx *replxx_instance, const std::string &
 
 namespace query {
 
-std::optional<std::string> GetQuery(Replxx *replxx_instance) {
+std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info) {
   char quote = '\0';
   bool escaped = false;
-  auto ret = console::ParseLine(default_text, &quote, &escaped);
-  if (ret.second) {
-    auto idx = ret.first.size() + 1;
-    default_text = utils::Trim(default_text.substr(idx));
-    return ret.first;
+  std::optional<console::ParseLineInfo> line_info;
+
+  auto ret = console::ParseLine(mgconsole_global_default_text, &quote, &escaped, collect_info);
+  if (ret.is_done) {
+    auto idx = ret.line.size() + 1;
+    mgconsole_global_default_text = utils::Trim(mgconsole_global_default_text.substr(idx));
+    mgconsole_global_query_index++;
+    return Query{.line_number = mgconsole_global_line_number,
+                 .index = mgconsole_global_query_index,
+                 .query = ret.line,
+                 .info = QueryInfoFromParseLineInfo(ret.info)};
+  } else {
+    line_info = ret.info;
   }
+
   std::stringstream query;
   std::optional<std::string> line;
   int line_cnt = 0;
@@ -736,23 +806,28 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
           return std::nullopt;
         } else if (trimmed_line == constants::kCommandHelp) {
           console::PrintHelp();
-          return "";
+          return Query{};
         } else if (trimmed_line == constants::kCommandDocs) {
           console::PrintDocs();
-          return "";
+          return Query{};
         } else {
           console::EchoFailure("Unsupported command", trimmed_line);
           console::PrintHelp();
-          return "";
+          return Query{};
         }
       }
     }
     if (!line) return std::nullopt;
     if (line->empty()) continue;
-    auto ret = console::ParseLine(*line, &quote, &escaped);
-    query << ret.first;
-    auto char_count = ret.first.size();
-    if (ret.second) {
+    auto ret = console::ParseLine(*line, &quote, &escaped, collect_info);
+    if (collect_info) {
+      MG_ASSERT(line_info, "line_info should be defined");
+      MG_ASSERT(ret.info, "returned line info should be defined");
+      line_info = console::MergeParseLineInfo(*line_info, *ret.info);
+    }
+    query << ret.line;
+    auto char_count = ret.line.size();
+    if (ret.is_done) {
       is_done = true;
       char_count += 1;  // ';' sign
     } else {
@@ -760,14 +835,22 @@ std::optional<std::string> GetQuery(Replxx *replxx_instance) {
       query << "\n";
     }
     if (char_count < line->size()) {
-      default_text = utils::Trim(line->substr(char_count));
+      mgconsole_global_default_text = utils::Trim(line->substr(char_count));
     }
     ++line_cnt;
   }
-  return query.str();
+  mgconsole_global_query_index++;
+  return Query{.line_number = mgconsole_global_line_number,
+               .index = mgconsole_global_query_index,
+               .query = query.str(),
+               .info = QueryInfoFromParseLineInfo(line_info)};
 }
 
-QueryData ExecuteQuery(mg_session *session, const std::string &query) {
+void PrintQueryInfo(const Query &query) {
+  std::cout << "line: " << query.line_number << " index: " << query.index << " query: " << query.query << std::endl;
+}
+
+QueryResult ExecuteQuery(mg_session *session, const std::string &query) {
   int status = mg_session_run(session, query.c_str(), nullptr, nullptr, nullptr, nullptr);
   auto start = std::chrono::system_clock::now();
   if (status != 0) {
@@ -798,7 +881,7 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
     }
   }
 
-  QueryData ret;
+  QueryResult ret;
   mg_result *result;
   while ((status = mg_session_fetch(session, &result)) == 1) {
     ret.records.push_back(mg_memory::MakeCustomUnique<mg_list>(mg_list_copy(mg_result_row(result))));
@@ -854,6 +937,57 @@ QueryData ExecuteQuery(mg_session *session, const std::string &query) {
 
   ret.wall_time = std::chrono::system_clock::now() - start;
   return ret;
+}
+
+void PrintBatchesInfo(const std::vector<Batch> &batches) {
+  for (const auto &batch : batches) {
+    std::cout << "batch: " << batch.index << " capacity: " << batch.capacity << " size: " << batch.queries.size()
+              << std::endl;
+  }
+}
+
+BatchResult ExecuteBatch(mg_session *session, const Batch &batch) {
+  if (session == nullptr) {
+    std::cout << "Session uninitialized" << std::endl;
+    return BatchResult{.is_executed = false};
+  }
+  mg_result *result;
+  auto begin_status = mg_session_begin_transaction(session, nullptr);
+  if (begin_status != 0) {
+    auto error = mg_session_error(session);
+    std::cout << "Unable to start transaction: " << error << std::endl;
+    return BatchResult{.is_executed = false};
+  }
+  uint64_t nodes_created = 0;
+  uint64_t edges_created = 0;
+  try {
+    for (const auto &query : batch.queries) {
+      auto ret = ExecuteQuery(session, query.query);
+      if (ret.stats) {
+        auto const &stats = *ret.stats;
+        if (stats.find("nodes-created") != stats.end()) {
+          nodes_created += stats.at("nodes-created");
+        }
+        if (stats.find("relationships-created") != stats.end()) {
+          edges_created += stats.at("relationships-created");
+        }
+      }
+    }
+  } catch (std::exception &e) {
+    std::cout << "Execution exception " << e.what() << std::endl;
+    mg_session_rollback_transaction(session, &result);
+    return BatchResult{.is_executed = false};
+  }
+  // NOTE: An assumption here is that each query in a batch has at least one CREATE.
+  if (nodes_created + edges_created >= batch.queries.size()) {
+    mg_session_commit_transaction(session, &result);
+  } else {
+    std::cout << "Rollback transaction because nodes+edges=" << nodes_created + edges_created
+              << " batch index: " << batch.index << " batch size: " << batch.queries.size() << std::endl;
+    mg_session_rollback_transaction(session, &result);
+    return BatchResult{.is_executed = false};
+  }
+  return BatchResult{.is_executed = true};
 }
 
 }  // namespace query

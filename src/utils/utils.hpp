@@ -1,11 +1,25 @@
+// Copyright (C) 2016-2023 Memgraph Ltd. [https://memgraph.com]
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 #pragma once
 
 #include <cstdint>
-#include <iostream>
-#include <memory>
-
 #include <filesystem>
+#include <iostream>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -16,6 +30,8 @@
 
 #include "mgclient.h"
 #include "replxx.h"
+
+#include "query_type.hpp"
 
 namespace fs = std::filesystem;
 
@@ -160,7 +176,10 @@ void PrintValue(std::ostream &os, const mg_value *value);
 // Unfinished query text from previous input.
 // e.g. Previous input was MATCH(n) RETURN n; MATCH
 // then default_text would be set to MATCH for next query.
-static std::string default_text;
+static std::string mgconsole_global_default_text;
+// The following variables are used to track the line number and index (number specifying order) of the processed query.
+[[maybe_unused]] static int64_t mgconsole_global_line_number{0};
+[[maybe_unused]] static int64_t mgconsole_global_query_index{0};
 
 namespace console {
 
@@ -187,13 +206,28 @@ void SetStdinEcho(bool enable);
 
 std::optional<std::string> GetLine();
 
+struct ParseLineInfo {
+  query::line::CollectedClauses collected_clauses;
+};
+struct ParseLineResult {
+  std::string line;
+  bool is_done;
+  // In the case when caller is interested in more info.
+  std::optional<ParseLineInfo> info;
+};
+/// Because query can span across multiple lines.
+inline ParseLineInfo MergeParseLineInfo(const ParseLineInfo &l, const ParseLineInfo &r) {
+  return ParseLineInfo{
+      .collected_clauses = query::line::MergeCollectedClauses(l.collected_clauses, r.collected_clauses),
+  };
+}
 /// Helper function that parses user line input.
 /// @param line user input line.
 /// @param quote quote character or '\0'; if set line is inside quotation.
 /// @param escaped if set, next character should be escaped.
-/// @return pair of string and bool. string is parsed line and bool marks
-/// if query finished(Query finishes with ';') with this line.
-std::pair<std::string, bool> ParseLine(const std::string &line, char *quote, bool *escaped);
+/// @return ParseLineResult a pair of string and bool. string is parsed line and bool marks
+/// if query finished(Query finishes with ';') with this line. + optionally info about what line contains
+ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, bool collect_info = false);
 
 /// Helper function that reads a line from the
 /// standard input using the 'readline' lib.
@@ -206,7 +240,70 @@ std::optional<std::string> ReadLine(Replxx *replxx_instance, const std::string &
 
 namespace query {
 
-struct QueryData {
+// Interesting abstraction because multiple lines can be parsed in parallel.
+struct Line {
+  int64_t line_number;
+  std::string line;
+};
+
+// NOTE: In theory it's possible to merge QueryInfo and CollectedClauses because they are the same, but it's not clear
+// what would be the best, leaving as is.
+struct QueryInfo {
+  bool has_create{false};
+  bool has_match{false};
+  bool has_merge{false};
+  bool has_detach_delete{false};
+  bool has_create_index{false};
+  bool has_drop_index{false};
+  bool has_remove{false};
+  bool has_storage_mode{false};
+};
+
+inline std::optional<QueryInfo> QueryInfoFromParseLineInfo(const std::optional<console::ParseLineInfo> &line_info) {
+  // NOTE: The logic here is correct only if there is a controlled input, change to make batched and parallel import
+  // non-experimental feature.
+  if (line_info) {
+    return QueryInfo{
+        .has_create = line_info->collected_clauses.has_create,
+        .has_match = line_info->collected_clauses.has_match,
+        .has_merge = line_info->collected_clauses.has_merge,
+        .has_detach_delete = line_info->collected_clauses.has_detach_delete,
+        .has_create_index = line_info->collected_clauses.has_create_index,
+        .has_drop_index = line_info->collected_clauses.has_drop_index,
+        .has_remove = line_info->collected_clauses.has_remove,
+        .has_storage_mode = line_info->collected_clauses.has_storage_mode,
+    };
+  } else {
+    return std::nullopt;
+  }
+}
+
+struct Query {
+  int64_t line_number{0};
+  int64_t index{0};
+  std::string query{""};
+  std::optional<QueryInfo> info{std::nullopt};
+};
+void PrintQueryInfo(const Query &);
+
+struct Batch {
+  explicit Batch(int64_t capacity, int64_t index) : capacity(capacity), index(index) { queries.reserve(capacity); }
+  Batch() = delete;
+  Batch(const Batch &) = delete;
+  Batch &operator=(const Batch &) = delete;
+  Batch(Batch &&) = default;
+  Batch &operator=(Batch &&) = default;
+
+  int64_t capacity;
+  int64_t index;
+  std::vector<Query> queries;
+  bool is_executed = false;
+  int64_t backoff = 1;
+  int64_t attempts = 0;
+};
+void PrintBatchesInfo(const std::vector<Batch> &);
+
+struct QueryResult {
   std::vector<std::string> header;
   std::vector<mg_memory::MgListPtr> records;
   std::chrono::duration<double> wall_time;
@@ -215,9 +312,17 @@ struct QueryData {
   std::optional<std::map<std::string, double>> execution_info;
 };
 
-std::optional<std::string> GetQuery(Replxx *replxx_instance);
+struct BatchResult {
+  bool is_executed;
+  std::vector<QueryResult> results;
+};
 
-QueryData ExecuteQuery(mg_session *session, const std::string &query);
+// Depends on the global static string because of ...; MATCH
+// The extra part is perserved for the next GetQuery call
+std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info = false);
+
+QueryResult ExecuteQuery(mg_session *session, const std::string &query);
+BatchResult ExecuteBatch(mg_session *session, const Batch &batch);
 
 }  // namespace query
 
