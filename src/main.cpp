@@ -64,12 +64,12 @@ DEFINE_bool(use_ssl, false, "Use SSL when connecting to the server.");
 DEFINE_bool(fit_to_screen, false, "Fit output width to screen width.");
 DEFINE_bool(term_colors, false, "Use terminal colors syntax highlighting.");
 DEFINE_string(output_format, "tabular",
-              "Query output format can be csv or tabular. If output format is "
+              "Query output format can be csv, tabular or cypherl. If output format is "
               "not tabular `fit-to-screen` flag is ignored.");
 DEFINE_bool(verbose_execution_info, false,
             "Output the additional information about query such as query cost, parsing, planning and execution times.");
 DEFINE_validator(output_format, [](const char *, const std::string &value) {
-  if (value == constants::kCsvFormat || value == constants::kTabularFormat) {
+  if (value == constants::kCsvFormat || value == constants::kTabularFormat || value == constants::kCypherlFormat) {
     return true;
   }
   return false;
