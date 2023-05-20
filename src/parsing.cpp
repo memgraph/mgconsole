@@ -40,6 +40,7 @@ int Run(bool collect_parsing_stats, bool print_parser_stats) {
                 << "has_detach_delete: " << query->info->has_detach_delete << " "
                 << "has_create_index: " << query->info->has_create_index << " "
                 << "has_drop_index: " << query->info->has_drop_index << " "
+                << "has_storage_mode: " << query->info->has_storage_mode << " "
                 << "has_remove: " << query->info->has_remove << " " << std::endl;
     }
     ++query_index;

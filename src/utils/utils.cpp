@@ -26,6 +26,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include "assert.hpp"
 
 #ifdef __APPLE__
 
@@ -687,7 +688,6 @@ std::optional<std::string> GetLine() {
   return line;
 }
 
-// TODO(gitbuda): Test and implemente the ParseLineInfo when query spreads across many lines.
 ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, bool collect_info) {
   bool is_done = false;
   std::stringstream parsed_line;
@@ -723,6 +723,10 @@ ParseLineResult ParseLine(const std::string &line, char *quote, bool *escaped, b
       }
       if (clause_state == query::line::ClauseState::P_REMOVE) {
         collected_clauses.has_remove = true;
+        clause_state = query::line::ClauseState::NONE;
+      }
+      if (clause_state == query::line::ClauseState::STORAGE_MODE) {
+        collected_clauses.has_storage_mode = true;
         clause_state = query::line::ClauseState::NONE;
       }
     }
@@ -817,7 +821,9 @@ std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info) {
     if (line->empty()) continue;
     auto ret = console::ParseLine(*line, &quote, &escaped, collect_info);
     if (collect_info) {
-      line_info = console::MergeParseLineInfo(line_info, ret.info);
+      MG_ASSERT(line_info, "line_info should be defined");
+      MG_ASSERT(ret.info, "returned line info should be defined");
+      line_info = console::MergeParseLineInfo(*line_info, *ret.info);
     }
     query << ret.line;
     auto char_count = ret.line.size();

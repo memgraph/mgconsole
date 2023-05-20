@@ -52,14 +52,16 @@ struct Batches {
     auto is_pre_query = [](const query::Query &query) {
       MG_ASSERT(query.info, "QueryInfo is an empty optional");
       const auto &info = *query.info;
-      return info.has_create_index;
+      return info.has_create_index || info.has_storage_mode;
     };
     auto is_vertex_query = [](const query::Query &query) {
       MG_ASSERT(query.info, "QueryInfo is an empty optional");
       const auto &info = *query.info;
       return info.has_create && !info.has_match && !info.has_merge && !info.has_detach_delete &&
-             !info.has_create_index && !info.has_drop_index && !info.has_remove;
+             !info.has_create_index && !info.has_drop_index && !info.has_remove && !info.has_storage_mode;
     };
+    // NOTE: This logic might not be correct in some cases, consider MERGE, this is one of the main reasons why
+    // batched-parallel import mode is EXPERIMENTAL.
     auto is_edge_query = [](const query::Query &query) {
       MG_ASSERT(query.info, "QueryInfo is an empty optional");
       const auto &info = *query.info;

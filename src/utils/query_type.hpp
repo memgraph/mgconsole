@@ -35,7 +35,21 @@ struct CollectedClauses {
   bool has_detach_delete{false};
   bool has_remove{false};
   bool has_drop_index{false};
+  bool has_storage_mode{false};
 };
+
+inline CollectedClauses MergeCollectedClauses(const CollectedClauses &l, const CollectedClauses &r) {
+  return CollectedClauses{
+      .has_match = l.has_match || r.has_match,
+      .has_create = l.has_create || r.has_create,
+      .has_merge = l.has_merge || r.has_merge,
+      .has_create_index = l.has_create_index || r.has_create_index,
+      .has_detach_delete = l.has_detach_delete || r.has_detach_delete,
+      .has_remove = l.has_remove || r.has_remove,
+      .has_drop_index = l.has_drop_index || r.has_drop_index,
+      .has_storage_mode = l.has_storage_mode || r.has_storage_mode,
+  };
+}
 
 inline std::ostream &operator<<(std::ostream &os, const CollectedClauses &cc) {
   os << "CollectedClauses: ";
@@ -53,6 +67,8 @@ inline std::ostream &operator<<(std::ostream &os, const CollectedClauses &cc) {
     os << "HAS_REMOVE ";
   } else if (cc.has_drop_index) {
     os << "HAS_DROP_INDEX ";
+  } else if (cc.has_storage_mode) {
+    os << "HAS_STORAGE_MODE ";
   }
   return os;
 }
@@ -68,6 +84,7 @@ enum class ClauseState {
       DR, DRO, DROP, DROP_, DROP_I, DROP_IN, DROP_IND, DROP_INDE, DROP_INDEX,
 // )_REMOVE
    P, P_, P_R, P_RE, P_REM, P_REMO, P_REMOV, P_REMOVE,
+   S, ST, STO, STOR, STORA, STORAG, STORAGE, STORAGE_, STORAGE_M, STORAGE_MO, STORAGE_MOD, STORAGE_MODE,
 };
 // clang-format on
 
@@ -87,6 +104,8 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
       return ClauseState::DROP_;
     } else if (state == ClauseState::P) {
       return ClauseState::P_;
+    } else if (state == ClauseState::STORAGE) {
+      return ClauseState::STORAGE_;
     } else {
       return state;
     }
@@ -206,6 +225,29 @@ inline ClauseState NextState(char *quote, char c, const ClauseState state) {
   } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::P_REMOV) {
     return ClauseState::P_REMOVE;
 
+  } else if (!*quote && (c == 'S' || c == 's') && state == ClauseState::NONE) {
+    return ClauseState::S;
+  } else if (!*quote && (c == 'T' || c == 't') && state == ClauseState::S) {
+    return ClauseState::ST;
+  } else if (!*quote && (c == 'O' || c == 'o') && state == ClauseState::ST) {
+    return ClauseState::STO;
+  } else if (!*quote && (c == 'R' || c == 'r') && state == ClauseState::STO) {
+    return ClauseState::STOR;
+  } else if (!*quote && (c == 'A' || c == 'a') && state == ClauseState::STOR) {
+    return ClauseState::STORA;
+  } else if (!*quote && (c == 'G' || c == 'g') && state == ClauseState::STORA) {
+    return ClauseState::STORAG;
+  } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::STORAG) {
+    return ClauseState::STORAGE;
+  } else if (!*quote && (c == 'M' || c == 'm') && state == ClauseState::STORAGE_) {
+    return ClauseState::STORAGE_M;
+  } else if (!*quote && (c == 'O' || c == 'o') && state == ClauseState::STORAGE_M) {
+    return ClauseState::STORAGE_MO;
+  } else if (!*quote && (c == 'D' || c == 'd') && state == ClauseState::STORAGE_MO) {
+    return ClauseState::STORAGE_MOD;
+  } else if (!*quote && (c == 'E' || c == 'e') && state == ClauseState::STORAGE_MOD) {
+    return ClauseState::STORAGE_MODE;
+
   } else {
     return ClauseState::NONE;
   }
@@ -226,6 +268,8 @@ inline std::ostream &operator<<(std::ostream &os, const ClauseState &s) {
     os << "DROP_INDEX";
   } else if (s == ClauseState::P_REMOVE) {
     os << ")_REMOVE";
+  } else if (s == ClauseState::STORAGE_MODE) {
+    os << "STORAGE_MODE";
   } else {
     os << "Some ClauseState";
   }

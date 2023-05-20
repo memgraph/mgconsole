@@ -216,18 +216,10 @@ struct ParseLineResult {
   std::optional<ParseLineInfo> info;
 };
 /// Because query can span across multiple lines.
-/// TODO(gitbuda): Optionals are redundant here + TEST.
-inline std::optional<ParseLineInfo> MergeParseLineInfo(std::optional<ParseLineInfo> l, std::optional<ParseLineInfo> r) {
+inline ParseLineInfo MergeParseLineInfo(const ParseLineInfo &l, const ParseLineInfo &r) {
   return ParseLineInfo{
-      .collected_clauses = query::line::CollectedClauses{
-          .has_match = l->collected_clauses.has_match || r->collected_clauses.has_match,
-          .has_merge = l->collected_clauses.has_merge || r->collected_clauses.has_merge,
-          .has_create = l->collected_clauses.has_create || r->collected_clauses.has_create,
-          .has_drop_index = l->collected_clauses.has_drop_index || r->collected_clauses.has_drop_index,
-          .has_remove = l->collected_clauses.has_remove || r->collected_clauses.has_remove,
-          .has_detach_delete = l->collected_clauses.has_detach_delete || r->collected_clauses.has_detach_delete,
-          .has_create_index = l->collected_clauses.has_create_index || r->collected_clauses.has_create_index,
-      }};
+      .collected_clauses = query::line::MergeCollectedClauses(l.collected_clauses, r.collected_clauses),
+  };
 }
 /// Helper function that parses user line input.
 /// @param line user input line.
@@ -264,6 +256,7 @@ struct QueryInfo {
   bool has_create_index{false};
   bool has_drop_index{false};
   bool has_remove{false};
+  bool has_storage_mode{false};
 };
 
 inline std::optional<QueryInfo> QueryInfoFromParseLineInfo(const std::optional<console::ParseLineInfo> &line_info) {
@@ -278,6 +271,7 @@ inline std::optional<QueryInfo> QueryInfoFromParseLineInfo(const std::optional<c
         .has_create_index = line_info->collected_clauses.has_create_index,
         .has_drop_index = line_info->collected_clauses.has_drop_index,
         .has_remove = line_info->collected_clauses.has_remove,
+        .has_storage_mode = line_info->collected_clauses.has_storage_mode,
     };
   } else {
     return std::nullopt;
