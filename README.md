@@ -152,7 +152,7 @@ Additional useful runtime flags are:
 In [TRANSACTIONAL
 mode](https://memgraph.com/docs/memgraph/reference-guide/storage-modes#transactional-storage-mode-default),
 batching and parallelization might help, but since there are high chances for
-serialization errors, the execution times might be similar of even slower
+serialization errors, the execution times might be similar or even slower
 compared to the serial mode.
 
 ### Memgraph in ANALYTICAL mode
