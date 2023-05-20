@@ -109,7 +109,7 @@ DEFINE_validator(import_mode, [](const char *, const std::string &value) {
   return false;
 });
 DEFINE_int32(batch_size, 1000, "A single batch size only when --import-mode=batched-parallel.");
-DEFINE_int32(workers_number, 16,
+DEFINE_int32(workers_number, 32,
              "The number of threads to execute batches in parallel, only when --import-mode=batched-parallel");
 DEFINE_bool(collect_parser_stats, true, "Collect parsing statistics only when --import-mode=parser");
 DEFINE_bool(print_parser_stats, true, "Print parser statistics for each query only when --import-mode=parser");

@@ -130,23 +130,26 @@ create an edge), and serial import can be slow, the goal with batching and
 parallelization is to improve the import speed when ingesting queries in the
 text format.
 
+To enable faster import, use `--import-mode="batched-parallel"` flag when running `mgconsole` + put Memgraph into the `STORAGE MODE IN_MEMORY_ANALYTICAL;` (could be part of the `.cypherl` file) to be able to leverage parallelism in the best possible way.
+
 ```
-// TODO(gitbuda): Explain how to run mgconsole in the batched mode.
 cat data.cypherl | mgconsole --import-mode=batched-parallel
+// STORAGE MODE IN_MEMORY_ANALYTICAL; is optional
 ```
 
-### Memgraph in TRANSACTIONAL mode TODO(gitbuda): Add link to docs
+### Memgraph in the TRANSACTIONAL mode
 
-In TRANSACTIONAL mode, batching and parallelization might help, but since there are high chances for
-serialization errors, the execution might be similar of even slower compared to
+In [TRANSACTIONAL mode](https://memgraph.com/docs/memgraph/reference-guide/storage-modes#transactional-storage-mode-default), batching and parallelization might help, but since there are high chances for
+serialization errors, the execution times might be similar of even slower compared to
 the serial mode.
 
-### Memgraph in ANALYTICAL mode TODO(gitbuda): Add link to the docs
+### Memgraph in ANALYTICAL mode
 
-In ANALYTICAL mode, batching and parallelization will mostly likely help
+In [ANALYTICAL mode](https://memgraph.com/docs/memgraph/reference-guide/storage-modes#analytical-storage-mode), batching and parallelization will mostly likely help
 massively because serialization errors don't exist, but since Memgraph will
 accept any query (e.g., on edge create failure, vertices could be created
 multiple times), special care is required:
   - queries with pure create vertices have to be specified first
   - please use only import statements using simple MATCH, CREATE, MERGE statements.
-If you encounter any issue, please create a new Github issue.
+
+If you encounter any issue, please create a new [mgconsole Github issue](https://github.com/memgraph/mgconsole/issues).
