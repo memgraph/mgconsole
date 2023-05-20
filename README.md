@@ -48,7 +48,6 @@ Once everything is in place, create a build directory inside the source
 directory and configure the build by running CMake from it as follows:
 
 * on Linux:
-
 ```
 mkdir build
 cd build
@@ -56,7 +55,6 @@ cmake -DCMAKE_BUILD_TYPE=Release ..
 ```
 
 * on MacOS:
-
 ```
 mkdir build
 cd build
@@ -64,29 +62,30 @@ cmake -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release .
 ```
 
 * on Windows, from the MSYS2 MINGW64 terminal:
-
 ```
 mkdir build
 cd build
 cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
 ```
 
-
 After running CMake, you should see a Makefile in the build directory. Then you
 can build the project by running:
-
 ```
 make
 ```
 
 This will build the `mgconsole` binary. To install it, run:
-
 ```
 make install
 ```
 
 This will install to system default installation directory. If you want to
 change this location, use `-DCMAKE_INSTALL_PREFIX` option when running CMake.
+
+NOTE: If you have issues compiling `mgconsole` using your compiler, please try to use
+[Memgraph official toolchain](https://memgraph.notion.site/Toolchain-37c37c84382149a58d09b2ccfcb410d7).
+In case you encouner any problem, please create
+[a new Github issue](https://github.com/memgraph/mgconsole/issues/new).
 
 ## Example usage
 
