@@ -6,8 +6,11 @@ docker_name="mgconsole_build_generic_linux"
 toolchain_url="https://s3-eu-west-1.amazonaws.com/deps.memgraph.io/toolchain-v4/toolchain-v4-binaries-centos-7-x86_64.tar.gz"
 toolchain_tar_gz="$(basename $toolchain_url)"
 memgraph_repo="https://github.com/memgraph/memgraph.git"
-setup_cmd="cd /memgraph/environment/os && \
-  ./centos-7.sh install TOOLCHAIN_RUN_DEPS && \
+setup_toolchain_cmd="cd /memgraph/environment/os && \
+  ./centos-7.sh check TOOLCHAIN_RUN_DEPS || \
+  ./centos-7.sh install TOOLCHAIN_RUN_DEPS"
+setup_memgraph_cmd="cd /memgraph/environment/os && \
+  ./centos-7.sh check MEMGRAPH_BUILD_DEPS || \
   ./centos-7.sh install MEMGRAPH_BUILD_DEPS"
 mgconsole_build_cmd="source /opt/toolchain-v4/activate && \
   mkdir -p /mgconsole/build && cd /mgconsole/build && \
@@ -39,7 +42,8 @@ docker_exec "yum install -y wget git"
 docker_exec "[ ! -f /$toolchain_tar_gz ] && wget -O /$toolchain_tar_gz $toolchain_url"
 docker_exec "[ ! -d /opt/toolchain-v4/ ] && tar -xzf /$toolchain_tar_gz -C /opt"
 docker_exec "[ ! -d /memgraph/ ] && git clone $memgraph_repo"
-# docker_exec "$setup_cmd"
+docker_exec "$setup_toolchain_cmd"
+docker_exec "$setup_memgraph_cmd"
 docker_exec "$mgconsole_build_cmd"
 mkdir -p "$PROJECT_ROOT/build/generic"
 docker cp -q "$docker_name:/mgconsole/build/src/mgconsole" "$PROJECT_ROOT/build/generic/"
