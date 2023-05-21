@@ -5,6 +5,8 @@
 mgconsole is a command line interface for [Memgraph](https://memgraph.com)
 database.
 
+<img width="630" alt="mgconsole" src="https://github.com/memgraph/mgconsole/assets/4950251/b7ce1a0d-097c-4a2f-81b5-4049a307668b">
+
 ## Building and installing
 
 To build and install mgconsole from source you will need:
