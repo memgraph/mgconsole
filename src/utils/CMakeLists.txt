@@ -1,11 +1,13 @@
 ExternalProject_Add(replxx-proj
         PREFIX replxx
         GIT_REPOSITORY https://github.com/AmokHuginnsson/replxx.git
-        GIT_TAG release-0.0.3
+        GIT_TAG release-0.0.4
         CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
         "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
         "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
         "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
+        "-DREPLXX_BUILD_EXAMPLES=OFF"
+        "-DBUILD_SHARED_LIBS=OFF"
         INSTALL_DIR "${PROJECT_BINARY_DIR}/replxx")
 
 if(CMAKE_BUILD_TYPE_LOWERCASE STREQUAL "debug")

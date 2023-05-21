@@ -44,7 +44,8 @@ if(MGCONSOLE_ON_WINDOWS)
   set(CMAKE_CXX_STANDARD_LIBRARIES "-static-libgcc -static-libstdc++ -lws2_32")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive")
 elseif(MGCONSOLE_ON_LINUX)
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++")
+  # -no-pie -> https://stackoverflow.com/questions/46827433/g-compile-error-rodata-can-not-be-used-when-making-a-shared-object-recomp
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++ -no-pie")
 endif()
 
 if(MGCONSOLE_ON_LINUX)
@@ -63,7 +64,6 @@ ExternalProject_Add(gflags-proj
   CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
   "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
   "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-  "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
   INSTALL_DIR "${PROJECT_BINARY_DIR}/gflags")
 
 ExternalProject_Get_Property(gflags-proj install_dir)
@@ -121,20 +121,17 @@ target_include_directories(mgconsole
   ${MGCLIENT_INCLUDE_DIRS}
   ${REPLXX_INCLUDE_DIRS}
   ${CMAKE_CURRENT_BINARY_DIR})
-
 target_link_libraries(mgconsole
   PRIVATE
   ${GFLAGS_LIBRARY}
   utils
   ${MGCLIENT_LIBRARY}
   ${OPENSSL_LIBRARIES})
-
 if(MGCONSOLE_ON_WINDOWS)
   target_link_libraries(mgconsole PRIVATE shlwapi)
 endif()
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
   "${CMAKE_CURRENT_BINARY_DIR}/version.hpp")
-
 install(TARGETS mgconsole
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
