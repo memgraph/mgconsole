@@ -70,6 +70,17 @@ jobs:
     steps:
       - name: Set-up repository
         uses: actions/checkout@v3
+
+      - name: Fix runner baseline
+        run: |
+          # https://github.com/actions/runner-images/pull/7710
+          for package in go python@3.11; do
+            if brew info "$package" | grep -q ^/; then
+                brew unlink "$package"
+                brew link --overwrite "$package"
+            fi
+          done
+
       # NOTE: CI can't execute end2end tests because there is no way to run
       #       Memgraph on CI MacOS machines.
       - name: Install openssl
