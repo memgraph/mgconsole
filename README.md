@@ -86,8 +86,8 @@ change this location, use `-DCMAKE_INSTALL_PREFIX` option when running CMake.
 
 NOTE: If you have issues compiling `mgconsole` using your compiler, please try to use
 [Memgraph official toolchain](https://memgraph.notion.site/Toolchain-37c37c84382149a58d09b2ccfcb410d7).
-In case you encouner any problem, please create
-[a new Github issue](https://github.com/memgraph/mgconsole/issues/new).
+In case you encounter any problem, please create
+[a new GitHub issue](https://github.com/memgraph/mgconsole/issues/new).
 
 ## Example usage
 
@@ -181,4 +181,4 @@ special care is required:
   - please use only import statements using simple MATCH, CREATE, MERGE
     statements.
 
-If you encounter any issue, please create a new [mgconsole Github issue](https://github.com/memgraph/mgconsole/issues).
+If you encounter any issue, please create a new [mgconsole GitHub issue](https://github.com/memgraph/mgconsole/issues).
