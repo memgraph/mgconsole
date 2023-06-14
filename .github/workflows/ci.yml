@@ -23,7 +23,7 @@ jobs:
           sudo systemctl mask memgraph
           sudo dpkg -i ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
 
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v3
       - name: Install and test mgconsole
         run: |
           mkdir build
@@ -46,7 +46,7 @@ jobs:
           # First make sure python would resolve to the windows native python, not mingw one
           echo "C:/msys64/mingw64/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
           echo "${{ env.pythonLocation }}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v3
       - name: Install mgconsole
         run: |
           mkdir build
@@ -69,7 +69,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Set-up repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       # NOTE: CI can't execute end2end tests because there is no way to run
       #       Memgraph on CI MacOS machines.
       - name: Install openssl
