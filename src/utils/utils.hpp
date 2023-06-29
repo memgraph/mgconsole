@@ -29,6 +29,9 @@
 #endif /* _WIN32 */
 
 #include "mgclient.h"
+
+#include <functional>
+
 #include "replxx.h"
 
 #include "query_type.hpp"
@@ -320,6 +323,11 @@ struct BatchResult {
 // Depends on the global static string because of ...; MATCH
 // The extra part is perserved for the next GetQuery call
 std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info = false);
+
+
+auto build_handler(query::QueryResult &ret, mg_session *session) -> std::function<bool(int, mg_result *)>;
+
+std::chrono::duration<double> ExecuteQueryEx(mg_session *session, const std::string &query, std::function<bool(int,mg_result *)> &&result_handler);
 
 QueryResult ExecuteQuery(mg_session *session, const std::string &query);
 BatchResult ExecuteBatch(mg_session *session, const Batch &batch);

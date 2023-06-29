@@ -113,12 +113,16 @@ int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool
     }
 
     try {
-      auto ret = query::ExecuteQuery(session.get(), query->query);
-      if (ret.records.size() > 0) {
+      auto ret = query::QueryResult{};
+      auto handler = build_handler(ret, session.get());
+      auto wall_time = query::ExecuteQueryEx(session.get(), query->query, std::move(handler));
+      ret.wall_time = wall_time;
+      if (!ret.records.empty()) {
+        // HERE
         Output(ret.header, ret.records, output_opts, csv_opts);
       }
       std::string summary;
-      if (ret.records.size() == 0) {
+      if (ret.records.empty()) {
         summary = "Empty set";
       } else if (ret.records.size() == 1) {
         summary = std::to_string(ret.records.size()) + " row in set";
