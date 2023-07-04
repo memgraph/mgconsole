@@ -25,6 +25,15 @@ namespace mode::interactive {
 
 using namespace std::string_literals;
 
+
+//struct InteractiveQueryProcessor : query::QueryProcessor {
+//  void process_header(const mg_list *header) override {}
+//  void process_row(const mg_list *row) override {}
+//  void process_summary(const mg_map *summary) override {}
+//};
+
+
+
 int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool no_history,
         bool verbose_execution_info, const format::CsvOptions &csv_opts, const format::OutputOptions &output_opts) {
   Replxx *replxx_instance = InitAndSetupReplxx();
@@ -113,10 +122,10 @@ int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool
     }
 
     try {
-      auto ret = query::QueryResult{};
-      auto handler = build_handler(ret, session.get());
-      auto wall_time = query::ExecuteQueryEx(session.get(), query->query, std::move(handler));
-      ret.wall_time = wall_time;
+      //TODO: CSV Processor and CSV do not need to wait for all results
+//      auto processor = InteractiveQueryProcessor{};
+      auto ret = query::ExecuteQuery/*Ex*/(session.get(), query->query);
+
       if (!ret.records.empty()) {
         // HERE
         Output(ret.header, ret.records, output_opts, csv_opts);
