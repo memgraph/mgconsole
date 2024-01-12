@@ -273,4 +273,4 @@ std::pair<Future<T>, Promise<T>> FuturePromisePairWithNotifications(std::functio
   return std::make_pair(std::move(future), std::move(promise));
 }
 
-};  // namespace utils
+}  // namespace utils
