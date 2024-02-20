@@ -1194,7 +1194,13 @@ void PrintCypherl(const std::vector<std::string> &header, const std::vector<mg_m
   for (size_t record_i = 0; record_i < records.size(); ++record_i) {
     const auto &fields = records[record_i];
     for (uint32_t field_i = 0; field_i < mg_list_size(fields.get()); ++field_i) {
-      const auto *query_ptr = mg_value_string(mg_list_at(fields.get(), field_i));
+      const auto *value_ptr = mg_list_at(fields.get(), field_i);
+      if (mg_value_get_type(value_ptr) != MG_VALUE_TYPE_STRING) {
+        std::cerr << "ERROR: cypherl output format is currently only supported for the DUMP DATABASE query"
+                  << std::endl;
+        std::exit(1);
+      }
+      const auto *query_ptr = mg_value_string(value_ptr);
       std::cout << std::string(mg_string_data(query_ptr), mg_string_size(query_ptr)) << std::endl;
     }
   }
