@@ -130,6 +130,17 @@ std::string Escape(const std::string &src) {
   return ret;
 }
 
+template <typename T, std::enable_if_t<std::is_arithmetic<T>::value, T> = true>
+void PrintIfNotZero(std::ostream &os, T value, std::string_view suffix = "") {
+  if (value) {
+    os << value << suffix;
+  }
+}
+
+void PrintStringUnescaped(std::ostream &os, const mg_string *str) {
+  os.write(mg_string_data(str), mg_string_size(str));
+}
+
 std::string GetMemgraphSpecificType(const mg_value *mg_val) {
   std::string type;
   if (mg_val && mg_value_get_type(mg_val) == MG_VALUE_TYPE_STRING) {
@@ -152,21 +163,13 @@ bool PrintIfMemgraphSpecificType(std::ostream &os, const mg_map *map) {
 
   auto memgraph_type = GetMemgraphSpecificType(mg_map_at(map, kTypeKey));
   if (memgraph_type == kMgEnum) {
-    PrintValue(os, mg_map_at(map, kValue));
-    return true;
+    auto *enum_value = mg_map_at(map, kValue);
+    if (mg_value_get_type(enum_value) == MG_VALUE_TYPE_STRING) {
+      PrintStringUnescaped(os, mg_value_string(enum_value));
+      return true;
+    }
   }
   return false;
-}
-
-template <typename T, std::enable_if_t<std::is_arithmetic<T>::value, T> = true>
-void PrintIfNotZero(std::ostream &os, T value, std::string_view suffix = "") {
-  if (value) {
-    os << value << suffix;
-  }
-}
-
-void PrintStringUnescaped(std::ostream &os, const mg_string *str) {
-  os.write(mg_string_data(str), mg_string_size(str));
 }
 
 void PrintValue(std::ostream &os, const mg_string *str) {
