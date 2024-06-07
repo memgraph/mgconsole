@@ -1,0 +1,8 @@
+"Enum Name","Enum Values"
+"""Status""","[""Good"", ""Bad""]"
+"n"
+"(:l1 {s: ""Status::Good""})"
+"n"
+"(:l2 {s: {__type: ""test"", __value: ""test_value""}})"
+"n"
+"(:l3 {s: ""some_value""})"

@@ -102,6 +102,13 @@ echo_success "Started memgraph"
 
 ## Tests
 
+client_flags="--use-ssl=$use_ssl"
+
+echo_info "Prepare database"
+echo  # Blank line
+
+$client_binary $client_flags < ${DIR}/prepare.cypher > $tmpdir/prepare.log
+
 echo_info "Running tests"
 echo  # Blank line
 
