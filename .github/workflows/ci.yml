@@ -55,6 +55,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install mgconsole
         run: |
+          $env:OPENSSL_ROOT_DIR = "C:/msys64/mingw64"
           mkdir build
           cd build
           cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
