@@ -32,6 +32,12 @@ jobs:
           make
           sudo make install
           ctest
+      - name: Save mgconsole test results
+        if: always()
+        uses: actions/upload-artifact@v2
+        with:
+          name: "mgconsole_ctest.log"
+          path: build/Testing/Temporary/LastTest.log 
 
   build_windows:
     runs-on: windows-latest
