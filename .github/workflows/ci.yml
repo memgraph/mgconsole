@@ -23,7 +23,7 @@ jobs:
           sudo systemctl mask memgraph
           sudo dpkg -i ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
 
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
       - name: Install and test mgconsole
         run: |
           mkdir build
@@ -34,7 +34,7 @@ jobs:
           ctest
       - name: Save mgconsole test results
         if: always()
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: "mgconsole_ctest.log"
           path: build/Testing/Temporary/LastTest.log 
@@ -52,7 +52,7 @@ jobs:
           # First make sure python would resolve to the windows native python, not mingw one
           echo "C:/msys64/mingw64/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
           echo "${{ env.pythonLocation }}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
       - name: Install mgconsole
         run: |
           mkdir build
@@ -61,7 +61,7 @@ jobs:
           make
           make install
       - name: Save mgconsole Windows build
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: "mgconsole Windows build"
           path: build/src/mgconsole.exe
@@ -75,7 +75,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Set-up repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       # NOTE: CI can't execute end2end tests because there is no way to run
       #       Memgraph on CI MacOS machines.
       - name: Install openssl
@@ -89,7 +89,7 @@ jobs:
           cmake -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release ..
           make
       - name: Save mgconsole MacOS build
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: "mgconsole MacOS build"
           path: build/src/mgconsole
