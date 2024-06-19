@@ -35,6 +35,7 @@ if(NOT MGCONSOLE_ON_LINUX OR MGCONSOLE_STATIC_SSL)
 endif()
 
 set(OPENSSL_INCLUDE_DIR "C:/msys64/mingw64/include")
+set(OPENSSL_ROOT_DIR "C:/msys64/mingw64")
 set(OPENSSL_LIBRARIES "C:/msys64/mingw64/lib/libssl.a" "C:/msys64/mingw64/lib/libcrypto.a")
 # find_package(OpenSSL REQUIRED)
 
