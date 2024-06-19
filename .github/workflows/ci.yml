@@ -60,7 +60,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake -G "MinGW Makefiles" -DMSYS2_FOLDER=c:/langs/msys64 -DCMAKE_BUILD_TYPE=Release ..
+          cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
           make
           make install
       - name: Save mgconsole Windows build
