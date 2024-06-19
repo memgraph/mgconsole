@@ -56,8 +56,9 @@ jobs:
         run: |
           # First make sure python would resolve to the windows native python, not mingw one
           echo "C:/msys64/mingw64/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
-          echo "C:/langs/msys64/mingw64" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
           echo "${{ env.pythonLocation }}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+      - name: Set OpenSSL Root Directory
+        run: echo "OPENSSL_ROOT_DIR=C:/langs/msys64/mingw64" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8
       - uses: actions/checkout@v4
       - name: Install mgconsole
         run: |
