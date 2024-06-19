@@ -49,9 +49,8 @@ jobs:
           install: >-
             git 
             mingw-w64-x86_64-toolchain 
-            cmake 
-            openssl
-
+            mingw-w64-x86_64-cmake 
+            mingw-w64-x86_64-openssl
       - name: Add mingw64 to PATH
         run: |
           # First make sure python would resolve to the windows native python, not mingw one
@@ -61,7 +60,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release ..
+          cmake -G "MinGW Makefiles" -D MSYS2_FOLDER=c:/langs/msys64 -DCMAKE_BUILD_TYPE=Release ..
           make
           make install
       - name: Save mgconsole Windows build
