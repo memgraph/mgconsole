@@ -30,12 +30,12 @@ find_package(Threads REQUIRED)
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 
-if(NOT MGCONSOLE_ON_LINUX OR MGCONSOLE_STATIC_SSL)
-  set(OPENSSL_USE_STATIC_LIBS TRUE)
-endif()
+# if(NOT MGCONSOLE_ON_LINUX OR MGCONSOLE_STATIC_SSL)
+#   set(OPENSSL_USE_STATIC_LIBS TRUE)
+# endif()
 
 set(OPENSSL_INCLUDE_DIR "C:/msys64/mingw64/include")
-set(OPENSSL_ROOT_DIR "C:/msys64/mingw64")
+set(OPENSSL_ROOT_DIR "C:/msys64/mingw64/lib")
 set(OPENSSL_LIBRARIES "C:/msys64/mingw64/lib/libssl.a" "C:/msys64/mingw64/lib/libcrypto.a")
 # find_package(OpenSSL REQUIRED)
 
