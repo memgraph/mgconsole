@@ -64,7 +64,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake -G "MinGW Makefiles" -DOPENSSL_ROOT_DIR="C:/msys64/mingw64/lib" -DCMAKE_BUILD_TYPE=Release ..
+        cmake -G "MinGW Makefiles" -DOPENSSL_ROOT_DIR="C:/msys64/mingw64/lib" -DOPENSSL_INCLUDE_DIR="C:/msys64/mingw64/include" -DOPENSSL_CRYPTO_LIBRARY="C:/msys64/mingw64/lib/libcrypto.a" -DCMAKE_BUILD_TYPE=Release ..
           make
           make install
       - name: Save mgconsole Windows build
