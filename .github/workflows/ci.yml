@@ -47,15 +47,15 @@ jobs:
           msystem: MINGW64
           update: true
           install: >-
-            openssl
             git 
             mingw-w64-x86_64-toolchain 
             cmake 
+            openssl
 
       - name: Add mingw64 to PATH
         run: |
           # First make sure python would resolve to the windows native python, not mingw one
-          echo "C:/msys64/mingw64/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+          echo "C:/langs/msys64" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
           echo "${{ env.pythonLocation }}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
       - uses: actions/checkout@v4
       - name: Install mgconsole
