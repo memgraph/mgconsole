@@ -18,10 +18,12 @@ jobs:
     steps:
       - name: Set up and check memgraph download link
         run: |
+          mg_version=${{ matrix.mg_version }}
+          mg_version_short=${mg_version%%-*}
           if [ "${{ env.OFFICIAL }}" = "true" ]; then
-            mg_url="https://download.memgraph.com/memgraph/v${{ matrix.mg_version }}/${{ matrix.platform }}/memgraph_${{ matrix.mg_version }}-1_amd64.deb"
+            mg_url="https://download.memgraph.com/memgraph/v${mg_version}/${{ matrix.platform }}/memgraph_${mg_version_short}-1_amd64.deb"
           else
-            mg_url="https://s3.eu-west-1.amazonaws.com/deps.memgraph.io/memgraph/v${{ matrix.mg_version }}/${{ matrix.platform }}/memgraph_${{ matrix.mg_version }}-1_amd64.deb"
+            mg_url="https://s3.eu-west-1.amazonaws.com/deps.memgraph.io/memgraph/v${mg_version}/${{ matrix.platform }}/memgraph_${mg_version_short}-1_amd64.deb"
           fi
           echo "Checking Memgraph download link: $mg_url"
           if curl --output /dev/null --silent --head --fail $mg_url; then
