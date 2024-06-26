@@ -22,7 +22,7 @@ jobs:
             mg_url="https://download.memgraph.com/memgraph/v${{ matrix.mg_version }}/${{ matrix.platform }}/memgraph_${{ matrix.mg_version }}-1_amd64.deb"
           else
             mg_url="https://s3.eu-west-1.amazonaws.com/deps.memgraph.io/memgraph/v${{ matrix.mg_version }}/${{ matrix.platform }}/memgraph_${{ matrix.mg_version }}-1_amd64.deb"
-         fi
+          fi
           echo "Checking Memgraph download link: $mg_url"
           if curl --output /dev/null --silent --head --fail $mg_url; then
             echo "Memgraph download link is valid"
