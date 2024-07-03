@@ -141,6 +141,37 @@ void PrintStringUnescaped(std::ostream &os, const mg_string *str) {
   os.write(mg_string_data(str), mg_string_size(str));
 }
 
+std::string GetMemgraphSpecificType(const mg_value *mg_val) {
+  std::string type;
+  if (mg_val && mg_value_get_type(mg_val) == MG_VALUE_TYPE_STRING) {
+    auto *type_val_mg_str = mg_value_string(mg_val);
+    type = std::string(mg_string_data(type_val_mg_str), mg_string_size(type_val_mg_str));
+  }
+  return type;
+}
+
+bool PrintIfMemgraphSpecificType(std::ostream &os, const mg_map *map) {
+  // Current format is
+  // { "__type": "<type_name>", "__value": <actual value> }
+  static const char kTypeKey[] = "__type";
+  static const char kMgEnum[] = "mg_enum";
+  static const char kValue[] = "__value";
+
+  if (mg_map_size(map) != 2) {
+    return false;
+  }
+
+  auto memgraph_type = GetMemgraphSpecificType(mg_map_at(map, kTypeKey));
+  if (memgraph_type == kMgEnum) {
+    auto *enum_value = mg_map_at(map, kValue);
+    if (mg_value_get_type(enum_value) == MG_VALUE_TYPE_STRING) {
+      PrintStringUnescaped(os, mg_value_string(enum_value));
+      return true;
+    }
+  }
+  return false;
+}
+
 void PrintValue(std::ostream &os, const mg_string *str) {
   os << utils::Escape(std::string(mg_string_data(str), mg_string_size(str)));
 }
@@ -157,6 +188,10 @@ void PrintValue(std::ostream &os, const mg_list *list) {
 }
 
 void PrintValue(std::ostream &os, const mg_map *map) {
+  if (PrintIfMemgraphSpecificType(os, map)) {
+    return;
+  }
+
   os << "{";
   for (uint32_t i = 0; i < mg_map_size(map); ++i) {
     if (i > 0) {

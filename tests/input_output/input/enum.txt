@@ -1,0 +1,4 @@
+SHOW ENUMS;
+CREATE (n :l1 {s: Status::Good}) RETURN n;
+CREATE (n :l2 {s: {__type: "test", __value: "test_value"}}) RETURN n;
+MATCH (n) return n;

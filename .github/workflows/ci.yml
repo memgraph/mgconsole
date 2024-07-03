@@ -4,26 +4,47 @@ on:
   push:
   workflow_dispatch:
 
+env:
+  OFFICIAL: false
+
 jobs:
   build_and_test_ubuntu:
     strategy:
       matrix:
         platform: [ubuntu-22.04]
         mg_version:
-          - "2.7.0"
+          - "2.18.0-rc1"
     runs-on: ${{ matrix.platform }}
     steps:
+      - name: Set up and check memgraph download link
+        run: |
+          mg_version=${{ matrix.mg_version }}
+          mg_version_short=${mg_version%%-*}
+          if [ "${{ env.OFFICIAL }}" = "true" ]; then
+            mg_url="https://download.memgraph.com/memgraph/v${mg_version}/${{ matrix.platform }}/memgraph_${mg_version_short}-1_amd64.deb"
+          else
+            mg_url="https://s3.eu-west-1.amazonaws.com/deps.memgraph.io/memgraph/v${mg_version}/${{ matrix.platform }}/memgraph_${mg_version_short}-1_amd64.deb"
+          fi
+          echo "Checking Memgraph download link: $mg_url"
+          if curl --output /dev/null --silent --head --fail $mg_url; then
+            echo "Memgraph download link is valid"
+            echo "MEMGRAPH_DOWNLOAD_LINK=${mg_url}" >> $GITHUB_ENV 
+          else
+            echo "Memgraph download link is not valid"
+            exit 1
+          fi
+      
       - name: Install dependencies (Ubuntu 22.04)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt install -y git cmake make gcc g++ libssl-dev # mgconsole deps
           sudo apt install -y libpython3.10 python3-pip # memgraph deps
           mkdir ~/memgraph
-          curl -L https://download.memgraph.com/memgraph/v${{ matrix.mg_version }}/ubuntu-22.04/memgraph_${{ matrix.mg_version }}-1_amd64.deb > ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
+          curl -L ${{ env.MEMGRAPH_DOWNLOAD_LINK }} > ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
           sudo systemctl mask memgraph
           sudo dpkg -i ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
 
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
       - name: Install and test mgconsole
         run: |
           mkdir build
@@ -32,8 +53,15 @@ jobs:
           make
           sudo make install
           ctest
+      - name: Save mgconsole test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "mgconsole_ctest.log"
+          path: build/Testing/Temporary/LastTest.log 
 
   build_windows:
+    if: false
     runs-on: windows-latest
     steps:
       - uses: msys2/setup-msys2@v2
@@ -46,16 +74,17 @@ jobs:
           # First make sure python would resolve to the windows native python, not mingw one
           echo "C:/msys64/mingw64/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
           echo "${{ env.pythonLocation }}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
       - name: Install mgconsole
         run: |
+          $env:OPENSSL_ROOT_DIR = "C:/msys64/mingw64"
           mkdir build
           cd build
           cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
           make
           make install
       - name: Save mgconsole Windows build
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: "mgconsole Windows build"
           path: build/src/mgconsole.exe
@@ -69,7 +98,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Set-up repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       # NOTE: CI can't execute end2end tests because there is no way to run
       #       Memgraph on CI MacOS machines.
       - name: Install openssl
@@ -83,7 +112,7 @@ jobs:
           cmake -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release ..
           make
       - name: Save mgconsole MacOS build
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: "mgconsole MacOS build"
           path: build/src/mgconsole
