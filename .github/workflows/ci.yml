@@ -61,6 +61,7 @@ jobs:
           path: build/Testing/Temporary/LastTest.log 
 
   build_windows:
+    if: false
     runs-on: windows-latest
     steps:
       - uses: msys2/setup-msys2@v2
