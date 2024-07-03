@@ -25,7 +25,7 @@ namespace mode::interactive {
 
 using namespace std::string_literals;
 
-int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool no_history,
+int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_history,
         bool verbose_execution_info, const format::CsvOptions &csv_opts, const format::OutputOptions &output_opts) {
   Replxx *replxx_instance = InitAndSetupReplxx();
 
@@ -43,7 +43,7 @@ int Run(const utils::bolt::Config &bolt_config, const std::string &history, bool
     auto password_optional = console::ReadLine(replxx_instance, "Password: ");
     std::cout << std::endl;
     if (password_optional) {
-      password = *password_optional;
+      bolt_config.password = *password_optional;
     } else {
       console::EchoFailure("Password not submitted", "Requested password for username " + bolt_config.username);
       cleanup_resources();
