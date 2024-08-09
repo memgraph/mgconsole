@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <ios>
 #include <iostream>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -336,6 +337,14 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
   os << "S";
 }
 
+// TODO(gitbuda): Align with whatever is Memgraph outputting.
+void PrintValue(std::ostream &os, const mg_point_2d *value) {
+  os << "SRID: " << mg_point_2d_srid(value) << " X: " << mg_point_2d_x(value) << " Y: " << mg_point_2d_y(value);
+}
+void PrintValue(std::ostream &os, const mg_point_3d *value) {
+  os << "SRID: " << mg_point_3d_srid(value) << " X: " << mg_point_3d_x(value) << " Y: " << mg_point_3d_y(value) << " Z: " << mg_point_3d_z(value);
+}
+
 void PrintValue(std::ostream &os, const mg_value *value) {
   switch (mg_value_get_type(value)) {
     case MG_VALUE_TYPE_NULL:
@@ -382,6 +391,12 @@ void PrintValue(std::ostream &os, const mg_value *value) {
       return;
     case MG_VALUE_TYPE_DURATION:
       PrintValue(os, mg_value_duration(value));
+      return;
+    case MG_VALUE_TYPE_POINT_2D:
+      PrintValue(os, mg_value_point_2d(value));
+      return;
+    case MG_VALUE_TYPE_POINT_3D:
+      PrintValue(os, mg_value_point_3d(value));
       return;
     default:
       os << "{unknown value}";
