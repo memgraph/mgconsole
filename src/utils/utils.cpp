@@ -337,12 +337,17 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
   os << "S";
 }
 
-// TODO(gitbuda): Align with whatever is Memgraph outputting.
 void PrintValue(std::ostream &os, const mg_point_2d *value) {
-  os << "SRID: " << mg_point_2d_srid(value) << " X: " << mg_point_2d_x(value) << " Y: " << mg_point_2d_y(value);
+  os << "POINT({ x:" << mg_point_2d_x(value) << ","
+     <<        " y:" << mg_point_2d_y(value) << ","
+     <<        " srid:" << mg_point_2d_srid(value) << " })";
 }
+
 void PrintValue(std::ostream &os, const mg_point_3d *value) {
-  os << "SRID: " << mg_point_3d_srid(value) << " X: " << mg_point_3d_x(value) << " Y: " << mg_point_3d_y(value) << " Z: " << mg_point_3d_z(value);
+  os << "POINT({ x:" << mg_point_3d_x(value) << ","
+     <<        " y:" << mg_point_3d_y(value) << ","
+     <<        " z:" << mg_point_3d_z(value) << ","
+     <<        " srid:" << mg_point_3d_srid(value) << " })";
 }
 
 void PrintValue(std::ostream &os, const mg_value *value) {
