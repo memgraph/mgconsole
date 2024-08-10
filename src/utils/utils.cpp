@@ -339,15 +339,15 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
 
 void PrintValue(std::ostream &os, const mg_point_2d *value) {
   os << "POINT({ x:" << mg_point_2d_x(value) << ","
-     <<        " y:" << mg_point_2d_y(value) << ","
-     <<        " srid:" << mg_point_2d_srid(value) << " })";
+     << " y:" << mg_point_2d_y(value) << ","
+     << " srid:" << mg_point_2d_srid(value) << " })";
 }
 
 void PrintValue(std::ostream &os, const mg_point_3d *value) {
   os << "POINT({ x:" << mg_point_3d_x(value) << ","
-     <<        " y:" << mg_point_3d_y(value) << ","
-     <<        " z:" << mg_point_3d_z(value) << ","
-     <<        " srid:" << mg_point_3d_srid(value) << " })";
+     << " y:" << mg_point_3d_y(value) << ","
+     << " z:" << mg_point_3d_z(value) << ","
+     << " srid:" << mg_point_3d_srid(value) << " })";
 }
 
 void PrintValue(std::ostream &os, const mg_value *value) {
