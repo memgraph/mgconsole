@@ -52,7 +52,7 @@ jobs:
           cmake ..
           make
           sudo make install
-          ctest
+          ctest --verbose
       - name: Save mgconsole test results
         if: always()
         uses: actions/upload-artifact@v4
