@@ -13,7 +13,7 @@ jobs:
       matrix:
         platform: [ubuntu-22.04]
         mg_version:
-          - "2.19.0-rc1"
+          - "2.19.0-rc2"
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Set up and check memgraph download link
