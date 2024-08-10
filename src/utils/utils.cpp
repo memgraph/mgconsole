@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <ios>
 #include <iostream>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -336,6 +337,19 @@ void PrintValue(std::ostream &os, const mg_duration *duration) {
   os << "S";
 }
 
+void PrintValue(std::ostream &os, const mg_point_2d *value) {
+  os << "POINT({ x:" << mg_point_2d_x(value) << ","
+     << " y:" << mg_point_2d_y(value) << ","
+     << " srid:" << mg_point_2d_srid(value) << " })";
+}
+
+void PrintValue(std::ostream &os, const mg_point_3d *value) {
+  os << "POINT({ x:" << mg_point_3d_x(value) << ","
+     << " y:" << mg_point_3d_y(value) << ","
+     << " z:" << mg_point_3d_z(value) << ","
+     << " srid:" << mg_point_3d_srid(value) << " })";
+}
+
 void PrintValue(std::ostream &os, const mg_value *value) {
   switch (mg_value_get_type(value)) {
     case MG_VALUE_TYPE_NULL:
@@ -382,6 +396,12 @@ void PrintValue(std::ostream &os, const mg_value *value) {
       return;
     case MG_VALUE_TYPE_DURATION:
       PrintValue(os, mg_value_duration(value));
+      return;
+    case MG_VALUE_TYPE_POINT_2D:
+      PrintValue(os, mg_value_point_2d(value));
+      return;
+    case MG_VALUE_TYPE_POINT_3D:
+      PrintValue(os, mg_value_point_3d(value));
       return;
     default:
       os << "{unknown value}";
