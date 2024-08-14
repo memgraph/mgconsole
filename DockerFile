@@ -1,0 +1,30 @@
+# Use an official Ubuntu as a parent image
+FROM ubuntu:20.04
+
+# Set environment variables to non-interactive
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    cmake \
+    make \
+    gcc \
+    g++ \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone the mgconsole repository
+RUN git clone https://github.com/memgraph/mgconsole.git /mgconsole
+
+# Set the working directory
+WORKDIR /mgconsole
+
+# Create build directory and build mgconsole
+RUN mkdir build && cd build && \
+    cmake -DCMAKE_BUILD_TYPE=Release .. && \
+    make && \
+    make install
+
+# Set the entry point to mgconsole
+ENTRYPOINT ["mgconsole"]
