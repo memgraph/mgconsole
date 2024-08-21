@@ -1,5 +1,5 @@
 
-FROM debian:bullseye-slim
+FROM debian:bullseye-slim AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -20,5 +20,11 @@ RUN mkdir build && cd build && \
     cmake -DCMAKE_BUILD_TYPE=Release .. && \
     make && \
     make install
+
+FROM debian:bullseye-slim
+
+WORKDIR /mgconsole
+
+COPY --from=builder /mgconsole/build/src/mgconsole /usr/local/bin/mgconsole
 
 ENTRYPOINT ["mgconsole"]
