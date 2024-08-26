@@ -1,0 +1,53 @@
+name: Build and Release mgconsole Docker Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version of the Docker image to publish."
+        required: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    env:
+        DOCKER_ORGANIZATION_NAME: memgraph
+        DOCKER_REPOSITORY_NAME: mgconsole
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Check if specified version is already pushed
+        run: |
+          EXISTS=$(docker manifest inspect $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ github.event.inputs.version }} > /dev/null; echo $?)
+          echo $EXISTS
+          if [[ ${EXISTS} -eq 0 ]]; then
+              echo 'The specified version has been already released to DockerHub.'
+              exit 1
+          else
+              echo 'All good, the specified version has not been released to DockerHub.'
+          fi
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: |
+            $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ github.event.inputs.version }}
+            $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:latest
+          platforms: linux/amd64,linux/arm64
+
+      - name: Verify Docker image
+        run: |
+          docker run --rm $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ github.event.inputs.version }} uname -m
