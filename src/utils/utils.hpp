@@ -318,7 +318,7 @@ struct BatchResult {
 };
 
 // Depends on the global static string because of ...; MATCH
-// The extra part is perserved for the next GetQuery call
+// The extra part is preserved for the next GetQuery call
 std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info = false);
 
 QueryResult ExecuteQuery(mg_session *session, const std::string &query);

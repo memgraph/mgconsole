@@ -33,7 +33,7 @@ string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LOWERCASE)
 # Enable explicit static linking of SSL because of generic Linux binary.
 set(MGCONSOLE_STATIC_SSL OFF CACHE STRING "Statically link SSL")
 
-# Set default instalation directory to '/usr'
+# Set default installation directory to '/usr'
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     # '/usr' is a special case, for more details see:
     # https://cmake.org/cmake/help/latest/module/GNUInstallDirs.html#special-cases
