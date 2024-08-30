@@ -5,15 +5,15 @@ on:
   workflow_dispatch:
 
 env:
-  OFFICIAL: false
+  OFFICIAL: true
 
 jobs:
   build_and_test_ubuntu:
     strategy:
       matrix:
-        platform: [ubuntu-22.04]
+        platform: [ubuntu-24.04]
         mg_version:
-          - "2.19.0-rc2"
+          - "2.19.0"
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Set up and check memgraph download link
@@ -33,7 +33,6 @@ jobs:
             echo "Memgraph download link is not valid"
             exit 1
           fi
-
       - name: Install dependencies (Ubuntu 22.04)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -97,7 +96,7 @@ jobs:
   build_apple:
     strategy:
       matrix:
-        platform: [macos-latest]
+        platform: [macos-14]
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Set-up repository
