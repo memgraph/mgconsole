@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
 
 env:
-  OFFICIAL: false
+  OFFICIAL: true
 
 jobs:
   build_and_test_ubuntu:
@@ -13,7 +13,7 @@ jobs:
       matrix:
         platform: [ubuntu-22.04]
         mg_version:
-          - "2.19.0-rc2"
+          - "2.19.0"
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Set up and check memgraph download link
@@ -33,7 +33,6 @@ jobs:
             echo "Memgraph download link is not valid"
             exit 1
           fi
-      
       - name: Install dependencies (Ubuntu 22.04)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
@@ -43,7 +42,6 @@ jobs:
           curl -L ${{ env.MEMGRAPH_DOWNLOAD_LINK }} > ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
           sudo systemctl mask memgraph
           sudo dpkg -i ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
-
       - uses: actions/checkout@v4
       - name: Install and test mgconsole
         run: |
@@ -60,41 +58,45 @@ jobs:
           name: "mgconsole_ctest.log"
           path: build/Testing/Temporary/LastTest.log 
 
-  build_windows:
-    if: false
-    runs-on: windows-latest
+  build_windows_mingw:
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        include: [
+          { msystem: MINGW64, arch: x86_64 }
+        ]
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
+      - name: Set-up repository
+        uses: actions/checkout@v4
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: ${{ matrix.msystem }}
           update: true
-          install: git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl
-      - name: Add mingw64 to PATH
+          install: >-
+            git base-devel
+            mingw-w64-${{ matrix.arch }}-toolchain
+            mingw-w64-${{ matrix.arch }}-cmake
+            mingw-w64-${{ matrix.arch }}-openssl
+      - name: Build and install mgconsole
         run: |
-          # First make sure python would resolve to the windows native python, not mingw one
-          echo "C:/msys64/mingw64/bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
-          echo "${{ env.pythonLocation }}" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
-      - uses: actions/checkout@v4
-      - name: Install mgconsole
-        run: |
-          $env:OPENSSL_ROOT_DIR = "C:/msys64/mingw64"
           mkdir build
           cd build
           cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
-          make
+          cmake --build . --parallel
           make install
       - name: Save mgconsole Windows build
         uses: actions/upload-artifact@v4
         with:
           name: "mgconsole Windows build"
           path: build/src/mgconsole.exe
-          #ToDo(the-joksim):
-          #  - add Windows e2e test
 
   build_apple:
     strategy:
       matrix:
-        platform: [macos-latest]
+        platform: [macos-14]
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Set-up repository

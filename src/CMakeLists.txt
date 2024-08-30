@@ -41,7 +41,7 @@ endif()
 # Handle platforms
 if(MGCONSOLE_ON_WINDOWS)
   set(GFLAGS_WIN_LIB_SUFFIX "_static")
-  set(CMAKE_CXX_STANDARD_LIBRARIES "-static-libgcc -static-libstdc++ -lws2_32")
+  set(CMAKE_CXX_STANDARD_LIBRARIES "-static-libgcc -static-libstdc++ -lws2_32 -lcrypt32")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive")
 elseif(MGCONSOLE_ON_LINUX)
   # -no-pie -> https://stackoverflow.com/questions/46827433/g-compile-error-rodata-can-not-be-used-when-making-a-shared-object-recomp
@@ -84,7 +84,7 @@ add_dependencies(${GFLAGS_LIBRARY} gflags-proj)
 ExternalProject_Add(mgclient-proj
   PREFIX mgclient
   GIT_REPOSITORY https://github.com/memgraph/mgclient.git
-  GIT_TAG v1.4.1
+  GIT_TAG v1.4.4
   CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
   "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
   "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
