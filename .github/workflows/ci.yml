@@ -81,7 +81,7 @@ jobs:
             mingw-w64-${{ matrix.arch }}-toolchain
             mingw-w64-${{ matrix.arch }}-cmake
             mingw-w64-${{ matrix.arch }}-openssl
-      - name: Build and test mgclient
+      - name: Build and install mgconsole
         run: |
           mkdir build
           cd build
