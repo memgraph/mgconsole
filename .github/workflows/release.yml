@@ -57,11 +57,12 @@ jobs:
         uses: docker/build-push-action@v4
         with:
           context: .
-          push: ${{ github.event_name == 'workflow_dispatch' }}
+          push: true
           tags: |
-            $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ env.VERSION }}
-            $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:latest
+            ${{ env.DOCKER_ORGANIZATION_NAME }}/${{ env.DOCKER_REPOSITORY_NAME }}:${{ env.VERSION }}
+            ${{ env.DOCKER_ORGANIZATION_NAME }}/${{ env.DOCKER_REPOSITORY_NAME }}:latest
           platforms: linux/amd64,linux/arm64
+
 
       - name: Verify Docker image
         run: |
