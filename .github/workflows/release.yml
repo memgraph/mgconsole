@@ -12,8 +12,7 @@ on:
         type: boolean
         required: false
         default: false
-  push:
-
+        
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -36,11 +35,11 @@ jobs:
 
       - name: Check if specified version is already pushed
         run: |
-          EXISTS=$(docker manifest inspect $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:0.0.1 > /dev/null; echo $?)
+          EXISTS=$(docker manifest inspect $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ github.event.inputs.version }} > /dev/null; echo $?)
           echo $EXISTS
           if [[ ${EXISTS} -eq 0 ]]; then
               echo 'The specified version has been already released to DockerHub.'
-              if [[ `true` == 'true' ]]; then
+              if [[ ${{ github.event.inputs.force_release }} == 'true' ]]; then
                 echo 'Forcing the release!'
               else
                 echo 'Stopping the release!'
@@ -56,11 +55,10 @@ jobs:
           context: .
           push: true
           tags: |
-            $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:0.0.1
+            $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ github.event.inputs.version }}
             $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:latest
           platforms: linux/amd64,linux/arm64
 
       - name: Verify Docker image
         run: |
-          docker run --rm $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:0.0.1 uname -m
-
+          docker run --rm $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ github.event.inputs.version }} uname -m
