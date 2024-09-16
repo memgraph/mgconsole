@@ -6,13 +6,18 @@ on:
       version:
         description: "Version of the Docker image to publish."
         required: true
+      force_release:
+        description: "Force release even if the version already exists."
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     env:
         DOCKER_ORGANIZATION_NAME: memgraph
-        DOCKER_REPOSITORY_NAME: mgconsole
+        DOCKER_REPOSITORY_NAME: mgconsole-test
 
     steps:
       - name: Checkout repository
@@ -33,7 +38,12 @@ jobs:
           echo $EXISTS
           if [[ ${EXISTS} -eq 0 ]]; then
               echo 'The specified version has been already released to DockerHub.'
-              exit 1
+              if [[ ${{ github.event.inputs.force_release }} == 'true' ]]; then
+                echo 'Forcing the release!'
+              else
+                echo 'Stopping the release!'
+                exit 1
+              fi
           else
               echo 'All good, the specified version has not been released to DockerHub.'
           fi
@@ -51,3 +61,4 @@ jobs:
       - name: Verify Docker image
         run: |
           docker run --rm $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ github.event.inputs.version }} uname -m
+          
