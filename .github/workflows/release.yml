@@ -37,7 +37,6 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Check if specified version is already pushed
-        if: github.event_name == 'workflow_dispatch'
         run: |
           EXISTS=$(docker manifest inspect $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ env.VERSION }} > /dev/null; echo $?)
           echo $EXISTS
@@ -66,4 +65,4 @@ jobs:
 
       - name: Verify Docker image
         run: |
-          docker run --rm $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ env.VERSION }} uname -m
+          docker run --rm $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ env.VERSION }} --version
