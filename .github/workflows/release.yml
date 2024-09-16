@@ -12,9 +12,7 @@ on:
         type: boolean
         required: false
         default: false
-  pull_request:
-    branches:
-      - main
+  push:
 
 jobs:
   build-and-push:
