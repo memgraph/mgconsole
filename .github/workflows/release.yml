@@ -21,7 +21,7 @@ jobs:
       DOCKER_ORGANIZATION_NAME: memgraph
       DOCKER_REPOSITORY_NAME: mgconsole-test
       VERSION: ${{ github.event.inputs.version || '0.0.1' }}
-      FORCE_RELEASE: ${{ github.event.inputs.force_release || 'false' }}
+      FORCE_RELEASE: ${{ github.event.inputs.force_release || 'true' }}
 
     steps:
       - name: Checkout repository
