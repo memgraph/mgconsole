@@ -6,11 +6,15 @@ on:
       version:
         description: "Version of the Docker image to publish."
         required: true
+        default: "0.0.1"
       force_release:
         description: "Force release even if the version already exists."
         type: boolean
         required: false
         default: false
+  pull_request:
+    branches:
+      - main
 
 jobs:
   build-and-push:
@@ -61,4 +65,3 @@ jobs:
       - name: Verify Docker image
         run: |
           docker run --rm $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ github.event.inputs.version }} uname -m
-          
