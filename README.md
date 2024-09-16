@@ -7,6 +7,19 @@ database.
 
 <img width="630" alt="mgconsole" src="https://github.com/memgraph/mgconsole/assets/4950251/b7ce1a0d-097c-4a2f-81b5-4049a307668b">
 
+
+## Running mgconsole  
+
+For MacOs and Windows users, there is a prebuilt version of mgconsole available on [Memgraph download hub](https://memgraph.com/download), Linux users need to build native version. 
+
+There is also a docker version of the same container available on the [Docker Hub](https://hub.docker.com/repository/docker/memgraph/mgconsole/general). 
+
+You can start `mgconsole` locally by running the following command: 
+
+```
+docker run -it memgraph/mgconsole:latest
+```
+
 ## Building and installing
 
 To build and install mgconsole from source you will need:

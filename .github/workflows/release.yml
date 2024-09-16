@@ -12,16 +12,13 @@ on:
         type: boolean
         required: false
         default: false
-  push:
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     env:
       DOCKER_ORGANIZATION_NAME: memgraph
-      DOCKER_REPOSITORY_NAME: mgconsole-test
-      VERSION: ${{ github.event.inputs.version || '0.0.1' }}
-      FORCE_RELEASE: ${{ github.event.inputs.force_release || 'true' }}
+      DOCKER_REPOSITORY_NAME: mgconsole
 
     steps:
       - name: Checkout repository
@@ -38,11 +35,11 @@ jobs:
 
       - name: Check if specified version is already pushed
         run: |
-          EXISTS=$(docker manifest inspect $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ env.VERSION }} > /dev/null; echo $?)
+          EXISTS=$(docker manifest inspect ${{ env.DOCKER_ORGANIZATION_NAME }}/${{ env.DOCKER_REPOSITORY_NAME }}:${{ github.event.inputs.version }} > /dev/null; echo $?)
           echo $EXISTS
           if [[ ${EXISTS} -eq 0 ]]; then
               echo 'The specified version has been already released to DockerHub.'
-              if [[ ${{ env.FORCE_RELEASE }} == 'true' ]]; then
+              if [[ ${{ github.event.inputs.force_release }} == 'true' ]]; then
                 echo 'Forcing the release!'
               else
                 echo 'Stopping the release!'
@@ -58,11 +55,11 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.DOCKER_ORGANIZATION_NAME }}/${{ env.DOCKER_REPOSITORY_NAME }}:${{ env.VERSION }}
+            ${{ env.DOCKER_ORGANIZATION_NAME }}/${{ env.DOCKER_REPOSITORY_NAME }}:${{ github.event.inputs.version }}
             ${{ env.DOCKER_ORGANIZATION_NAME }}/${{ env.DOCKER_REPOSITORY_NAME }}:latest
           platforms: linux/amd64,linux/arm64
 
 
       - name: Verify Docker image
         run: |
-          docker run --rm $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ env.VERSION }} --version
+          docker run --rm $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ github.event.inputs.version }} --version
