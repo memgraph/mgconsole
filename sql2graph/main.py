@@ -1,6 +1,12 @@
 import mgclient
 
 
+# UIs:
+#   * CLI -> here (mgconsole)
+#   * MCP -> https://github.com/memgraph/ai-toolkit
+#   * WEB -> Memgraph Lab
+
+
 def connect_to_memgraph(
     host="127.0.0.1", port=7687, user="memgraph", password="memgraph"
 ):
@@ -27,6 +33,27 @@ def fetch_sql_table(sql_system_name, table):
     conn = connect_to_memgraph()
     cursor = conn.cursor()
     cursor.execute(f"CALL {sql_system_name}.migrate('{table}') YIELD *")
+    results = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return results
+
+
+def fetch_sql_join_data(sql_system_name, generate_sql_query):
+    conn = connect_to_memgraph()
+    cursor = conn.cursor()
+    cursor.execute(f"CALL {sql_system_name}.migrate('{generate_sql_query}') YIELD *")
+    results = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return results
+
+
+def run_generated_cypher_migration_query(row, generate_migration_query):
+    conn = connect_to_memgraph()
+    cursor = conn.cursor()
+    # TODO(gitbuda): Inject row into the query.
+    cursor.execute(f"{generate_migration_query}")
     results = cursor.fetchall()
     cursor.close()
     conn.close()
