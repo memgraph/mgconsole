@@ -40,7 +40,6 @@ endif()
 
 # Handle platforms
 if(MGCONSOLE_ON_WINDOWS)
-  set(GFLAGS_WIN_LIB_SUFFIX "_static")
   set(CMAKE_CXX_STANDARD_LIBRARIES "-static-libgcc -static-libstdc++ -lws2_32 -lcrypt32")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive")
 elseif(MGCONSOLE_ON_LINUX)
@@ -69,8 +68,8 @@ ExternalProject_Add(gflags-proj
 ExternalProject_Get_Property(gflags-proj install_dir)
 set(GFLAGS_ROOT ${install_dir})
 set(GFLAGS_INCLUDE_DIRS ${GFLAGS_ROOT}/include)
-set(GFLAGS_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags${GFLAGS_WIN_LIB_SUFFIX}.a)
-set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags${GFLAGS_WIN_LIB_SUFFIX}_debug.a)
+set(GFLAGS_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags.a)
+set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags_debug.a)
 set(GFLAGS_LIBRARY gflags)
 
 add_library(${GFLAGS_LIBRARY} STATIC IMPORTED)
