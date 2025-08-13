@@ -60,7 +60,7 @@ endif()
 ExternalProject_Add(gflags-proj
   PREFIX gflags
   GIT_REPOSITORY https://github.com/gflags/gflags.git
-  GIT_TAG v2.2.2
+  GIT_TAG 70c01a6
   CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
   "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
   "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
