@@ -55,7 +55,9 @@ else()
   set(MG_INSTALL_LIB_DIR "lib")
 endif()
 
-# Setup GFlags
+# Setup GFlags. The GIT_TAG refers to this build:
+# https://github.com/gflags/gflags/tree/70c01a642f08734b7bddc9687884844ca117e080,
+# which is the earliest to support modern cmake.
 ExternalProject_Add(gflags-proj
   PREFIX gflags
   GIT_REPOSITORY https://github.com/gflags/gflags.git
