@@ -40,7 +40,6 @@ endif()
 
 # Handle platforms
 if(MGCONSOLE_ON_WINDOWS)
-  set(GFLAGS_WIN_LIB_SUFFIX "_static")
   set(CMAKE_CXX_STANDARD_LIBRARIES "-static-libgcc -static-libstdc++ -lws2_32 -lcrypt32")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive")
 elseif(MGCONSOLE_ON_LINUX)
@@ -56,11 +55,13 @@ else()
   set(MG_INSTALL_LIB_DIR "lib")
 endif()
 
-# Setup GFlags
+# Setup GFlags. The GIT_TAG refers to this build:
+# https://github.com/gflags/gflags/tree/70c01a642f08734b7bddc9687884844ca117e080,
+# which is the earliest to support modern cmake.
 ExternalProject_Add(gflags-proj
   PREFIX gflags
   GIT_REPOSITORY https://github.com/gflags/gflags.git
-  GIT_TAG v2.2.2
+  GIT_TAG 70c01a6
   CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
   "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
   "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
@@ -69,8 +70,8 @@ ExternalProject_Add(gflags-proj
 ExternalProject_Get_Property(gflags-proj install_dir)
 set(GFLAGS_ROOT ${install_dir})
 set(GFLAGS_INCLUDE_DIRS ${GFLAGS_ROOT}/include)
-set(GFLAGS_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags${GFLAGS_WIN_LIB_SUFFIX}.a)
-set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags${GFLAGS_WIN_LIB_SUFFIX}_debug.a)
+set(GFLAGS_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags.a)
+set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags_debug.a)
 set(GFLAGS_LIBRARY gflags)
 
 add_library(${GFLAGS_LIBRARY} STATIC IMPORTED)
