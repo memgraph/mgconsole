@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <ios>
 #include <iostream>
+#include <iomanip>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -290,6 +291,35 @@ void PrintValue(std::ostream &os, const mg_local_date_time *local_date_time) {
   PrintValue(os, time);
 }
 
+void PrintDateTimeComponents(std::ostream &os, int64_t seconds, int64_t nanoseconds) {
+  namespace chrono = std::chrono;
+  auto const secs = chrono::seconds(seconds);
+  auto const days = chrono::duration_cast<date::days>(secs);
+  auto const date = mg_date_make(days.count());
+
+  auto const nanos =
+      chrono::duration_cast<chrono::nanoseconds>(secs) - chrono::duration_cast<chrono::nanoseconds>(days);
+  auto const time = mg_local_time_make(nanos.count() + nanoseconds);
+
+  PrintValue(os, date);
+  os << " ";
+  PrintValue(os, time);
+}
+
+void PrintValue(std::ostream &os, const mg_date_time *date_time) {
+  PrintDateTimeComponents(os, mg_date_time_seconds(date_time), mg_date_time_nanoseconds(date_time));
+  auto const minutes = mg_date_time_tz_offset_minutes(date_time);
+  os << (minutes >= 0 ? '+' : '-') << std::setfill('0') << std::setw(2) << (std::abs(minutes) / 60) << ":"
+     << std::setfill('0') << std::setw(2) << (std::abs(minutes) % 60);
+}
+
+void PrintValue(std::ostream &os, const mg_date_time_zone_id *date_time_zone_id) {
+  PrintDateTimeComponents(os, mg_date_time_zone_id_seconds(date_time_zone_id), mg_date_time_zone_id_nanoseconds(date_time_zone_id));
+  os << "[";
+  PrintStringUnescaped(os, mg_date_time_zone_id_timezone_name(date_time_zone_id));
+  os << "]";
+}
+
 void PrintSeconds(std::ostream &os, std::chrono::seconds ss, std::chrono::microseconds mis) {
   if (ss.count() == 0 && mis.count() < 0) {
     os << '-';
@@ -402,6 +432,12 @@ void PrintValue(std::ostream &os, const mg_value *value) {
       return;
     case MG_VALUE_TYPE_POINT_3D:
       PrintValue(os, mg_value_point_3d(value));
+      return;
+    case MG_VALUE_TYPE_DATE_TIME:
+      PrintValue(os, mg_value_date_time(value));
+      return;
+    case MG_VALUE_TYPE_DATE_TIME_ZONE_ID:
+      PrintValue(os, mg_value_date_time_zone_id(value));
       return;
     default:
       os << "{unknown value}";

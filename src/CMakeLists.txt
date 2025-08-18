@@ -85,7 +85,7 @@ add_dependencies(${GFLAGS_LIBRARY} gflags-proj)
 ExternalProject_Add(mgclient-proj
   PREFIX mgclient
   GIT_REPOSITORY https://github.com/memgraph/mgclient.git
-  GIT_TAG v1.4.4
+  GIT_TAG v1.5.0
   CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
   "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
   "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"

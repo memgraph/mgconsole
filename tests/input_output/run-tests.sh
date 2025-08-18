@@ -93,6 +93,7 @@ $memgraph_binary --bolt-port 7687 \
         --data-recovery-on-startup=false \
         --storage-snapshot-on-exit=false \
         --telemetry-enabled=false \
+        --timezone=UTC \
         --log-file='' &
 
 pid=$!
