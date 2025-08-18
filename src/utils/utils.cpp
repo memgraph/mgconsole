@@ -305,10 +305,7 @@ void PrintValue(std::ostream &os, const mg_date_time *date_time) {
   os << " ";
   PrintValue(os, time);
   auto const minutes = mg_date_time_tz_offset_minutes(date_time);
-  os
-    << (minutes >= 0 ? '+' : '-')
-     << std::setfill('0') << std::setw(2) << (std::abs(minutes) / 60)
-     << ":"
+  os << (minutes >= 0 ? '+' : '-') << std::setfill('0') << std::setw(2) << (std::abs(minutes) / 60) << ":"
      << std::setfill('0') << std::setw(2) << (std::abs(minutes) % 60);
 }
 
