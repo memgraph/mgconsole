@@ -291,44 +291,32 @@ void PrintValue(std::ostream &os, const mg_local_date_time *local_date_time) {
   PrintValue(os, time);
 }
 
-void PrintValue(std::ostream &os, const mg_date_time *date_time) {
+void PrintDateTimeComponents(std::ostream &os, int64_t seconds, int64_t nanoseconds) {
   namespace chrono = std::chrono;
-  auto const seconds = chrono::seconds(mg_date_time_seconds(date_time));
-  auto const days = chrono::duration_cast<date::days>(seconds);
+  auto const secs = chrono::seconds(seconds);
+  auto const days = chrono::duration_cast<date::days>(secs);
   auto const date = mg_date_make(days.count());
 
-  auto const nanoseconds =
-      chrono::duration_cast<chrono::nanoseconds>(seconds) - chrono::duration_cast<chrono::nanoseconds>(days);
-  auto const time = mg_local_time_make(nanoseconds.count() + mg_date_time_nanoseconds(date_time));
+  auto const nanos =
+      chrono::duration_cast<chrono::nanoseconds>(secs) - chrono::duration_cast<chrono::nanoseconds>(days);
+  auto const time = mg_local_time_make(nanos.count() + nanoseconds);
 
   PrintValue(os, date);
   os << " ";
   PrintValue(os, time);
+}
+
+void PrintValue(std::ostream &os, const mg_date_time *date_time) {
+  PrintDateTimeComponents(os, mg_date_time_seconds(date_time), mg_date_time_nanoseconds(date_time));
   auto const minutes = mg_date_time_tz_offset_minutes(date_time);
   os << (minutes >= 0 ? '+' : '-') << std::setfill('0') << std::setw(2) << (std::abs(minutes) / 60) << ":"
      << std::setfill('0') << std::setw(2) << (std::abs(minutes) % 60);
 }
 
 void PrintValue(std::ostream &os, const mg_date_time_zone_id *date_time_zone_id) {
-  namespace chrono = std::chrono;
-
-  int64_t raw_seconds = mg_date_time_zone_id_seconds(date_time_zone_id);
-  int64_t raw_nanos = mg_date_time_zone_id_nanoseconds(date_time_zone_id);
-  const mg_string *timezone_name = mg_date_time_zone_id_timezone_name(date_time_zone_id);
-
-  auto const seconds = chrono::seconds(raw_seconds);
-  auto const days = chrono::duration_cast<date::days>(seconds);
-  auto const date = mg_date_make(days.count());
-
-  auto const nanoseconds =
-      chrono::duration_cast<chrono::nanoseconds>(seconds) - chrono::duration_cast<chrono::nanoseconds>(days);
-  auto const time = mg_local_time_make(nanoseconds.count() + raw_nanos);
-
-  PrintValue(os, date);
-  os << " ";
-  PrintValue(os, time);
+  PrintDateTimeComponents(os, mg_date_time_zone_id_seconds(date_time_zone_id), mg_date_time_zone_id_nanoseconds(date_time_zone_id));
   os << "[";
-  PrintStringUnescaped(os, timezone_name);
+  PrintStringUnescaped(os, mg_date_time_zone_id_timezone_name(date_time_zone_id));
   os << "]";
 }
 
