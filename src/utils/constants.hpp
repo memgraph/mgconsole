@@ -54,7 +54,7 @@ static const std::string kPrompt = "memgraph> ";
 static const std::string kMultilinePrompt = "       -> ";
 
 /// Memgraph and OpenCypher keywords.
-static constexpr std::array kMemgraphKeywords{
+[[maybe_unused]] static constexpr std::array kMemgraphKeywords{
     "ADD",
     "ALTER",
     "ANALYZE",
@@ -188,7 +188,7 @@ static constexpr std::array kMemgraphKeywords{
     "USERS",
     "VERSION"};
 
-static constexpr std::array kCypherKeywords{
+[[maybe_unused]] static constexpr std::array kCypherKeywords{
     "AFTER",
     "ALL",
     "AND",
@@ -311,7 +311,7 @@ static constexpr std::array kCypherKeywords{
     "XOR",
     "YIELD"};
 
-static constexpr std::array kAwesomeFunctions{
+[[maybe_unused]] static constexpr std::array kAwesomeFunctions{
     "ABS",
     "ACOS",
     "ASIN",
