@@ -455,17 +455,17 @@ std::vector<std::string> GetCompletions(const char *text) {
 
   // Collect a vector of matches: vocabulary words that begin with text.
   std::string text_str = utils::ToUpperCase(std::string(text));
-  for (auto word : constants::kCypherKeywords) {
+  for (std::string_view const word : constants::kCypherKeywords) {
     if (word.size() >= text_str.size() && word.compare(0, text_str.size(), text_str) == 0) {
       matches.emplace_back(word);
     }
   }
-  for (auto word : constants::kMemgraphKeywords) {
+  for (std::string_view const word : constants::kMemgraphKeywords) {
     if (word.size() >= text_str.size() && word.compare(0, text_str.size(), text_str) == 0) {
       matches.emplace_back(word);
     }
   }
-  for (auto word : constants::kAwesomeFunctions) {
+  for (std::string_view const word : constants::kAwesomeFunctions) {
     if (word.size() >= text_str.size() && word.compare(0, text_str.size(), text_str) == 0) {
       matches.emplace_back(word);
     }
