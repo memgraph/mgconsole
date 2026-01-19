@@ -55,11 +55,13 @@ static const std::string kMultilinePrompt = "       -> ";
 
 /// Memgraph and OpenCypher keywords.
 [[maybe_unused]] static constexpr std::array kMemgraphKeywords{
+    "ACTIVE",
     "ADD",
     "ALTER",
     "ANALYZE",
     "ASYNC",
     "AUTH",
+    "BAD",
     "BATCH_INTERVAL",
     "BATCH_LIMIT",
     "BATCH_SIZE",
@@ -110,6 +112,7 @@ static const std::string kMultilinePrompt = "       -> ";
     "IN_MEMORY_ANALYTICAL",
     "IN_MEMORY_TRANSACTIONAL",
     "ISOLATION",
+    "JSONL",
     "KAFKA",
     "KB",
     "KEY",
@@ -206,6 +209,7 @@ static const std::string kMultilinePrompt = "       -> ";
     "CASE",
     "CHECK",
     "COALESCE",
+    "COMMIT",
     "COMMITTED",
     "CONTAINING",
     "CONTAINS",
@@ -213,6 +217,7 @@ static const std::string kMultilinePrompt = "       -> ";
     "CREATE",
     "CURRENT",
     "DATE",
+    "DEFINER",
     "DELETE",
     "DESC",
     "DESCENDING",
@@ -242,6 +247,7 @@ static const std::string kMultilinePrompt = "       -> ";
     "IN",
     "INDEX",
     "INTEGER",
+    "INVOKER",
     "IS",
     "KSHORTEST",
     "LABELS",
@@ -285,6 +291,7 @@ static const std::string kMultilinePrompt = "       -> ";
     "REPLACE",
     "RESOURCE",
     "RETURN",
+    "SECURITY",
     "SET",
     "SHOW",
     "SINGLE",
@@ -309,7 +316,8 @@ static const std::string kMultilinePrompt = "       -> ";
     "WHERE",
     "WITH",
     "XOR",
-    "YIELD"};
+    "YIELD",
+    "ZONEDDATETIME"};
 
 [[maybe_unused]] static constexpr std::array kAwesomeFunctions{
     "ABS",
