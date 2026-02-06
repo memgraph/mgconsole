@@ -11,35 +11,14 @@ jobs:
   build_and_test_ubuntu:
     runs-on: ubuntu-latest
     steps:
-      - name: Set up and check memgraph download link
+      - name: Pull latest memgraph image
         run: |
-          mg_version="3.7.2"
-          mg_version_short=${mg_version%%-*}
-          if [ "${{ env.OFFICIAL }}" = "true" ]; then
-            mg_url="https://download.memgraph.com/memgraph/v${mg_version}/ubuntu-24.04/memgraph_${mg_version_short}-1_amd64.deb"
-          else
-            mg_url="https://s3.eu-west-1.amazonaws.com/deps.memgraph.io/memgraph/v${mg_version}/ubuntu-24.04/memgraph_${mg_version_short}-1_amd64.deb"
-          fi
-          echo "Checking Memgraph download link: $mg_url"
-          if curl --output /dev/null --silent --head --fail $mg_url; then
-            echo "Memgraph download link is valid"
-            echo "MEMGRAPH_DOWNLOAD_LINK=${mg_url}" >> $GITHUB_ENV 
-          else
-            echo "Memgraph download link is not valid"
-            exit 1
-          fi
-      - name: Install dependencies
-        run: |
-          sudo apt install -y git cmake make gcc g++ libssl-dev ninja-build # mgconsole deps
-          sudo apt install -y libpython3.12 python3-pip # memgraph deps
-          mkdir ~/memgraph
-          curl -L ${{ env.MEMGRAPH_DOWNLOAD_LINK }} > ~/memgraph/memgraph_${mg_version}-1_amd64.deb
-          sudo systemctl mask memgraph
-          sudo dpkg -i ~/memgraph/memgraph_${mg_version}-1_amd64.deb
+          docker pull memgraph/memgraph:latest
+          echo "MEMGRAPH_IMAGE=memgraph/memgraph:latest" >> $GITHUB_ENV
       - uses: actions/checkout@v4
       - name: Install and test mgconsole
         run: |
-          cmake -B build -G Ninja
+          cmake -B build -G Ninja -DMEMGRAPH_USE_DOCKER=ON -DMEMGRAPH_DOCKER_IMAGE=$MEMGRAPH_IMAGE
           cmake --build build
           sudo cmake --install build
           ctest --verbose
