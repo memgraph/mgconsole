@@ -4,9 +4,6 @@ on:
   push:
   workflow_dispatch:
 
-env:
-  OFFICIAL: true
-
 jobs:
   build_and_test_ubuntu:
     runs-on: ubuntu-latest
@@ -77,3 +74,31 @@ jobs:
         with:
           name: "mgconsole MacOS build"
           path: build/src/mgconsole
+
+  build_and_test_static:
+    strategy:
+      matrix:
+        arch: [X64, ARM64]
+    runs-on: [self-hosted, Linux, ${{ matrix.arch}}]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: build mgconsole static
+        run: |
+          ./build-static-linux.sh
+
+      - name: Save mgconsole static build
+        uses: actions/upload-artifact@v4
+        with:
+          name: "mgconsole static Linux build ${{ matrix.arch }}"
+          path: build/generic/mgconsole
+
+      - name: Pull latest memgraph image
+        run: |
+          docker pull memgraph/memgraph:latest
+          echo "MEMGRAPH_IMAGE=memgraph/memgraph:latest" >> $GITHUB_ENV
+
+      - name: Test mgconsole static build
+        run: |
+          ./tests/test-static.sh --docker $MEMGRAPH_IMAGE build/generic/mgconsole
+          ./tests/test-static.sh --use-ssl --docker $MEMGRAPH_IMAGE build/generic/mgconsole
