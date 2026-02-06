@@ -101,8 +101,8 @@ jobs:
 
       - name: Test mgconsole static build
         run: |
-          ./tests/test-static.sh --docker $MEMGRAPH_IMAGE build/generic/mgconsole
-          ./tests/test-static.sh --use-ssl --docker $MEMGRAPH_IMAGE build/generic/mgconsole
+          ./tests/test-static.sh --docker $MEMGRAPH_IMAGE
+          ./tests/test-static.sh --use-ssl --docker $MEMGRAPH_IMAGE
 
       - name: Cleanup docker images
         run: |
