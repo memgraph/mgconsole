@@ -103,3 +103,12 @@ jobs:
         run: |
           ./tests/test-static.sh --docker $MEMGRAPH_IMAGE build/generic/mgconsole
           ./tests/test-static.sh --use-ssl --docker $MEMGRAPH_IMAGE build/generic/mgconsole
+
+      - name: Cleanup docker images
+        run: |
+          docker rmi $MEMGRAPH_IMAGE || true
+          if [[ "${{ matrix.arch }}" == "X64" ]]; then
+            docker rmi memgraph/mgbuild:v7_centos-9 || true
+          elif [[ "${{ matrix.arch }}" == "ARM64" ]]; then
+            docker rmi memgraph/mgbuild:v7_debian-12-arm || true
+          fi
