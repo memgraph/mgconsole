@@ -21,7 +21,7 @@ jobs:
           cmake -B build -G Ninja -DMEMGRAPH_USE_DOCKER=ON -DMEMGRAPH_DOCKER_IMAGE=$MEMGRAPH_IMAGE
           cmake --build build
           sudo cmake --install build
-          ctest --verbose
+          ctest --verbose --test-dir build
       - name: Save mgconsole test results
         if: always()
         uses: actions/upload-artifact@v4
