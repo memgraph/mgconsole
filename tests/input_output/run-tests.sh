@@ -31,20 +31,47 @@ function echo_success { printf "\033[1;32m~~ $1 ~~\033[0m\n\n"; }
 function echo_failure { printf "\033[1;31m~~ $1 ~~\033[0m\n\n"; }
 
 use_ssl=false
-if [ "$1" == "--use-ssl" ]; then
-  use_ssl=true
-  shift
-fi
+use_docker=false
+memgraph_image="memgraph/memgraph"
+cert_dir=""
+container_name=""
+
+# Parse flags
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --use-ssl)
+            use_ssl=true
+            shift
+            ;;
+        --docker)
+            use_docker=true
+            shift
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 
 if [ ! $# -eq 2 ]; then
-    echo "Usage: $0 [path to memgraph binary] [path to client binary]"
+    echo "Usage: $0 [--use-ssl] [--docker] [path to memgraph binary or docker image] [path to client binary]"
     exit 1
 fi
 
-# Find memgraph binaries.
-if [ ! -x $1 ]; then
-    echo_failure "memgraph executable not found"
-    exit 1
+if [ "$use_docker" = true ]; then
+    memgraph_image=$1
+    # Check if docker is available
+    if ! command -v docker &> /dev/null; then
+        echo_failure "docker command not found"
+        exit 1
+    fi
+else
+    # Find memgraph binaries.
+    if [ ! -x $1 ]; then
+        echo_failure "memgraph executable not found"
+        exit 1
+    fi
+    memgraph_binary=$(realpath $1)
 fi
 
 # Find mgconsole binaries.
@@ -53,7 +80,6 @@ if [ ! -x $2 ]; then
     exit 1
 fi
 
-memgraph_binary=$(realpath $1)
 client_binary=$(realpath $2)
 
 ## Environment setup
@@ -83,22 +109,79 @@ fi
 
 # Start the memgraph process and wait for it to start.
 echo_info "Starting memgraph"
-$memgraph_binary --bolt-port 7687 \
-        --bolt-cert-file=$cert_file \
-        --bolt-key-file=$key_file \
-        --data-directory=$tmpdir \
-        --storage-properties-on-edges=true \
-        --storage-snapshot-interval-sec=0 \
-        --storage-wal-enabled=false \
-        --data-recovery-on-startup=false \
-        --storage-snapshot-on-exit=false \
-        --telemetry-enabled=false \
-        --timezone=UTC \
-        --log-file='' &
+if [ "$use_docker" = true ]; then
+    container_name="mgconsole_test_$$"
+    # Remove container if it already exists (from a previous failed run)
+    docker rm -f $container_name > /dev/null 2>&1
+    # Also check for any containers using port 7687
+    existing_container=$(docker ps -a --filter "publish=7687" --format "{{.Names}}" | grep -v "^$" | head -1)
+    if [ -n "$existing_container" ]; then
+        echo_info "Error: Existing container using port 7687: $existing_container"
+        exit 1
+    fi
+    
+    docker_args=" -p 7687:7687 -p 7444:7444"    
+    if $use_ssl; then
+        docker create --name $container_name $docker_args \
+            $memgraph_image \
+            --bolt-port 7687 \
+            --bolt-cert-file=/etc/memgraph/ssl/cert.pem \
+            --bolt-key-file=/etc/memgraph/ssl/key.pem \
+            --storage-properties-on-edges=true \
+            --storage-snapshot-interval-sec=0 \
+            --storage-wal-enabled=false \
+            --data-recovery-on-startup=false \
+            --storage-snapshot-on-exit=false \
+            --telemetry-enabled=false \
+            --timezone=UTC \
+            --log-file='' || exit 1
+        echo_info "Copying certificates to container"
+        # Create the SSL directory and copy certificates before starting
+        docker cp $cert_file $container_name:/tmp/cert.pem
+        docker cp $key_file $container_name:/tmp/key.pem
+        docker start $container_name
+        # Wait a moment for container to be ready
+        sleep 1
+        # Create directory and copy certificates as root, then fix ownership
+        docker exec -u root $container_name sh -c "mkdir -p /etc/memgraph/ssl/ && cp /tmp/cert.pem /etc/memgraph/ssl/cert.pem && cp /tmp/key.pem /etc/memgraph/ssl/key.pem && chmod 644 /etc/memgraph/ssl/cert.pem && chmod 600 /etc/memgraph/ssl/key.pem && chown -R memgraph:memgraph /etc/memgraph/ssl/ || true"
+        docker exec $container_name ls -la /etc/memgraph/ssl/ 2>&1 || true
+        # Restart container to pick up the certificates
+        docker restart $container_name
+        sleep 2
+    else
+        docker run -d --name $container_name $docker_args \
+            $memgraph_image \
+            --bolt-port 7687 \
+            --storage-properties-on-edges=true \
+            --storage-snapshot-interval-sec=0 \
+            --storage-wal-enabled=false \
+            --data-recovery-on-startup=false \
+            --storage-snapshot-on-exit=false \
+            --telemetry-enabled=false \
+            --timezone=UTC \
+            --log-file='' || exit 1
+    fi
+   
+    wait_for_server 7687
+    echo_success "Started memgraph in docker container"
+else
+    $memgraph_binary --bolt-port 7687 \
+            --bolt-cert-file=$cert_file \
+            --bolt-key-file=$key_file \
+            --data-directory=$tmpdir \
+            --storage-properties-on-edges=true \
+            --storage-snapshot-interval-sec=0 \
+            --storage-wal-enabled=false \
+            --data-recovery-on-startup=false \
+            --storage-snapshot-on-exit=false \
+            --telemetry-enabled=false \
+            --timezone=UTC \
+            --log-file='' &
 
-pid=$!
-wait_for_server 7687
-echo_success "Started memgraph"
+    pid=$!
+    wait_for_server 7687
+    echo_success "Started memgraph"
+fi
 
 
 ## Tests
@@ -109,7 +192,6 @@ echo_info "Prepare database"
 echo  # Blank line
 
 $client_binary $client_flags < ${DIR}/prepare.cypher > $tmpdir/prepare.log
-
 echo_info "Running tests"
 echo  # Blank line
 
@@ -126,7 +208,13 @@ for output_dir in ${DIR}/output_*; do
         run_flags="$client_flags --output-format=$output_format"
 
         echo_info "Running test '$test_name' with $output_format output"
-        $client_binary $run_flags < $filename > $tmpdir/$test_name
+        $client_binary $run_flags < $filename > $tmpdir/$test_name 2>&1
+        test_exit_code=$?
+        if [ $test_exit_code -ne 0 ]; then
+            echo_failure "Test '$test_name' with $output_format output failed with exit code $test_exit_code"
+            echo "Output:"
+            cat $tmpdir/$test_name
+        fi
         diff -b $tmpdir/$test_name $output_dir/$output_name
         test_code=$?
         if [ $test_code -ne 0 ]; then
@@ -149,17 +237,30 @@ done
 ## Cleanup
 echo_info "Starting test cleanup"
 
-# Shutdown the memgraph process.
-kill $pid
-wait -n
-code_mg=$?
+# Shutdown the memgraph process or container.
+if [ "$use_docker" = true ]; then
+    docker stop $container_name > /dev/null 2>&1
+    code_mg=$?
+    docker rm $container_name > /dev/null 2>&1
+    if [ -n "$cert_dir" ]; then
+        rm -rf $cert_dir
+    fi
+else
+    kill $pid
+    wait -n
+    code_mg=$?
+fi
 
 # Remove temporary directory
 rm -rf $tmpdir
 
 # Check memgraph exit code.
 if [ $code_mg -ne 0 ]; then
-    echo_failure "The memgraph process didn't terminate properly!"
+    if [ "$use_docker" = true ]; then
+        echo_failure "The memgraph container didn't terminate properly!"
+    else
+        echo_failure "The memgraph process didn't terminate properly!"
+    fi
     exit $code_mg
 fi
 echo_success "Test cleanup done"
