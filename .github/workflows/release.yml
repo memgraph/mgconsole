@@ -76,6 +76,8 @@ jobs:
   build-binaries:
     name: Build binaries
     uses: ./.github/workflows/ci.yml
+    with:
+      build-static: true
 
   upload-binaries:
     name: Upload binaries
