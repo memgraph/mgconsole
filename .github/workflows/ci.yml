@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt install -y git cmake make gcc g++ libssl-dev ninja-build # mgconsole deps
-          sudo apt install -y libpython3.10 python3-pip # memgraph deps
+          sudo apt install -y libpython3.12 python3-pip # memgraph deps
           mkdir ~/memgraph
           curl -L ${{ env.MEMGRAPH_DOWNLOAD_LINK }} > ~/memgraph/memgraph_${mg_version}-1_amd64.deb
           sudo systemctl mask memgraph
