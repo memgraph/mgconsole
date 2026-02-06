@@ -79,13 +79,13 @@ jobs:
     strategy:
       matrix:
         arch: [X64, ARM64]
-    runs-on: [self-hosted, Linux, ${{ matrix.arch }}]
+    runs-on: [self-hosted, Linux, "${{ matrix.arch }}" ]
     steps:
       - uses: actions/checkout@v4
 
       - name: build mgconsole static
         run: |
-          ./build-static-linux.sh
+          ./build-generic-linux.sh
 
       - name: Save mgconsole static build
         uses: actions/upload-artifact@v4
