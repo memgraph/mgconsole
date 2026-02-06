@@ -99,25 +99,33 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: "mgconsole static Linux build X64"
-          path: linux-x86_64/mgconsole
+          path: temp-linux-x64
 
       - name: Download artifacts Linux ARM64
         uses: actions/download-artifact@v4
         with:
           name: "mgconsole static Linux build ARM64"
-          path: linux-aarch64/mgconsole
+          path: temp-linux-arm64
 
       - name: Download artifacts MacOS
         uses: actions/download-artifact@v4
         with:
           name: "mgconsole MacOS build"
-          path: macos/mgconsole
+          path: temp-macos
 
       - name: Download artifacts Windows
         uses: actions/download-artifact@v4
         with:
           name: "mgconsole Windows build"
-          path: windows/mgconsole.exe
+          path: temp-windows
+
+      - name: Organize binaries
+        run: |
+          mkdir -p linux-x86_64 linux-aarch64 macos windows
+          find temp-linux-x64 -name "mgconsole" -type f | head -1 | xargs -I {} cp {} linux-x86_64/mgconsole
+          find temp-linux-arm64 -name "mgconsole" -type f | head -1 | xargs -I {} cp {} linux-aarch64/mgconsole
+          find temp-macos -name "mgconsole" -type f | head -1 | xargs -I {} cp {} macos/mgconsole
+          find temp-windows -name "mgconsole.exe" -type f | head -1 | xargs -I {} cp {} windows/mgconsole.exe
 
       - name: Upload binaries to S3
         env:
