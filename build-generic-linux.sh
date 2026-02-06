@@ -36,6 +36,7 @@ docker run --rm -d --name builder $DOCKER_IMAGE
 
 echo -e "${GREEN}Copying mgconsole source code to build container...${RESET}"
 docker cp "$PROJECT_ROOT/." builder:/home/mg/mgconsole
+docker exec -u root builder bash -c "chown -R mg:mg /home/mg/mgconsole"
 
 echo -e "${GREEN}Building mgconsole...${RESET}"
 docker exec -u mg builder bash -c "
