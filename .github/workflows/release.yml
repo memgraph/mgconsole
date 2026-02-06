@@ -133,7 +133,6 @@ jobs:
           git config user.email "github-actions@github.com"
 
       - name: Set tag
-        if: ${{ github.event.inputs.test-release == 'false' }}
         run: |
           TAG="v${{ github.event.inputs.version }}"
           echo "TAG=${TAG}" >> $GITHUB_ENV
