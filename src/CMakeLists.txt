@@ -58,32 +58,37 @@ endif()
 # Setup GFlags. The GIT_TAG refers to this build:
 # https://github.com/gflags/gflags/tree/70c01a642f08734b7bddc9687884844ca117e080,
 # which is the earliest to support modern cmake.
+get_filename_component(GFLAGS_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/gflags" ABSOLUTE)
+get_filename_component(GFLAGS_LIB_PATH "${GFLAGS_PREFIX}/lib/libgflags.a" ABSOLUTE)
+get_filename_component(GFLAGS_DEBUG_LIB_PATH "${GFLAGS_PREFIX}/lib/libgflags_debug.a" ABSOLUTE)
 ExternalProject_Add(gflags-proj
-  PREFIX gflags
+  PREFIX ${GFLAGS_PREFIX}
   GIT_REPOSITORY https://github.com/gflags/gflags.git
   GIT_TAG 70c01a6
   CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
   "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
   "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
-  INSTALL_DIR "${PROJECT_BINARY_DIR}/gflags")
+  INSTALL_DIR ${GFLAGS_PREFIX}
+  BUILD_BYPRODUCTS "${GFLAGS_LIB_PATH}" "${GFLAGS_DEBUG_LIB_PATH}")
 
-ExternalProject_Get_Property(gflags-proj install_dir)
-set(GFLAGS_ROOT ${install_dir})
+set(GFLAGS_ROOT ${GFLAGS_PREFIX})
 set(GFLAGS_INCLUDE_DIRS ${GFLAGS_ROOT}/include)
-set(GFLAGS_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags.a)
-set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_ROOT}/lib/libgflags_debug.a)
+set(GFLAGS_LIBRARY_PATH ${GFLAGS_LIB_PATH})
+set(GFLAGS_DEBUG_LIBRARY_PATH ${GFLAGS_DEBUG_LIB_PATH})
 set(GFLAGS_LIBRARY gflags)
 
 add_library(${GFLAGS_LIBRARY} STATIC IMPORTED)
 target_compile_definitions(${GFLAGS_LIBRARY} INTERFACE GFLAGS_IS_A_DLL=0)
 set_target_properties(${GFLAGS_LIBRARY} PROPERTIES
-  IMPORTED_LOCATION ${GFLAGS_LIBRARY_PATH}
-  IMPORTED_LOCATION_DEBUG ${GFLAGS_DEBUG_LIBRARY_PATH}
+  IMPORTED_LOCATION "${GFLAGS_LIBRARY_PATH}"
+  IMPORTED_LOCATION_DEBUG "${GFLAGS_DEBUG_LIBRARY_PATH}"
   INTERFACE_LINK_LIBRARIES Threads::Threads)
 add_dependencies(${GFLAGS_LIBRARY} gflags-proj)
 
+get_filename_component(MGCLIENT_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/mgclient" ABSOLUTE)
+get_filename_component(MGCLIENT_LIB_PATH "${MGCLIENT_PREFIX}/${MG_INSTALL_LIB_DIR}/libmgclient.a" ABSOLUTE)
 ExternalProject_Add(mgclient-proj
-  PREFIX mgclient
+  PREFIX ${MGCLIENT_PREFIX}
   GIT_REPOSITORY https://github.com/memgraph/mgclient.git
   GIT_TAG v1.5.0
   CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
@@ -91,17 +96,17 @@ ExternalProject_Add(mgclient-proj
   "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
   "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
   ${MACOSX_OPENSSL_ROOTDIR_FLAG}
-  INSTALL_DIR "${PROJECT_BINARY_DIR}/mgclient")
+  INSTALL_DIR ${MGCLIENT_PREFIX}
+  BUILD_BYPRODUCTS "${MGCLIENT_LIB_PATH}")
 
-ExternalProject_Get_Property(mgclient-proj install_dir)
-set(MGCLIENT_ROOT ${install_dir})
+set(MGCLIENT_ROOT ${MGCLIENT_PREFIX})
 set(MGCLIENT_INCLUDE_DIRS ${MGCLIENT_ROOT}/include)
-set(MGCLIENT_LIBRARY_PATH ${MGCLIENT_ROOT}/${MG_INSTALL_LIB_DIR}/libmgclient.a)
+set(MGCLIENT_LIBRARY_PATH ${MGCLIENT_LIB_PATH})
 set(MGCLIENT_LIBRARY mgclient)
 
 add_library(${MGCLIENT_LIBRARY} STATIC IMPORTED)
 set_target_properties(${MGCLIENT_LIBRARY} PROPERTIES
-  IMPORTED_LOCATION ${MGCLIENT_LIBRARY_PATH}
+  IMPORTED_LOCATION "${MGCLIENT_LIBRARY_PATH}"
   INTERFACE_LINK_LIBRARIES Threads::Threads)
 add_dependencies(${MGCLIENT_LIBRARY} mgclient-proj)
 
