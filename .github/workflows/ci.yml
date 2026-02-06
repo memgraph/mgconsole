@@ -3,6 +3,7 @@ name: CI
 on: 
   push:
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   build_and_test_ubuntu:
@@ -76,6 +77,7 @@ jobs:
           path: build/src/mgconsole
 
   build_and_test_static:
+    if: ${{ github.event_name == 'workflow_call' }}
     strategy:
       fail-fast: false
       matrix:
