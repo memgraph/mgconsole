@@ -69,9 +69,7 @@ jobs:
             mingw-w64-x86_64-openssl
       - name: Build and install mgconsole
         run: |
-          mkdir build
-          cd build
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ..
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release .
           cmake --build build --parallel
           cmake --install build
       - name: Save mgconsole Windows build
@@ -93,7 +91,7 @@ jobs:
           brew install openssl
       - name: Build mgconsole
         run: |
-          cmake -B build -G Ninja -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release ..
+          cmake -B build -G Ninja -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release .
           cmake --build build
       - name: Save mgconsole MacOS build
         uses: actions/upload-artifact@v4
