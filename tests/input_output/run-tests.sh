@@ -33,7 +33,6 @@ function echo_failure { printf "\033[1;31m~~ $1 ~~\033[0m\n\n"; }
 use_ssl=false
 use_docker=false
 memgraph_image="memgraph/memgraph"
-cert_dir=""
 container_name=""
 
 # Parse flags
@@ -242,9 +241,6 @@ if [ "$use_docker" = true ]; then
     docker stop $container_name > /dev/null 2>&1
     code_mg=$?
     docker rm $container_name > /dev/null 2>&1
-    if [ -n "$cert_dir" ]; then
-        rm -rf $cert_dir
-    fi
 else
     kill $pid
     wait -n
