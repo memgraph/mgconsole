@@ -17,8 +17,11 @@ on:
         required: false
         default: false
 
+run-name: CI: Build and test mgconsole
+
 jobs:
   build_and_test_ubuntu:
+    name: Build and test mgconsole on Ubuntu
     runs-on: ubuntu-latest
     steps:
       - name: Pull latest memgraph image
@@ -40,6 +43,7 @@ jobs:
           path: build/Testing/Temporary/LastTest.log 
 
   build_windows_mingw:
+    name: Build and test mgconsole on Windows
     runs-on: windows-latest
     defaults:
       run:
@@ -68,6 +72,7 @@ jobs:
           path: build/src/mgconsole.exe
 
   build_apple:
+    name: Build and test mgconsole on Apple
     runs-on: macos-latest
     steps:
       - name: Set-up repository
@@ -90,6 +95,7 @@ jobs:
 
   build_and_test_static:
     if: ${{ inputs.build-static }}
+    name: Build and test mgconsole static build
     strategy:
       fail-fast: false
       matrix:

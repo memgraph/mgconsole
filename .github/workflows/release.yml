@@ -22,8 +22,11 @@ env:
   S3_BUCKET: "${{ github.event.inputs.test-release == 'true' && 'deps.memgraph.io' || 'download.memgraph.com' }}"
   S3_BASE_PREFIX: "${{ github.event.inputs.test-release == 'true' && 'mgconsole-test' || 'mgconsole' }}/v${{ github.event.inputs.version }}"
 
+run-name: Release ${{ github.event.inputs.version }} ${{ github.event.inputs.test-release == 'true' && 'test' || '' }}
+
 jobs:
   build-and-push:
+    name: Build and push Docker image
     runs-on: ubuntu-latest
     env:
       DOCKER_ORGANIZATION_NAME: memgraph
@@ -162,10 +165,10 @@ jobs:
 
       - name: Compress binaries
         run: |
-          tar -czvf mgconsole-${{ env.TAG }}-linux-x86_64.tar.gz linux-x86_64/mgconsole
-          tar -czvf mgconsole-${{ env.TAG }}-linux-aarch64.tar.gz linux-aarch64/mgconsole
-          tar -czvf mgconsole-${{ env.TAG }}-macos.tar.gz macos/mgconsole
-          tar -czvf mgconsole-${{ env.TAG }}-windows.tar.gz windows/mgconsole.exe
+          tar -czvf mgconsole-${{ env.TAG }}-linux-x86_64.tar.gz -C linux-x86_64 mgconsole
+          tar -czvf mgconsole-${{ env.TAG }}-linux-aarch64.tar.gz -C linux-aarch64 mgconsole
+          tar -czvf mgconsole-${{ env.TAG }}-macos.tar.gz -C macos mgconsole
+          tar -czvf mgconsole-${{ env.TAG }}-windows.tar.gz -C windows mgconsole.exe
 
       - name: Upload binaries to Release Linux X64
         uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5  # v1.0.2
