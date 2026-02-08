@@ -17,7 +17,7 @@ on:
         required: false
         default: false
 
-run-name: CI: Build and test mgconsole
+run-name: "CI: Build and test mgconsole"
 
 jobs:
   build_and_test_ubuntu:
@@ -28,16 +28,19 @@ jobs:
         run: |
           docker pull memgraph/memgraph:latest
           echo "MEMGRAPH_IMAGE=memgraph/memgraph:latest" >> $GITHUB_ENV
-      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
       - name: Install and test mgconsole
         run: |
           cmake -B build -G Ninja -DMEMGRAPH_USE_DOCKER=ON -DMEMGRAPH_DOCKER_IMAGE=$MEMGRAPH_IMAGE
           cmake --build build
           sudo cmake --install build
           ctest --verbose --test-dir build
+
       - name: Save mgconsole test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: "mgconsole_ctest.log"
           path: build/Testing/Temporary/LastTest.log 
@@ -50,8 +53,9 @@ jobs:
         shell: msys2 {0}
     steps:
       - name: Set-up repository
-        uses: actions/checkout@v4
-      - uses: msys2/setup-msys2@v2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda  # v2.30.0
         with:
           msystem: MINGW64
           update: true
@@ -60,13 +64,15 @@ jobs:
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-openssl
+
       - name: Build and install mgconsole
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release .
           cmake --build build --parallel
           cmake --install build
+
       - name: Save mgconsole Windows build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: "mgconsole Windows build"
           path: build/src/mgconsole.exe
@@ -76,19 +82,22 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Set-up repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       # NOTE: CI can't execute end2end tests because there is no way to run
       #       Memgraph on CI MacOS machines.
+
       - name: Install openssl
         run: |
           brew update
           brew install openssl
+
       - name: Build mgconsole
         run: |
           cmake -B build -G Ninja -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release .
           cmake --build build
+
       - name: Save mgconsole MacOS build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: "mgconsole MacOS build"
           path: build/src/mgconsole
@@ -102,14 +111,14 @@ jobs:
         arch: [X64, ARM64]
     runs-on: [self-hosted, Linux, "${{ matrix.arch }}" ]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: build mgconsole static
         run: |
           ./build-generic-linux.sh
 
       - name: Save mgconsole static build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: "mgconsole static Linux build ${{ matrix.arch }}"
           path: build/generic/mgconsole
