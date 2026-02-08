@@ -93,7 +93,7 @@ jobs:
 
       - name: Build mgconsole
         run: |
-          cmake -B build -G Ninja -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release .
+          cmake -B build -G Ninja -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local .
           cmake --build build
           sudo cmake --install build
 
