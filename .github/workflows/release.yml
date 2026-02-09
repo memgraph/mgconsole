@@ -1,10 +1,10 @@
-name: Build and Release mgconsole Docker Image
+name: Build and Release mgconsole
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version of the Docker image to publish."
+        description: "Version of the mgconsole to publish."
         required: true
         default: "0.0.1"
       force_release:
