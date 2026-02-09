@@ -4,7 +4,7 @@ on:
   push:
   workflow_dispatch:
     inputs:
-      buil-static:
+      build-static:
         description: "Build static version of mgconsole"
         type: boolean
         required: false
