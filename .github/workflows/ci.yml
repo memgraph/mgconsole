@@ -131,6 +131,7 @@ jobs:
 
 
   build_apple_universal:
+    needs: [build_apple_arm64, build_apple_x86_64]
     name: Build Apple universal binary (ARM64 and X86_64)
     runs-on: macos-15
     steps:
@@ -153,6 +154,10 @@ jobs:
         run: |
           mkdir -p macos
           lipo -create temp-macos-arm64/mgconsole temp-macos-x86_64/mgconsole -output macos/mgconsole
+
+      - name: List architecture of the binary
+        run: |
+          lipo -info macos/mgconsole
 
       - name: Save mgconsole MacOS universal build
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
