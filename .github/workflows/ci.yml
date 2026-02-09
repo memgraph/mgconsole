@@ -77,9 +77,9 @@ jobs:
           name: "mgconsole Windows build"
           path: build/src/mgconsole.exe
 
-  build_apple:
-    name: Build and test mgconsole on Apple
-    runs-on: macos-latest
+  build_apple_arm64:
+    name: Build and test mgconsole on Apple ARM64
+    runs-on: macos-15
     steps:
       - name: Set-up repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -100,8 +100,65 @@ jobs:
       - name: Save mgconsole MacOS build
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
-          name: "mgconsole MacOS build"
+          name: "mgconsole MacOS build ARM64"
           path: build/src/mgconsole
+
+  build_apple_x86_64:
+    name: Build and test mgconsole on Apple X86_64
+    runs-on: macos-15-intel
+    steps:
+      - name: Set-up repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      # NOTE: CI can't execute end2end tests because there is no way to run
+      #       Memgraph on CI MacOS machines.
+
+      - name: Install openssl
+        run: |
+          brew update
+          brew install openssl
+
+      - name: Build mgconsole
+        run: |
+          cmake -B build -G Ninja -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release .
+          cmake --build build
+          sudo cmake --install build
+
+      - name: Save mgconsole MacOS build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: "mgconsole MacOS build X86_64"
+          path: build/src/mgconsole
+
+
+  build_apple_universal:
+    name: Build Apple universal binary (ARM64 and X86_64)
+    runs-on: macos-15
+    steps:
+      - name: Set-up repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Download artifacts Apple ARM64
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: "mgconsole MacOS build ARM64"
+          path: temp-macos-arm64
+
+      - name: Download artifacts Apple X86_64
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: "mgconsole MacOS build X86_64"
+          path: temp-macos-x86_64
+
+      - name: Organize binaries
+        run: |
+          mkdir -p macos
+          lipo -create temp-macos-arm64/mgconsole temp-macos-x86_64/mgconsole -output macos/mgconsole
+
+      - name: Save mgconsole MacOS universal build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: "mgconsole MacOS universal build"
+          path: macos/mgconsole
 
   build_and_test_static:
     if: ${{ inputs.build-static }}
