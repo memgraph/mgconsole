@@ -3,118 +3,204 @@ name: CI
 on: 
   push:
   workflow_dispatch:
+    inputs:
+      build-static:
+        description: "Build static version of mgconsole"
+        type: boolean
+        required: false
+        default: false
+  workflow_call:
+    inputs:
+      build-static:
+        description: "Build static version of mgconsole"
+        type: boolean
+        required: false
+        default: false
 
-env:
-  OFFICIAL: true
+run-name: "CI: Build and test mgconsole"
 
 jobs:
   build_and_test_ubuntu:
-    strategy:
-      matrix:
-        platform: [ubuntu-22.04]
-        mg_version:
-          - "2.19.0"
-    runs-on: ${{ matrix.platform }}
+    name: Build and test mgconsole on Ubuntu
+    runs-on: ubuntu-latest
     steps:
-      - name: Set up and check memgraph download link
+      - name: Pull latest memgraph image
         run: |
-          mg_version=${{ matrix.mg_version }}
-          mg_version_short=${mg_version%%-*}
-          if [ "${{ env.OFFICIAL }}" = "true" ]; then
-            mg_url="https://download.memgraph.com/memgraph/v${mg_version}/${{ matrix.platform }}/memgraph_${mg_version_short}-1_amd64.deb"
-          else
-            mg_url="https://s3.eu-west-1.amazonaws.com/deps.memgraph.io/memgraph/v${mg_version}/${{ matrix.platform }}/memgraph_${mg_version_short}-1_amd64.deb"
-          fi
-          echo "Checking Memgraph download link: $mg_url"
-          if curl --output /dev/null --silent --head --fail $mg_url; then
-            echo "Memgraph download link is valid"
-            echo "MEMGRAPH_DOWNLOAD_LINK=${mg_url}" >> $GITHUB_ENV 
-          else
-            echo "Memgraph download link is not valid"
-            exit 1
-          fi
-      - name: Install dependencies (Ubuntu 22.04)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt install -y git cmake make gcc g++ libssl-dev # mgconsole deps
-          sudo apt install -y libpython3.10 python3-pip # memgraph deps
-          mkdir ~/memgraph
-          curl -L ${{ env.MEMGRAPH_DOWNLOAD_LINK }} > ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
-          sudo systemctl mask memgraph
-          sudo dpkg -i ~/memgraph/memgraph_${{ matrix.mg_version }}-1_amd64.deb
-      - uses: actions/checkout@v4
+          docker pull memgraph/memgraph:latest
+          echo "MEMGRAPH_IMAGE=memgraph/memgraph:latest" >> $GITHUB_ENV
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
       - name: Install and test mgconsole
         run: |
-          mkdir build
-          cd build
-          cmake ..
-          make
-          sudo make install
-          ctest --verbose
+          cmake -B build -G Ninja -DMEMGRAPH_USE_DOCKER=ON -DMEMGRAPH_DOCKER_IMAGE=$MEMGRAPH_IMAGE
+          cmake --build build
+          sudo cmake --install build
+          ctest --verbose --test-dir build
+
       - name: Save mgconsole test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: "mgconsole_ctest.log"
           path: build/Testing/Temporary/LastTest.log 
 
   build_windows_mingw:
-    runs-on: windows-2022
-    strategy:
-      matrix:
-        include: [
-          { msystem: MINGW64, arch: x86_64 }
-        ]
+    name: Build and test mgconsole on Windows
+    runs-on: windows-latest
     defaults:
       run:
         shell: msys2 {0}
     steps:
       - name: Set-up repository
-        uses: actions/checkout@v4
-      - uses: msys2/setup-msys2@v2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda  # v2.30.0
         with:
-          msystem: ${{ matrix.msystem }}
+          msystem: MINGW64
           update: true
           install: >-
             git base-devel
-            mingw-w64-${{ matrix.arch }}-toolchain
-            mingw-w64-${{ matrix.arch }}-cmake
-            mingw-w64-${{ matrix.arch }}-openssl
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-openssl
+
       - name: Build and install mgconsole
         run: |
-          mkdir build
-          cd build
-          cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
-          cmake --build . --parallel
-          make install
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release .
+          cmake --build build --parallel
+          cmake --install build
+
       - name: Save mgconsole Windows build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: "mgconsole Windows build"
           path: build/src/mgconsole.exe
 
-  build_apple:
-    strategy:
-      matrix:
-        platform: [macos-14]
-    runs-on: ${{ matrix.platform }}
+  build_apple_arm64:
+    name: Build and test mgconsole on Apple ARM64
+    runs-on: macos-15
     steps:
       - name: Set-up repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       # NOTE: CI can't execute end2end tests because there is no way to run
       #       Memgraph on CI MacOS machines.
+
       - name: Install openssl
         run: |
           brew update
           brew install openssl
+
       - name: Build mgconsole
         run: |
-          mkdir build
-          cd build
-          cmake -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release ..
-          make
+          cmake -B build -G Ninja -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release .
+          cmake --build build
+          sudo cmake --install build
+
       - name: Save mgconsole MacOS build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
-          name: "mgconsole MacOS build"
+          name: "mgconsole MacOS build ARM64"
           path: build/src/mgconsole
+
+  build_apple_x86_64:
+    name: Build and test mgconsole on Apple X86_64
+    runs-on: macos-15-intel
+    steps:
+      - name: Set-up repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      # NOTE: CI can't execute end2end tests because there is no way to run
+      #       Memgraph on CI MacOS machines.
+
+      - name: Install openssl
+        run: |
+          brew update
+          brew install openssl
+
+      - name: Build mgconsole
+        run: |
+          cmake -B build -G Ninja -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release .
+          cmake --build build
+          sudo cmake --install build
+
+      - name: Save mgconsole MacOS build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: "mgconsole MacOS build X86_64"
+          path: build/src/mgconsole
+
+
+  build_apple_universal:
+    needs: [build_apple_arm64, build_apple_x86_64]
+    name: Build Apple universal binary (ARM64 and X86_64)
+    runs-on: macos-15
+    steps:
+      - name: Set-up repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Download artifacts Apple ARM64
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: "mgconsole MacOS build ARM64"
+          path: temp-macos-arm64
+
+      - name: Download artifacts Apple X86_64
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: "mgconsole MacOS build X86_64"
+          path: temp-macos-x86_64
+
+      - name: Organize binaries
+        run: |
+          mkdir -p macos
+          lipo -create temp-macos-arm64/mgconsole temp-macos-x86_64/mgconsole -output macos/mgconsole
+
+      - name: List architecture of the binary
+        run: |
+          lipo -info macos/mgconsole
+
+      - name: Save mgconsole MacOS universal build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: "mgconsole MacOS universal build"
+          path: macos/mgconsole
+
+  build_and_test_static:
+    if: ${{ inputs.build-static }}
+    name: Build and test mgconsole static build
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [X64, ARM64]
+    runs-on: [self-hosted, Linux, "${{ matrix.arch }}" ]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: build mgconsole static
+        run: |
+          ./build-generic-linux.sh
+
+      - name: Save mgconsole static build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: "mgconsole static Linux build ${{ matrix.arch }}"
+          path: build/generic/mgconsole
+
+      - name: Pull latest memgraph image
+        run: |
+          docker pull memgraph/memgraph:latest
+          echo "MEMGRAPH_IMAGE=memgraph/memgraph:latest" >> $GITHUB_ENV
+
+      - name: Test mgconsole static build
+        run: |
+          ./tests/test-static.sh --docker $MEMGRAPH_IMAGE
+          ./tests/test-static.sh --use-ssl --docker $MEMGRAPH_IMAGE
+
+      - name: Cleanup docker images
+        run: |
+          docker rmi $MEMGRAPH_IMAGE || true
+          if [[ "${{ matrix.arch }}" == "X64" ]]; then
+            docker rmi memgraph/mgbuild:v7_centos-9 || true
+          elif [[ "${{ matrix.arch }}" == "ARM64" ]]; then
+            docker rmi memgraph/mgbuild:v7_debian-12-arm || true
+          fi

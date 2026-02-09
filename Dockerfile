@@ -1,5 +1,5 @@
 
-FROM debian:bullseye-slim AS builder
+FROM debian:trixie-slim AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -21,7 +21,7 @@ RUN mkdir build && cd build && \
     make && \
     make install
 
-FROM debian:bullseye-slim
+FROM gcr.io/distroless/base-debian13
 
 WORKDIR /mgconsole
 

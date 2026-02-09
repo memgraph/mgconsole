@@ -1,10 +1,10 @@
-name: Build and Release mgconsole Docker Image
+name: Build and Release mgconsole
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version of the Docker image to publish."
+        description: "Version of the mgconsole to publish."
         required: true
         default: "0.0.1"
       force_release:
@@ -12,23 +12,35 @@ on:
         type: boolean
         required: false
         default: false
+      test-release:
+        description: "Test the release by pushing to test repository"
+        type: boolean
+        required: false
+        default: true
+
+env:
+  S3_BUCKET: "${{ github.event.inputs.test-release == 'true' && 'deps.memgraph.io' || 'download.memgraph.com' }}"
+  S3_BASE_PREFIX: "${{ github.event.inputs.test-release == 'true' && 'mgconsole-test' || 'mgconsole' }}/v${{ github.event.inputs.version }}"
+
+run-name: Release ${{ github.event.inputs.version }} ${{ github.event.inputs.test-release == 'true' && 'test' || '' }}
 
 jobs:
   build-and-push:
+    name: Build and push Docker image
     runs-on: ubuntu-latest
     env:
       DOCKER_ORGANIZATION_NAME: memgraph
-      DOCKER_REPOSITORY_NAME: mgconsole
+      DOCKER_REPOSITORY_NAME: "${{ github.event.inputs.test-release == 'true' && 'mgconsole-test' || 'mgconsole' }}"
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
@@ -50,7 +62,7 @@ jobs:
           fi
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83  # v6.18.0
         with:
           context: .
           push: true
@@ -59,7 +71,141 @@ jobs:
             ${{ env.DOCKER_ORGANIZATION_NAME }}/${{ env.DOCKER_REPOSITORY_NAME }}:latest
           platforms: linux/amd64,linux/arm64
 
-
       - name: Verify Docker image
         run: |
           docker run --rm $DOCKER_ORGANIZATION_NAME/$DOCKER_REPOSITORY_NAME:${{ github.event.inputs.version }} --version
+
+  build-binaries:
+    name: Build binaries
+    uses: ./.github/workflows/ci.yml
+    with:
+      build-static: true
+
+  upload-binaries:
+    name: Upload binaries
+    needs: [build-binaries, build-and-push]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Login to AWS
+        uses: aws-actions/configure-aws-credentials@f7b8181755fc1413cd909cbac860d8a76dc848f1  # v6.0.2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-west-1
+
+      - name: Download artifacts Linux X64
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: "mgconsole static Linux build X64"
+          path: temp-linux-x64
+
+      - name: Download artifacts Linux ARM64
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: "mgconsole static Linux build ARM64"
+          path: temp-linux-arm64
+
+      - name: Download artifacts MacOS
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: "mgconsole MacOS universal build"
+          path: temp-macos
+
+      - name: Download artifacts Windows
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: "mgconsole Windows build"
+          path: temp-windows
+
+      - name: Organize binaries
+        run: |
+          mkdir -p linux-x86_64 linux-aarch64 macos windows
+          find temp-linux-x64 -name "mgconsole" -type f | head -1 | xargs -I {} cp {} linux-x86_64/mgconsole
+          find temp-linux-arm64 -name "mgconsole" -type f | head -1 | xargs -I {} cp {} linux-aarch64/mgconsole
+          find temp-macos -name "mgconsole" -type f | head -1 | xargs -I {} cp {} macos/mgconsole
+          find temp-windows -name "mgconsole.exe" -type f | head -1 | xargs -I {} cp {} windows/mgconsole.exe
+
+      - name: Upload binaries to S3
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          aws s3 cp linux-x86_64/mgconsole s3://${{ env.S3_BUCKET }}/${{ env.S3_BASE_PREFIX }}/linux-x86_64/mgconsole
+          aws s3 cp linux-aarch64/mgconsole s3://${{ env.S3_BUCKET }}/${{ env.S3_BASE_PREFIX }}/linux-aarch64/mgconsole
+          aws s3 cp macos/mgconsole s3://${{ env.S3_BUCKET }}/${{ env.S3_BASE_PREFIX }}/macos/mgconsole
+          aws s3 cp windows/mgconsole.exe s3://${{ env.S3_BUCKET }}/${{ env.S3_BASE_PREFIX }}/windows/mgconsole.exe
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+      - name: Set tag
+        run: |
+          TAG="v${{ github.event.inputs.version }}"
+          echo "TAG=${TAG}" >> $GITHUB_ENV
+          git tag $TAG
+          git push origin $TAG
+  
+      # TODO(matt): this action is archived, we should probably find a suitable replacement
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@0cb9c9b65d5d1901c1f53e5e66eaf4afd303e70e  # v1.1.4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.TAG }}
+          release_name: "Release ${{ env.TAG }}"
+          draft: true
+          prerelease: false
+
+      - name: Compress binaries
+        run: |
+          tar -czvf mgconsole-${{ env.TAG }}-linux-x86_64.tar.gz -C linux-x86_64 mgconsole
+          tar -czvf mgconsole-${{ env.TAG }}-linux-aarch64.tar.gz -C linux-aarch64 mgconsole
+          tar -czvf mgconsole-${{ env.TAG }}-macos.tar.gz -C macos mgconsole
+          tar -czvf mgconsole-${{ env.TAG }}-windows.tar.gz -C windows mgconsole.exe
+
+      # TODO(matt): this action is archived, we should probably find a suitable replacement
+      - name: Upload binaries to Release Linux X64
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5  # v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./mgconsole-${{ env.TAG }}-linux-x86_64.tar.gz
+          asset_name: mgconsole-${{ env.TAG }}-linux-x86_64.tar.gz
+          asset_content_type: application/octet-stream
+
+      - name: Upload binaries to Release Linux ARM64
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5  # v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./mgconsole-${{ env.TAG }}-linux-aarch64.tar.gz
+          asset_name: mgconsole-${{ env.TAG }}-linux-aarch64.tar.gz
+          asset_content_type: application/octet-stream
+
+      - name: Upload binaries to Release MacOS
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5  # v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./mgconsole-${{ env.TAG }}-macos.tar.gz
+          asset_name: mgconsole-${{ env.TAG }}-macos.tar.gz
+          asset_content_type: application/octet-stream
+
+      - name: Upload binaries to Release Windows
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5  # v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./mgconsole-${{ env.TAG }}-windows.tar.gz
+          asset_name: mgconsole-${{ env.TAG }}-windows.tar.gz
+          asset_content_type: application/octet-stream

@@ -23,7 +23,7 @@ docker run -it memgraph/mgconsole:latest
 ## Building and installing
 
 To build and install mgconsole from source you will need:
-  - CMake version >= 3.4
+  - CMake version >= 3.10
   - OpenSSL version >= 1.0.2
   - C compiler supporting C11
   - C++ compiler supporting C++20
@@ -31,19 +31,19 @@ To build and install mgconsole from source you will need:
 To install compile dependencies on Debian / Ubuntu:
 
 ```
-apt-get install -y git cmake make gcc g++ libssl-dev
+apt-get install -y git cmake make gcc g++ libssl-dev ninja-build
 ```
 
 On RedHat / CentOS / Fedora:
 
 ```
-yum install -y git cmake make gcc gcc-c++ openssl-devel libstdc++-static
+yum install -y git cmake make gcc gcc-c++ openssl-devel libstdc++-static ninja-build
 ```
 
 On MacOS, first make sure you have [XCode](https://developer.apple.com/xcode/) and [Homebrew](https://brew.sh) installed. Then, in the terminal, paste:
 
 ```
-brew install git cmake make openssl
+brew install git cmake make openssl ninja
 ```
 
 On Windows, you need to install the MSYS2. Just follow the [instructions](https://www.msys2.org), up to step 6.
@@ -59,39 +59,31 @@ inside the MSYS2 MINGW64 terminal:
 pacman -Syu --needed base-devel git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-openssl
 ```
 
-Once everything is in place, create a build directory inside the source
-directory and configure the build by running CMake from it as follows:
+Once everything is in place, configure the build by running CMake as follows:
 
 * on Linux:
 ```
-mkdir build
-cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release .
 ```
 
 * on MacOS:
 ```
-mkdir build
-cd build
-cmake -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release ..
+cmake -B build -G Ninja -DOPENSSL_ROOT_DIR="$(brew --prefix openssl)" -DCMAKE_BUILD_TYPE=Release .
 ```
 
 * on Windows, from the MSYS2 MINGW64 terminal:
 ```
-mkdir build
-cd build
-cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
+cmake -B build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release .
 ```
 
-After running CMake, you should see a Makefile in the build directory. Then you
-can build the project by running:
+After running CMake, you can build the project by running:
 ```
-make
+cmake --build build
 ```
 
 This will build the `mgconsole` binary. To install it, run:
 ```
-make install
+cmake --install build
 ```
 
 This will install to system default installation directory. If you want to
