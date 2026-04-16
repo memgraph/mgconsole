@@ -21,7 +21,7 @@ RUN mkdir build && cd build && \
     make && \
     make install
 
-FROM gcr.io/distroless/base-debian13
+FROM debian:trixie-slim
 
 WORKDIR /mgconsole
 
