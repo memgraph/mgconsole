@@ -21,7 +21,7 @@ RUN mkdir build && cd build && \
     make && \
     make install
 
-FROM gcr.io/distroless/base-debian13
+FROM gcr.io/distroless/base-debian13:debug
 
 WORKDIR /mgconsole
 
