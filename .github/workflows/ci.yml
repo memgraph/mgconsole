@@ -208,6 +208,7 @@ jobs:
   docker_build_and_test:
     name: Build and test mgconsole in Docker container
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -219,6 +220,22 @@ jobs:
       - name: Run latest Memgraph Docker container
         run: |
           docker run --rm -d --name memgraph --network host memgraph/memgraph:latest --telemetry-enabled=false
+
+      - name: Wait for Memgraph Bolt
+        run: |
+          host=127.0.0.1
+          port=7687
+          max_attempts=120
+          delay=1
+          for attempt in $(seq 1 "$max_attempts"); do
+            if bash -c "echo >/dev/tcp/${host}/${port}" 2>/dev/null; then
+              echo "Memgraph Bolt port open at ${host}:${port}"
+              exit 0
+            fi
+            sleep "$delay"
+          done
+          echo "Timeout waiting for Memgraph Bolt at ${host}:${port}"
+          exit 1
 
       - name: Test mgconsole in Docker container
         run: |
