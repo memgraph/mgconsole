@@ -204,3 +204,33 @@ jobs:
           elif [[ "${{ matrix.arch }}" == "ARM64" ]]; then
             docker rmi memgraph/mgbuild:v7_debian-12-arm || true
           fi
+
+  docker_build_and_test:
+    name: Build and test mgconsole in Docker container
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Build and test mgconsole in Docker container
+        run: |
+          docker build -t mgconsole .
+
+      - name: Run latest Memgraph Docker container
+        run: |
+          docker run --rm -d --name memgraph --network host memgraph/memgraph:latest --telemetry-enabled=false
+
+      - name: Test mgconsole in Docker container
+        run: |
+          # Test pipe directly into docker run
+          echo "RETURN 1;" | docker run --network host mgconsole:latest
+
+          # Test entrypoint override with echo
+          docker run --network host --rm --entrypoint sh mgconsole:latest -c "echo 'RETURN 1;' | mgconsole"
+      
+      - name: Cleanup docker images
+        run: |
+          docker rmi mgconsole || true
+          docker stop memgraph || true
+          docker rm memgraph || true
+          docker rmi memgraph/memgraph:latest || true
