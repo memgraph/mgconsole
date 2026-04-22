@@ -91,7 +91,7 @@ DEFINE_bool(csv_doublequote, true,
             "If `csv-doublequote` is false, 'csv-escapechar' must be set.");
 
 // history
-DEFINE_string(history, "~/.memgraph", "Use the specified directory to save history.");
+DEFINE_string(history, "/tmp/.memgraph", "Use the specified directory to save history.");  // Use /tmp because in K8s deployments users want to have read-only root filesystem. Folder /home/memgraph is part then of the root fileystem and hence read-only
 DEFINE_bool(no_history, false, "Do not save history.");
 
 DEFINE_string(
