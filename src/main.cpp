@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 #include <iostream>
 #include <optional>
 #include <thread>
@@ -91,7 +92,7 @@ DEFINE_bool(csv_doublequote, true,
             "If `csv-doublequote` is false, 'csv-escapechar' must be set.");
 
 // history
-DEFINE_string(history, "/tmp/.memgraph", "Use the specified directory to save history.");  // Use /tmp because in K8s deployments users want to have read-only root filesystem. Folder /home/memgraph is part then of the root fileystem and hence read-only
+DEFINE_string(history, "~/.memgraph", "Use the specified directory to save history.");
 DEFINE_bool(no_history, false, "Do not save history.");
 
 DEFINE_string(
@@ -188,7 +189,14 @@ int main(int argc, char **argv) {
   };
 
   if (console::is_a_tty(STDIN_FILENO)) {  // INTERACTIVE
-    return mode::interactive::Run(bolt_config, FLAGS_history, FLAGS_no_history, FLAGS_verbose_execution_info, csv_opts,
+    auto const history_file = std::invoke([&]() -> std::string {
+      if (const char *env_file = std::getenv("MGCONSOLE_HISTORY_PATH")) {
+        return env_file;
+      }
+      return FLAGS_history;
+    });
+
+    return mode::interactive::Run(bolt_config, history_file, FLAGS_no_history, FLAGS_verbose_execution_info, csv_opts,
                                   output_opts);
   } else if (FLAGS_import_mode == constants::kParserMode) {
     return mode::parsing::Run(FLAGS_collect_parser_stats, FLAGS_print_parser_stats);
