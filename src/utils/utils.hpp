@@ -305,7 +305,8 @@ void PrintBatchesInfo(const std::vector<Batch> &);
 
 struct QueryResult {
   std::vector<std::string> header;
-  std::vector<mg_memory::MgListPtr> records;
+  /// Row data as formatted strings (avoids deep copy of mg_list/mg_value).
+  std::vector<std::vector<std::string>> records_as_strings;
   std::chrono::duration<double> wall_time;
   std::optional<std::map<std::string, std::string>> notification;
   std::optional<std::map<std::string, std::int64_t>> stats;
@@ -365,10 +366,18 @@ uint64_t GetMaxColumnWidth(const mg_memory::MgListPtr &data, int margin);
 uint64_t GetMaxColumnWidth(const std::vector<std::string> &data, int margin);
 
 void PrintRowTabular(const mg_memory::MgListPtr &data, int total_width, int column_width, int num_columns,
-                     bool all_columns_fit, int margin);
+                    bool all_columns_fit, int margin);
+
+void PrintRowTabular(const std::vector<std::string> &data, int total_width, int column_width, int num_columns,
+                    bool all_columns_fit, int margin);
 
 void PrintTabular(const std::vector<std::string> &header, const std::vector<mg_memory::MgListPtr> &records,
                   const bool fit_to_screen);
+
+void PrintTabular(const std::vector<std::string> &header,
+                  const std::vector<std::vector<std::string>> &records_as_strings, const bool fit_to_screen);
+
+std::vector<std::string> FormatRowToStrings(const mg_list *row);
 
 std::vector<std::string> FormatCsvFields(const mg_memory::MgListPtr &fields, const CsvOptions &csv_opts);
 
@@ -377,8 +386,18 @@ std::vector<std::string> FormatCsvHeader(const std::vector<std::string> &fields,
 void PrintCsv(const std::vector<std::string> &header, const std::vector<mg_memory::MgListPtr> &records,
               const CsvOptions &csv_opts);
 
+void PrintCsv(const std::vector<std::string> &header,
+              const std::vector<std::vector<std::string>> &records_as_strings, const CsvOptions &csv_opts);
+
+void PrintCypherl(const std::vector<std::string> &header,
+                  const std::vector<std::vector<std::string>> &records_as_strings);
+
 void Output(const std::vector<std::string> &header, const std::vector<mg_memory::MgListPtr> &records,
             const OutputOptions &out_opts, const CsvOptions &csv_opts);
+
+void Output(const std::vector<std::string> &header,
+            const std::vector<std::vector<std::string>> &records_as_strings, const OutputOptions &out_opts,
+            const CsvOptions &csv_opts);
 }  // namespace format
 
 Replxx *InitAndSetupReplxx();

@@ -114,16 +114,17 @@ int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_hi
 
     try {
       auto ret = query::ExecuteQuery(session.get(), query->query);
-      if (ret.records.size() > 0) {
-        Output(ret.header, ret.records, output_opts, csv_opts);
+      if (!ret.records_as_strings.empty()) {
+        format::Output(ret.header, ret.records_as_strings, output_opts, csv_opts);
       }
       std::string summary;
-      if (ret.records.size() == 0) {
+      const size_t row_count = ret.records_as_strings.size();
+      if (row_count == 0) {
         summary = "Empty set";
-      } else if (ret.records.size() == 1) {
-        summary = std::to_string(ret.records.size()) + " row in set";
+      } else if (row_count == 1) {
+        summary = "1 row in set";
       } else {
-        summary = std::to_string(ret.records.size()) + " rows in set";
+        summary = std::to_string(row_count) + " rows in set";
       }
       std::printf("%s (round trip in %.3lf sec)\n", summary.c_str(), ret.wall_time.count());
       auto history_ret = save_history();
