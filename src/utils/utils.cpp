@@ -975,11 +975,7 @@ QueryResult ExecuteQuery(mg_session *session, const std::string &query) {
   QueryResult ret;
   mg_result *result;
   while ((status = mg_session_fetch(session, &result)) == 1) {
-    ret.records.push_back(mg_memory::MakeCustomUnique<mg_list>(mg_list_copy(mg_result_row(result))));
-    if (!ret.records.back()) {
-      std::cerr << "out of memory";
-      std::abort();
-    }
+    ret.records_as_strings.push_back(format::FormatRowToStrings(mg_result_row(result)));
   }
   if (status != 0) {
     if (mg_session_status(session) == MG_SESSION_BAD) {
@@ -1156,6 +1152,29 @@ void PrintRowTabular(const mg_memory::MgListPtr &data, int total_width, int colu
   std::cout << data_output << std::endl;
 }
 
+void PrintRowTabular(const std::vector<std::string> &data, int total_width, int column_width, int num_columns,
+                     bool all_columns_fit, int margin) {
+  if (!all_columns_fit) num_columns -= 1;
+  std::string data_output = std::string(total_width, ' ');
+  for (auto i = 0; i < total_width; i += column_width) {
+    data_output[i] = '|';
+    int idx = i / column_width;
+    if (idx < num_columns && idx < (int)data.size()) {
+      std::string field_str(data[idx]);
+      if ((int)field_str.size() > column_width - 2 * margin - 1) {
+        field_str.erase(column_width - 2 * margin - 1, std::string::npos);
+        field_str.replace(field_str.size() - 3, 3, "...");
+      }
+      data_output.replace(i + 1 + margin, field_str.size(), field_str);
+    }
+  }
+  if (!all_columns_fit) {
+    data_output.replace(total_width - column_width, 3, "...");
+  }
+  data_output[total_width - 1] = '|';
+  std::cout << data_output << std::endl;
+}
+
 void PrintTabular(const std::vector<std::string> &header, const std::vector<mg_memory::MgListPtr> &records,
                   const bool fit_to_screen) {
   // lifted from replxx io.cxx
@@ -1228,6 +1247,80 @@ void PrintTabular(const std::vector<std::string> &header, const std::vector<mg_m
   std::cout << line_fill << std::endl;
 }
 
+void PrintTabular(const std::vector<std::string> &header,
+                  const std::vector<std::vector<std::string>> &records_as_strings, const bool fit_to_screen) {
+  auto get_screen_columns = []() {
+    int cols(0);
+#ifdef _WIN32
+    HANDLE console_out = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO inf;
+    GetConsoleScreenBufferInfo(console_out, &inf);
+    cols = inf.dwSize.X;
+#else
+    struct winsize ws;
+    cols = (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) ? 80 : ws.ws_col;
+#endif
+    return (cols > 0) ? cols : 80;
+  };
+
+  auto window_columns = get_screen_columns();
+  bool all_columns_fit = true;
+  auto num_columns = header.size();
+  auto column_width = GetMaxColumnWidth(header);
+  for (size_t i = 0; i < records_as_strings.size(); ++i) {
+    column_width = std::max(column_width, GetMaxColumnWidth(records_as_strings[i]));
+  }
+  column_width = std::max(static_cast<uint64_t>(5), column_width);
+  auto total_width = column_width * num_columns + 1;
+
+  if (fit_to_screen && total_width > window_columns) {
+    uint64_t lo = 5;
+    uint64_t hi = column_width;
+    uint64_t last = 5;
+    while (lo < hi) {
+      uint64_t mid = lo + (hi - lo) / 2;
+      uint64_t width = mid * num_columns + 1;
+      if (width <= window_columns) {
+        last = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    column_width = last;
+    total_width = column_width * num_columns + 1;
+    while (total_width > window_columns && num_columns > 1) {
+      num_columns -= 1;
+      total_width = column_width * num_columns + 1;
+      all_columns_fit = false;
+    }
+  }
+
+  auto line_fill = std::string(total_width, '-');
+  for (auto i = 0u; i < total_width; i += column_width) {
+    line_fill[i] = '+';
+  }
+  line_fill[total_width - 1] = '+';
+  std::cout << line_fill << std::endl;
+  PrintHeaderTabular(header, total_width, column_width, num_columns, all_columns_fit);
+  std::cout << line_fill << std::endl;
+  for (size_t i = 0; i < records_as_strings.size(); ++i) {
+    PrintRowTabular(records_as_strings[i], total_width, column_width, num_columns, all_columns_fit, 1);
+  }
+  std::cout << line_fill << std::endl;
+}
+
+std::vector<std::string> FormatRowToStrings(const mg_list *row) {
+  std::vector<std::string> out;
+  out.reserve(mg_list_size(row));
+  for (uint32_t i = 0; i < mg_list_size(row); ++i) {
+    std::stringstream ss;
+    utils::PrintValue(ss, mg_list_at(row, i));
+    out.push_back(ss.str());
+  }
+  return out;
+}
+
 std::vector<std::string> FormatCsvFields(const mg_memory::MgListPtr &fields, const CsvOptions &csv_opts) {
   std::vector<std::string> formatted;
   formatted.reserve(mg_list_size(fields.get()));
@@ -1277,6 +1370,36 @@ void PrintCsv(const std::vector<std::string> &header, const std::vector<mg_memor
   }
 }
 
+static std::vector<std::string> QuoteCsvFields(const std::vector<std::string> &fields,
+                                               const CsvOptions &csv_opts) {
+  std::vector<std::string> out;
+  out.reserve(fields.size());
+  for (const auto &s : fields) {
+    std::string f(s);
+    if (csv_opts.doublequote) {
+      f = utils::Replace(f, "\"", "\"\"");
+    } else {
+      f = utils::Replace(f, "\"", csv_opts.escapechar + "\"");
+    }
+    f.insert(0, 1, '"');
+    f.append(1, '"');
+    out.push_back(std::move(f));
+  }
+  return out;
+}
+
+void PrintCsv(const std::vector<std::string> &header,
+              const std::vector<std::vector<std::string>> &records_as_strings, const CsvOptions &csv_opts) {
+  auto formatted_header = FormatCsvHeader(header, csv_opts);
+  utils::PrintIterable(std::cout, formatted_header, csv_opts.delimiter);
+  std::cout << std::endl;
+  for (size_t i = 0; i < records_as_strings.size(); ++i) {
+    auto formatted_row = QuoteCsvFields(records_as_strings[i], csv_opts);
+    utils::PrintIterable(std::cout, formatted_row, csv_opts.delimiter);
+    std::cout << std::endl;
+  }
+}
+
 void PrintCypherl(const std::vector<std::string> &header, const std::vector<mg_memory::MgListPtr> &records) {
   if (header.size() != 1) {
     std::cerr << "ERROR: cypherl output format requires exactly 1 output column" << std::endl;
@@ -1297,6 +1420,19 @@ void PrintCypherl(const std::vector<std::string> &header, const std::vector<mg_m
   }
 }
 
+void PrintCypherl(const std::vector<std::string> &header,
+                  const std::vector<std::vector<std::string>> &records_as_strings) {
+  if (header.size() != 1) {
+    std::cerr << "ERROR: cypherl output format requires exactly 1 output column" << std::endl;
+    std::exit(1);
+  }
+  for (const auto &row : records_as_strings) {
+    for (const auto &cell : row) {
+      std::cout << cell << std::endl;
+    }
+  }
+}
+
 void Output(const std::vector<std::string> &header, const std::vector<mg_memory::MgListPtr> &records,
             const OutputOptions &out_opts, const CsvOptions &csv_opts) {
   if (out_opts.output_format == constants::kTabularFormat) {
@@ -1305,6 +1441,18 @@ void Output(const std::vector<std::string> &header, const std::vector<mg_memory:
     PrintCsv(header, records, csv_opts);
   } else if (out_opts.output_format == constants::kCypherlFormat) {
     PrintCypherl(header, records);
+  }
+}
+
+void Output(const std::vector<std::string> &header,
+            const std::vector<std::vector<std::string>> &records_as_strings, const OutputOptions &out_opts,
+            const CsvOptions &csv_opts) {
+  if (out_opts.output_format == constants::kTabularFormat) {
+    PrintTabular(header, records_as_strings, out_opts.fit_to_screen);
+  } else if (out_opts.output_format == constants::kCsvFormat) {
+    PrintCsv(header, records_as_strings, csv_opts);
+  } else if (out_opts.output_format == constants::kCypherlFormat) {
+    PrintCypherl(header, records_as_strings);
   }
 }
 

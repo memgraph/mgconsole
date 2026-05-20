@@ -37,8 +37,8 @@ int Run(const utils::bolt::Config &bolt_config, const format::CsvOptions &csv_op
 
     try {
       auto ret = query::ExecuteQuery(session.get(), query->query);
-      if (ret.records.size() > 0) {
-        Output(ret.header, ret.records, output_opts, csv_opts);
+      if (!ret.records_as_strings.empty()) {
+        format::Output(ret.header, ret.records_as_strings, output_opts, csv_opts);
       }
     } catch (const utils::ClientQueryException &e) {
       console::EchoFailure("Failed query", query->query);
