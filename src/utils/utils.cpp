@@ -1324,6 +1324,18 @@ Replxx *InitAndSetupReplxx() {
   replxx_set_unique_history(replxx_instance, 1);
   replxx_set_completion_callback(replxx_instance, CompletionHook, nullptr);
 
+  // Treat a bare line feed (Ctrl-J / 0x0A) like Enter: commit the current line
+  // instead of feeding replxx's NEW_LINE action. mgconsole assembles multi-line
+  // queries itself via the continuation prompt, so a multi-line paste should
+  // submit one physical line at a time rather than accumulate in replxx's edit
+  // buffer, whose in-buffer multiline redraw clears to end of screen and erases
+  // already-printed output.
+  //
+  // This only keeps typed and pasted newlines out of the buffer. A recalled
+  // multi-line history entry still contains them, so replxx's multiline cursor
+  // navigation has to stay correct independently of this bind.
+  replxx_bind_key_internal(replxx_instance, REPLXX_KEY_CONTROL('J'), "commit_line");
+
   // ToDo(the-joksim):
   //   - syntax highlighting disabled for now - figure out a smarter way of
   //     picking the right colors depending on the user's terminal settings
