@@ -14,5 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-add_subdirectory(input_output)
-add_subdirectory(unit)
+add_executable(parameters_test parameters_test.cpp)
+target_link_libraries(parameters_test PRIVATE params)
+target_include_directories(parameters_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME parameters-unit-test COMMAND parameters_test)

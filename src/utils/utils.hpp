@@ -31,51 +31,10 @@
 #include "mgclient.h"
 #include "replxx.h"
 
+#include "mg_memory.hpp"
 #include "query_type.hpp"
 
 namespace fs = std::filesystem;
-
-namespace mg_memory {
-/// Unique pointers with custom deleters for automatic memory management of
-/// mg_values.
-
-template <class T>
-inline void CustomDelete(T *);
-
-template <>
-inline void CustomDelete(mg_session *session) {
-  mg_session_destroy(session);
-}
-
-template <>
-inline void CustomDelete(mg_session_params *session_params) {
-  mg_session_params_destroy(session_params);
-}
-
-template <>
-inline void CustomDelete(mg_list *list) {
-  mg_list_destroy(list);
-}
-
-template <>
-inline void CustomDelete(mg_map *map) {
-  mg_map_destroy(map);
-}
-
-template <class T>
-using CustomUniquePtr = std::unique_ptr<T, void (*)(T *)>;
-
-template <class T>
-CustomUniquePtr<T> MakeCustomUnique(T *ptr) {
-  return CustomUniquePtr<T>(ptr, CustomDelete<T>);
-}
-
-using MgSessionPtr = CustomUniquePtr<mg_session>;
-using MgSessionParamsPtr = CustomUniquePtr<mg_session_params>;
-using MgListPtr = CustomUniquePtr<mg_list>;
-using MgMapPtr = CustomUniquePtr<mg_map>;
-
-}  // namespace mg_memory
 
 namespace utils {
 
@@ -283,6 +242,8 @@ struct Query {
   int64_t index{0};
   std::string query{""};
   std::optional<QueryInfo> info{std::nullopt};
+  /// True if `query` is a `:param`/`:params` command rather than Cypher.
+  bool is_param_command{false};
 };
 void PrintQueryInfo(const Query &);
 
@@ -321,7 +282,7 @@ struct BatchResult {
 // The extra part is preserved for the next GetQuery call
 std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info = false);
 
-QueryResult ExecuteQuery(mg_session *session, const std::string &query);
+QueryResult ExecuteQuery(mg_session *session, const std::string &query, const mg_map *params = nullptr);
 BatchResult ExecuteBatch(mg_session *session, const Batch &batch);
 
 }  // namespace query
