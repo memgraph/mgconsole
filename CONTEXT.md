@@ -22,12 +22,18 @@ the definition here wins until deliberately changed.
   defining job is to render every Value faithfully.
 - **Record** — one row of a result: an ordered set of Values, one per result
   column.
-- **Result stream** — the Records of one query, consumed one at a time rather
-  than held all at once.
+- **Record stream** — the Records of one query, consumed one at a time rather
+  than held all at once. _Avoid_: result stream, records stream.
+- **Query result** — the whole answer to one query: its header (column names),
+  its Record stream, and the trailing summary (timing, notifications, stats) that
+  the server sends only after the last Record. _Avoid_: result set, response.
 - **Query parameter** — a named value supplied alongside a query and referenced
   inside it, so the query text and its data stay separate.
 - **Notification** — advisory information Memgraph attaches to a result (e.g. a
   performance hint), distinct from the result data itself.
+- **Enum** — a Memgraph Value naming one member of a user-declared enumerated
+  type, written `Type::Member` (e.g. `Status::Active`). The console treats it as
+  a first-class Value, not as the map Memgraph happens to transmit it as.
 
 ## Import / export
 

@@ -14,9 +14,18 @@ connection error (socket dropped — trigger reconnect). On a fatal error the
 Session reconnects with bounded retries before giving up. Integration tested by
 inducing both error classes against a container.
 
+**The `TransientError` tier is not a reliable signal.** The ADR-0001 spike found
+Memgraph wrapping a plain, permanent validation error (a malformed
+`localDateTime` literal) in a `Memgraph.TransientError.MemgraphError.MemgraphError`
+code. Classification must therefore key off the **full / leaf error code**, not
+the `TransientError` substring — otherwise a permanent user error reads as
+retryable. Prefer matching the specific leaf code against a small known set
+rather than the broad tier.
+
 ## Acceptance criteria
 
 - [ ] Query errors are distinguished from fatal connection errors in the Core's error type
+- [ ] Classification keys off the full/leaf error code, not the `TransientError` tier (a `TransientError` code may be a permanent error)
 - [ ] A query error leaves the Session usable for the next query
 - [ ] A fatal error triggers reconnect with a bounded number of retries
 - [ ] Exhausting retries surfaces a clear terminal failure

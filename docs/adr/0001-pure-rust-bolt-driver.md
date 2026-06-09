@@ -4,7 +4,11 @@ Date: 2026-06-10
 
 ## Status
 
-Accepted
+Accepted — **confirmed by the fidelity spike (2026-06-10)**: against
+`memgraph:3.10.1` at Bolt v4.4, all 21 Memgraph Value types decode faithfully
+through `bolt-client` 0.11 + `bolt-proto` 0.12 with **no codec extension or
+fork required**; the `mgclient` FFI fallback is not triggered. See
+`.scratch/rust-console/spike/FINDINGS.md`.
 
 ## Context
 

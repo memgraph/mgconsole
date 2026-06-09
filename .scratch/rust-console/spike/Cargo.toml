@@ -1,0 +1,12 @@
+[package]
+name = "bolt-fidelity-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+bolt-client = "*"
+bolt-proto = "*"
+tokio-util = { version = "0.7", features = ["compat"] }
+testcontainers = "*"

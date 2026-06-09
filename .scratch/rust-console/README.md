@@ -73,7 +73,8 @@ Built with TDD: each issue is sized to roughly one red-green-refactor cycle.
    stack decodes every Memgraph Value type, or triggers the `mgclient` FFI
    fallback. Do this before anything else.
 2. **02 — Tracer bullet.** Workspace, tokio, connect, run one query, plus the
-   `testcontainers` harness and Docker CI. Unblocks almost everything.
+   `testcontainers` harness (local `cargo test`, Docker daemon only). Unblocks
+   almost everything.
 3. Then run three TDD fronts in parallel:
    - **Rendering:** 03 → (04, 05, 06, 07 independent) → 08.
    - **Connection/CLI:** 09 → (10, 11).

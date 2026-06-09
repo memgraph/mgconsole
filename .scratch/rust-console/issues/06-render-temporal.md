@@ -10,16 +10,22 @@ Status: ready-for-agent
 
 Tabular rendering of the full Memgraph temporal family: date, local time, local
 datetime, duration, and zoned datetime. Extends the rendering seam and golden
-harness from slice 03. Pure function, no database. Resolve the temporal crate
-choice (`time` vs `chrono`) to match what `bolt-proto` exposes.
+harness from slice 03. Pure function, no database. The temporal crate is
+**`chrono`** — decided by the ADR-0001 spike, since that is what `bolt-proto`
+exposes (`NaiveDate`, `NaiveTime`, `NaiveDateTime`, `DateTime<FixedOffset>`,
+`DateTime<Tz>` via `chrono-tz`, and a `Duration` struct).
+
+The spike found a zoned datetime arrives as **two distinct Core `Value` arms**,
+both of which must render: `DateTimeOffset` (a fixed UTC offset, e.g. `+02:00`)
+and `DateTimeZoned` (a named IANA zone, e.g. `Europe/Zagreb`).
 
 ## Acceptance criteria
 
 - [ ] date, local time, local datetime render correctly
 - [ ] duration renders correctly
-- [ ] zoned datetime renders with its zone/offset
+- [ ] both zoned-datetime arms render: `DateTimeOffset` (fixed offset) and `DateTimeZoned` (named IANA zone)
 - [ ] Rendering matches Memgraph's textual conventions for these types
-- [ ] Golden fixtures cover the above; tests are pure
+- [ ] Golden fixtures cover the above; tests are pure (note: Memgraph emits fractional seconds with exactly 3 or 6 digits — fixtures should reflect that)
 
 ## Blocked by
 
