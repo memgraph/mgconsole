@@ -1,0 +1,14 @@
+null	Null
+bool_true	true
+bool_false	false
+integer	42
+integer_negative	-7
+float_fraction	123.456
+float_whole	3.0
+float_negative	-0.5
+string_plain	hello
+string_unicode	héllo ☃
+string_quotes	say "hi"
+string_whitespace	a\tb\nc\rd
+string_backslash	c:\\tmp
+string_empty	

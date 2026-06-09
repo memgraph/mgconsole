@@ -1,6 +1,21 @@
 # 03 — Render scalars + strings (tabular) + golden harness
 
-Status: ready-for-agent
+Status: done
+
+## Tabular conventions (defined here; mgconsole goldens not available in this repo)
+
+- **null** → `Null` (explicit, so it is distinct from an empty string).
+- **bool** → `true` / `false`.
+- **integer** → decimal.
+- **float** → always carries a decimal point so it is distinct from an integer
+  (`3.0`, not `3`); `NaN` / `Inf` / `-Inf` for non-finite.
+- **string** → content with control whitespace escaped (`\\`, `\n`, `\r`, `\t`)
+  so it stays on one tabular line; quotes are left literal (quote-escaping is a
+  CSV concern, slice 22).
+
+Harness: `core/tests/golden/mod.rs::check_tabular(category, cases)` compares
+rendered cases against `core/tests/golden/tabular/<category>.txt`; regenerate
+with `UPDATE_GOLDEN=1 cargo test`. Slices 04–07 add categories.
 
 ## Parent
 
@@ -19,11 +34,11 @@ slices (04–07) just add fixtures.
 
 ## Acceptance criteria
 
-- [ ] A pure rendering function turns a Value into its tabular text representation
-- [ ] null, bool, integer, float render correctly
-- [ ] strings render with correct escaping of quotes and whitespace
-- [ ] A golden-file harness compares rendered output to expected fixtures and is reusable by later rendering slices
-- [ ] Tests are pure (no container, no Session)
+- [x] A pure rendering function turns a Value into its tabular text representation
+- [x] null, bool, integer, float render correctly
+- [x] strings render with correct escaping of quotes and whitespace
+- [x] A golden-file harness compares rendered output to expected fixtures and is reusable by later rendering slices
+- [x] Tests are pure (no container, no Session)
 
 ## Blocked by
 
