@@ -1,6 +1,6 @@
 # 02 — Tracer bullet: workspace + connect + run one scalar
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -38,15 +38,15 @@ Keep the seam strict: the `core` Session knows nothing about the Frontend.
 
 ## Acceptance criteria
 
-- [ ] Workspace builds with a `core` lib crate and a binary crate; the binary depends on `core`, not vice versa
-- [ ] A single tokio runtime is created; the Session is called via `block_on` at the boundary
-- [ ] `core` exposes a Session that connects by host/port and runs a query, returning a `QueryResult` (header + `RecordStream` + empty `summary` slot)
-- [ ] The Session translates `bolt_proto::Value` into a Core-owned `Value` at the boundary; `Value` is total (a variant per spike-confirmed type, incl. `Value::Enum`) though only scalars are rendered here
-- [ ] `RecordStream` is a Core-owned type; `futures::Stream` is not exposed in `core`'s public API
-- [ ] The binary runs a query (from stdin or a hardcoded seed) and prints a scalar result
-- [ ] `testcontainers` spins up `memgraph/memgraph`; an integration test connects, runs `RETURN 1`, and asserts the value
-- [ ] `cargo test` runs the integration test against the container locally (Docker daemon only; no CI wiring)
-- [ ] Builds as a static binary with no C toolchain or OpenSSL dependency
+- [x] Workspace builds with a `core` lib crate and a binary crate; the binary depends on `core`, not vice versa
+- [x] A single tokio runtime is created; the Session is called via `block_on` at the boundary
+- [x] `core` exposes a Session that connects by host/port and runs a query, returning a `QueryResult` (header + `RecordStream` + empty `summary` slot)
+- [x] The Session translates `bolt_proto::Value` into a Core-owned `Value` at the boundary; `Value` is total (a variant per spike-confirmed type, incl. `Value::Enum`) though only scalars are rendered here
+- [x] `RecordStream` is a Core-owned type; `futures::Stream` is not exposed in `core`'s public API
+- [x] The binary runs a query (from stdin or a hardcoded seed) and prints a scalar result
+- [x] `testcontainers` spins up `memgraph/memgraph`; an integration test connects, runs `RETURN 1`, and asserts the value
+- [x] `cargo test` runs the integration test against the container locally (Docker daemon only; no CI wiring)
+- [x] Builds as a static binary with no C toolchain or OpenSSL dependency
 
 ## Blocked by
 

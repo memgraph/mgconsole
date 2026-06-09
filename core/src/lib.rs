@@ -1,0 +1,18 @@
+//! Core library for the Rust Memgraph console.
+//!
+//! Owns the Session, the Value model, value rendering, and (later) the import
+//! engine, with no dependency on any Frontend (ADR 0002). `bolt_proto::Value` is
+//! translated into the Core [`Value`] at the Bolt boundary (ADR 0003); the
+//! Session yields a [`QueryResult`] of a header, a [`RecordStream`], and a
+//! trailing [`Summary`] (ADR 0004).
+
+pub mod error;
+pub mod render;
+pub mod result;
+pub mod session;
+pub mod value;
+
+pub use error::Error;
+pub use result::{QueryResult, Record, RecordStream, Summary};
+pub use session::Session;
+pub use value::Value;

@@ -1,0 +1,21 @@
+//! Core error type.
+//!
+//! Slice 02 carries a minimal taxonomy; slice 14 elaborates the
+//! recoverable-query-error vs fatal-connection-error distinction and the
+//! reconnect policy. Kept exhaustive (no catch-all) so 14 extends it explicitly.
+
+/// An error from the Core.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The connection could not be established or was lost.
+    #[error("connection error: {0}")]
+    Connection(String),
+
+    /// The server rejected a query (e.g. bad Cypher). The Session survives.
+    #[error("query error: {0}")]
+    Query(String),
+
+    /// The Bolt exchange was not understood (handshake/HELLO refused, etc.).
+    #[error("protocol error: {0}")]
+    Protocol(String),
+}

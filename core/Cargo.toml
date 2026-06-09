@@ -1,0 +1,20 @@
+[package]
+name = "mgconsole-core"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Core library for the Rust Memgraph console: Session, Value model, rendering."
+
+[dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+bolt-client = { workspace = true }
+bolt-proto = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+testcontainers = "0.27"
+tokio = { version = "1", features = ["full"] }
