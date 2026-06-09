@@ -119,6 +119,14 @@ if(MGCONSOLE_ON_WINDOWS)
   add_compile_options(-Wno-narrowing)
 endif()
 
+# Parameter handling (`:param`/`:params`). Kept as its own library with a
+# minimal dependency surface (mgclient only) so it can be unit tested.
+add_library(params STATIC parameters.cpp)
+add_dependencies(params mgclient)
+target_compile_definitions(params PUBLIC MGCLIENT_STATIC_DEFINE)
+target_include_directories(params PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${MGCLIENT_INCLUDE_DIRS})
+target_link_libraries(params ${MGCLIENT_LIBRARY})
+
 add_executable(mgconsole main.cpp interactive.cpp serial_import.cpp batch_import.cpp parsing.cpp)
 target_compile_definitions(mgconsole PRIVATE MGCLIENT_STATIC_DEFINE)
 target_include_directories(mgconsole
@@ -131,6 +139,7 @@ target_link_libraries(mgconsole
   PRIVATE
   ${GFLAGS_LIBRARY}
   utils
+  params
   ${MGCLIENT_LIBRARY}
   ${OPENSSL_LIBRARIES})
 if(MGCONSOLE_ON_WINDOWS)

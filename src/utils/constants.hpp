@@ -19,7 +19,12 @@ constexpr const std::string_view kInteractiveUsage =
     "are printed out.\n\n"
     "The following interactive commands are supported:\n\n"
     "\t:help\t Print out usage for interactive mode\n"
-    "\t:quit\t Exit the shell\n";
+    "\t:quit\t Exit the shell\n"
+    "\t:param <name> <expression>\t Set a query parameter to the value of a "
+    "Cypher expression (e.g. ':param age 21 * 2'); use it in queries as "
+    "$<name>\n"
+    "\t:params\t List all currently set query parameters\n"
+    "\t:params clear\t Remove all query parameters\n";
 
 constexpr const std::string_view kDocs =
     "If you are new to Memgraph or the Cypher query language, check out these "
@@ -33,6 +38,8 @@ constexpr const std::string_view kDocs =
 constexpr const std::string_view kCommandQuit = ":quit";
 constexpr const std::string_view kCommandHelp = ":help";
 constexpr const std::string_view kCommandDocs = ":docs";
+constexpr const std::string_view kCommandParam = ":param";
+constexpr const std::string_view kCommandParams = ":params";
 
 // Supported formats.
 constexpr const std::string_view kCsvFormat = "csv";

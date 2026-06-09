@@ -9,10 +9,24 @@ else()
 endif()
 
 get_filename_component(REPLXX_LIB_PATH "${REPLXX_PREFIX}/${MG_INSTALL_LIB_DIR}/libreplxx${REPLXX_LIB_POSTFIX}.a" ABSOLUTE)
+
+# Local fixes applied on top of the pinned replxx tag.
+find_package(Git REQUIRED)
 ExternalProject_Add(replxx-proj
         PREFIX ${REPLXX_PREFIX}
         GIT_REPOSITORY https://github.com/AmokHuginnsson/replxx.git
         GIT_TAG release-0.0.4
+        # Force an LF checkout so the LF patch below applies. Windows/MSYS2 git
+        # defaults to core.autocrlf=true, which rewrites the sources with CRLF
+        # endings and makes the patch fail with "patch does not apply" (the
+        # trailing-CR context lines no longer match). --config persists into the
+        # cloned repo, so the update-step checkout stays LF too.
+        GIT_CONFIG core.autocrlf=false
+        # --3way makes this idempotent: the patch step chains off the git
+        # update step and can re-run, and --3way no-ops cleanly when the fix is
+        # already present (plain `git apply` would error "patch does not apply").
+        PATCH_COMMAND ${GIT_EXECUTABLE} apply --3way
+        "${CMAKE_CURRENT_SOURCE_DIR}/replxx-patches/0001-history_previous-bounds-check.patch"
         CMAKE_ARGS "-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>"
         "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
         "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"

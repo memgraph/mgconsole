@@ -901,6 +901,12 @@ std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info) {
         } else if (trimmed_line == constants::kCommandDocs) {
           console::PrintDocs();
           return Query{};
+        } else if (trimmed_line == constants::kCommandParams || trimmed_line == constants::kCommandParam ||
+                   trimmed_line.rfind(std::string(constants::kCommandParam) + " ", 0) == 0 ||
+                   trimmed_line.rfind(std::string(constants::kCommandParams) + " ", 0) == 0) {
+          // Parameter commands need the session/param store, so hand the raw
+          // line up to the interactive loop instead of handling it here.
+          return Query{.query = trimmed_line, .is_param_command = true};
         } else {
           console::EchoFailure("Unsupported command", trimmed_line);
           console::PrintHelp();
@@ -941,8 +947,8 @@ void PrintQueryInfo(const Query &query) {
   std::cout << "line: " << query.line_number << " index: " << query.index << " query: " << query.query << std::endl;
 }
 
-QueryResult ExecuteQuery(mg_session *session, const std::string &query) {
-  int status = mg_session_run(session, query.c_str(), nullptr, nullptr, nullptr, nullptr);
+QueryResult ExecuteQuery(mg_session *session, const std::string &query, const mg_map *params) {
+  int status = mg_session_run(session, query.c_str(), params, nullptr, nullptr, nullptr);
   auto start = std::chrono::system_clock::now();
   if (status != 0) {
     if (mg_session_status(session) == MG_SESSION_BAD) {
@@ -1317,6 +1323,18 @@ Replxx *InitAndSetupReplxx() {
 
   replxx_set_unique_history(replxx_instance, 1);
   replxx_set_completion_callback(replxx_instance, CompletionHook, nullptr);
+
+  // Treat a bare line feed (Ctrl-J / 0x0A) like Enter: commit the current line
+  // instead of feeding replxx's NEW_LINE action. mgconsole assembles multi-line
+  // queries itself via the continuation prompt, so a multi-line paste should
+  // submit one physical line at a time rather than accumulate in replxx's edit
+  // buffer, whose in-buffer multiline redraw clears to end of screen and erases
+  // already-printed output.
+  //
+  // This only keeps typed and pasted newlines out of the buffer. A recalled
+  // multi-line history entry still contains them, so replxx's multiline cursor
+  // navigation has to stay correct independently of this bind.
+  replxx_bind_key_internal(replxx_instance, REPLXX_KEY_CONTROL('J'), "commit_line");
 
   // ToDo(the-joksim):
   //   - syntax highlighting disabled for now - figure out a smarter way of

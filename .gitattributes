@@ -1,0 +1,3 @@
+# git apply needs LF context lines to match an LF-checked-out source tree;
+# Windows autocrlf would otherwise rewrite these to CRLF and break the patch.
+*.patch text eol=lf

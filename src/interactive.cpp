@@ -15,15 +15,77 @@
 
 #include "interactive.hpp"
 
+#include <sstream>
 #include <thread>
 
 #include <gflags/gflags.h>
 
+#include "parameters.hpp"
 #include "utils/constants.hpp"
 
 namespace mode::interactive {
 
 using namespace std::string_literals;
+
+namespace {
+
+namespace params = query::params;
+
+// Evaluates a Cypher expression server-side and returns a copy of the resulting
+// value. Existing parameters are made available to the expression.
+mg_memory::MgValuePtr EvaluateParamExpression(mg_session *session, const std::string &expression,
+                                              const params::ParamStore &store) {
+  auto result = query::ExecuteQuery(session, "RETURN " + expression, store.AsMap().get());
+  if (result.records.empty() || mg_list_size(result.records.front().get()) == 0) {
+    throw utils::ClientQueryException("expression did not produce a value");
+  }
+  const mg_value *value = mg_list_at(result.records.front().get(), 0);
+  return mg_memory::MakeCustomUnique<mg_value>(mg_value_copy(value));
+}
+
+void ListParams(const params::ParamStore &store) {
+  if (store.Empty()) {
+    console::EchoInfo("No parameters set");
+    return;
+  }
+  for (const auto &name : store.Names()) {
+    std::ostringstream os;
+    os << name << ": ";
+    utils::PrintValue(os, store.Get(name));
+    console::EchoInfo(os.str());
+  }
+}
+
+// Handles a `:param`/`:params` command line. Query-level failures (e.g. a bad
+// expression) are reported without aborting the shell; fatal connection
+// failures propagate to the reconnect logic in Run.
+void HandleParamCommand(mg_session *session, params::ParamStore &store, const std::string &line) {
+  const auto parsed = params::ParseParamCommand(line);
+  if (!parsed.command) {
+    console::EchoFailure("Invalid parameter command", parsed.error);
+    return;
+  }
+  switch (parsed.command->kind) {
+    case params::ParamCommand::Kind::kSet:
+      try {
+        auto value = EvaluateParamExpression(session, parsed.command->expression, store);
+        store.Set(parsed.command->name, value.get());
+        console::EchoInfo("Set parameter '" + parsed.command->name + "'");
+      } catch (const utils::ClientQueryException &e) {
+        console::EchoFailure("Failed to evaluate parameter expression", e.what());
+      }
+      break;
+    case params::ParamCommand::Kind::kList:
+      ListParams(store);
+      break;
+    case params::ParamCommand::Kind::kClear:
+      store.Clear();
+      console::EchoInfo("Cleared all parameters");
+      break;
+  }
+}
+
+}  // namespace
 
 int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_history,
         bool verbose_execution_info, const format::CsvOptions &csv_opts, const format::OutputOptions &output_opts) {
@@ -97,6 +159,9 @@ int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_hi
     return 1;
   }
 
+  // Query parameters set via `:param`, passed to every executed query.
+  params::ParamStore param_store;
+
   console::EchoInfo("mgconsole "s + gflags::VersionString());
   console::EchoInfo("Connected to 'memgraph://" + bolt_config.host + ":" + std::to_string(bolt_config.port) + "'");
   console::EchoInfo("Type :help for shell usage");
@@ -113,7 +178,16 @@ int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_hi
     }
 
     try {
-      auto ret = query::ExecuteQuery(session.get(), query->query);
+      if (query->is_param_command) {
+        HandleParamCommand(session.get(), param_store, query->query);
+        auto history_ret = save_history();
+        if (history_ret != 0) {
+          cleanup_resources();
+          return history_ret;
+        }
+        continue;
+      }
+      auto ret = query::ExecuteQuery(session.get(), query->query, param_store.AsMap().get());
       if (ret.records.size() > 0) {
         Output(ret.header, ret.records, output_opts, csv_opts);
       }

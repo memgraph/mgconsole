@@ -1,0 +1,24 @@
+Add the missing bounds guard to ReplxxImpl::history_previous.
+
+When the edit buffer contains newlines and the cursor sits on a newline at
+position 0, history_previous indexed prev_newline_position(_pos - 1), that is
+prev_newline_position(-1), tripping the `pos_ >= 0` assertion and aborting the
+process. history_next already guards the symmetric case with
+`_pos > 0 ? ... : -1`; apply the same guard so navigating up through a
+multi-line buffer falls through to history_move instead of aborting.
+
+Not fixed in the pinned upstream tag.
+
+diff --git a/src/replxx_impl.cxx b/src/replxx_impl.cxx
+index 22ee748..24a63b8 100644
+--- a/src/replxx_impl.cxx
++++ b/src/replxx_impl.cxx
+@@ -1831,7 +1831,7 @@ Replxx::ACTION_RESULT Replxx::ReplxxImpl::history_previous( char32_t ) {
+ 		}
+ 		int prevNewlinePosition( prev_newline_position( _pos ) );
+ 		if ( prevNewlinePosition == _pos ) {
+-			prevNewlinePosition = prev_newline_position( _pos - 1 );
++			prevNewlinePosition = _pos > 0 ? prev_newline_position( _pos - 1 ) : -1;
+ 		}
+ 		if ( prevNewlinePosition < 0 ) {
+ 			break;
