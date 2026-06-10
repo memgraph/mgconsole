@@ -1,6 +1,6 @@
 # 01 — Core Cypher lexer
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
