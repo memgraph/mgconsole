@@ -7,6 +7,7 @@
 //! trailing [`Summary`] (ADR 0004).
 
 pub mod clause;
+pub mod display;
 pub mod error;
 pub mod format;
 pub mod import;
@@ -22,6 +23,9 @@ pub mod value;
 pub mod workers;
 
 pub use clause::{scan_clauses, Clause};
+pub use display::{
+    render_records, render_vertical, resolve_layout, DisplayMode, Layout, RenderOptions,
+};
 pub use error::Error;
 pub use format::Header;
 pub use lexer::{lex, Token, TokenKind};
@@ -33,6 +37,6 @@ pub use import::{
 pub use parse::QueryAssembler;
 pub use result::{ExecutionInfo, Notification, QueryResult, Record, RecordStream, Summary};
 pub use session::{ConnectOptions, Credentials, Endpoint, ReconnectNotice, Session};
-pub use tabular::{render_table, TableOptions, DEFAULT_ROW_CAP};
+pub use tabular::{natural_width, render_table, TableOptions, DEFAULT_ROW_CAP};
 pub use value::Value;
 pub use workers::Workers;

@@ -49,6 +49,20 @@ pub fn render_table(header: &Header, rows: &[Vec<Value>], opts: &TableOptions) -
     table.trim_fmt()
 }
 
+/// The natural (unwrapped) width of the rendered table, in terminal columns: the
+/// length of its widest line with no fitting applied. The `auto` display mode
+/// (issue 01) compares this against the terminal width to decide whether the
+/// table fits, reusing the real renderer rather than estimating column widths.
+pub fn natural_width(header: &Header, rows: &[Vec<Value>]) -> u16 {
+    let table = render_table(header, rows, &TableOptions { fit_width: None });
+    let widest = table
+        .lines()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    u16::try_from(widest).unwrap_or(u16::MAX)
+}
+
 /// The warning shown when a tabular result exceeds the row cap.
 pub fn row_cap_warning(cap: usize) -> String {
     format!(
