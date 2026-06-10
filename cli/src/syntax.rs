@@ -119,6 +119,9 @@ pub fn classify(word: &str) -> WordKind {
 
 const YELLOW: &str = "\x1b[33m";
 const CYAN: &str = "\x1b[36m";
+const GREEN: &str = "\x1b[32m";
+const MAGENTA: &str = "\x1b[35m";
+const GREY: &str = "\x1b[90m"; // bright-black
 const RESET: &str = "\x1b[0m";
 
 /// Re-emit `line` with Cypher syntax coloured for the interactive REPL, driven
@@ -156,7 +159,13 @@ fn colour_for(token: &Token, text: &str) -> Option<&'static str> {
             WordKind::Function => Some(CYAN),
             WordKind::Plain => None,
         },
-        _ => None,
+        TokenKind::String => Some(GREEN),
+        TokenKind::Number => Some(MAGENTA),
+        TokenKind::Comment => Some(GREY),
+        // Punctuation and identifier words stay terminal-default so the coloured
+        // categories pop and a typo'd keyword stands out by contrast. Parameters
+        // gain their colour in slice 04.
+        TokenKind::Parameter | TokenKind::Punct | TokenKind::Whitespace => None,
     }
 }
 
@@ -265,7 +274,9 @@ mod tests {
 
     #[test]
     fn highlight_leaves_a_plain_line_unchanged() {
-        assert_eq!(highlight("just some words 123"), "just some words 123");
+        // Plain identifiers and punctuation only — none of the coloured
+        // categories, so the line passes through untouched.
+        assert_eq!(highlight("some plain words (n.x)"), "some plain words (n.x)");
     }
 
     #[test]
@@ -287,6 +298,38 @@ mod tests {
         assert!(
             !out.contains("\x1b[36m"),
             "nothing inside the comment is coloured cyan: {out:?}"
+        );
+    }
+
+    #[test]
+    fn strings_numbers_and_comments_get_the_literal_palette() {
+        assert!(
+            highlight("RETURN 'hi'").contains("\x1b[32m'hi'\x1b[0m"),
+            "strings green"
+        );
+        assert!(
+            highlight("RETURN 42").contains("\x1b[35m42\x1b[0m"),
+            "numbers magenta"
+        );
+        assert!(
+            highlight("RETURN 1 // note").contains("\x1b[90m// note\x1b[0m"),
+            "comments grey"
+        );
+    }
+
+    #[test]
+    fn punctuation_and_identifiers_stay_terminal_default() {
+        // A typo'd keyword renders as a plain identifier (no colour), so it
+        // stands out by contrast; punctuation is never coloured either.
+        assert_eq!(highlight("retrn (n.x) + 1.0 * y"), "retrn (n.x) + \x1b[35m1.0\x1b[0m * y");
+    }
+
+    #[test]
+    fn an_unterminated_string_colours_green_to_end_of_buffer() {
+        // Mid-typing signal: the open quote lexes to EOF and colours through.
+        assert!(
+            highlight("RETURN 'foo").contains("\x1b[32m'foo\x1b[0m"),
+            "unterminated string colours green to end"
         );
     }
 }

@@ -1,6 +1,6 @@
 # 03 — Literal & comment palette: string, number, comment
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
