@@ -12,6 +12,7 @@ use mgconsole_core::{ConnectOptions, Credentials, DisplayMode, Endpoint};
 use crate::config::{Config, Profile};
 
 pub mod config;
+pub mod cypher_format;
 pub mod frontend;
 pub mod history;
 pub mod keywords;

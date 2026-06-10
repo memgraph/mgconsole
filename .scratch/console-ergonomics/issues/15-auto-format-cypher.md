@@ -1,6 +1,6 @@
 # 15 — Auto-format Cypher (Workbench editor gesture)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

@@ -416,6 +416,19 @@ fn handle_gesture(state: &mut WorkbenchState, gesture: Gesture) -> Vec<Effect> {
             state.drawer = toggle_drawer(state.drawer, DrawerKind::Summary);
             Vec::new()
         }
+        // Auto-format the editor's Cypher (issue 15): a pure text->text reformat
+        // over the Core lexer's tokens. Partial/unsafe input is left untouched with
+        // a clear status (the formatter declines rather than mangling).
+        Gesture::FormatBuffer => {
+            match crate::cypher_format::format(&state.editor.buffer()) {
+                Ok(formatted) => {
+                    state.editor.set_text(&formatted);
+                    state.status.message = "formatted".to_string();
+                }
+                Err(reason) => state.status.message = reason,
+            }
+            Vec::new()
+        }
         // Buffer (tab) gestures arrive in issue 18; recognised now so their chords
         // are reserved and rebindable, a no-op until then.
         Gesture::NewBuffer
@@ -2598,6 +2611,27 @@ mod tests {
         let mut s = wb();
         submit_meta(&mut s, ":set");
         assert!(s.status.message.contains("theme = default"), "{}", s.status.message);
+    }
+
+    // --- Auto-format gesture (issue 15) ---------------------------------------
+
+    #[test]
+    fn the_format_gesture_reformats_the_editor_buffer() {
+        let mut s = wb();
+        type_str(&mut s, "match (n) return n");
+        // Alt+f is the default format-buffer chord.
+        update(&mut s, Event::Key(Key::alt(KeyCode::Char('f'))));
+        assert_eq!(s.editor.buffer(), "MATCH (n)\nRETURN n");
+        assert_eq!(s.status.message, "formatted");
+    }
+
+    #[test]
+    fn the_format_gesture_leaves_partial_input_untouched_with_a_status() {
+        let mut s = wb();
+        type_str(&mut s, "RETURN 'half");
+        update(&mut s, Event::Key(Key::alt(KeyCode::Char('f'))));
+        assert_eq!(s.editor.buffer(), "RETURN 'half", "untouched");
+        assert!(s.status.message.contains("unterminated string"), "{}", s.status.message);
     }
 
     #[test]
