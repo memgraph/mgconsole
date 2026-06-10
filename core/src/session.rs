@@ -9,7 +9,9 @@
 
 use std::sync::Arc;
 
-use bolt_client::{Client, Metadata};
+use std::collections::BTreeMap;
+
+use bolt_client::{Client, Metadata, Params};
 use bolt_proto::{version::*, Message};
 use tokio::io::BufStream;
 use tokio::sync::Mutex;
@@ -19,6 +21,7 @@ use crate::error::Error;
 use crate::proto;
 use crate::result::{QueryResult, RecordStream, Summary, DEFAULT_BATCH_SIZE};
 use crate::transport::{self, MaybeTlsStream};
+use crate::value::{self, Value};
 
 pub(crate) type Conn = Client<Compat<BufStream<MaybeTlsStream>>>;
 pub(crate) type SharedConn = Arc<Mutex<Conn>>;
@@ -90,13 +93,25 @@ impl Session {
         }
     }
 
-    /// Run a query and return its result. The records stream lazily; the
-    /// previous result must be fully consumed or discarded first.
+    /// Run a query with no parameters. See [`Session::run_with_params`].
     pub async fn run(&mut self, query: &str) -> Result<QueryResult, Error> {
+        self.run_with_params(query, &BTreeMap::new()).await
+    }
+
+    /// Run a query bound to a set of named parameters and return its result. A
+    /// query referencing `$name` resolves against `params["name"]`. The records
+    /// stream lazily; the previous result must be fully consumed or discarded
+    /// first.
+    pub async fn run_with_params(
+        &mut self,
+        query: &str,
+        params: &BTreeMap<String, Value>,
+    ) -> Result<QueryResult, Error> {
+        let bolt_params = encode_params(params)?;
         let header = {
             let mut client = self.conn.lock().await;
             match client
-                .run(query, None, None)
+                .run(query, bolt_params, None)
                 .await
                 .map_err(|e| Error::Connection(e.to_string()))?
             {
@@ -109,4 +124,17 @@ impl Session {
         let records = RecordStream::lazy(self.conn.clone(), DEFAULT_BATCH_SIZE);
         Ok(QueryResult::new(header, records, Summary::default()))
     }
+}
+
+/// Encode named parameters into Bolt `Params`, or `None` when empty so the wire
+/// message carries no parameter map at all.
+fn encode_params(params: &BTreeMap<String, Value>) -> Result<Option<Params>, Error> {
+    if params.is_empty() {
+        return Ok(None);
+    }
+    let encoded = params
+        .iter()
+        .map(|(name, v)| Ok((name.clone(), value::to_bolt(v)?)))
+        .collect::<Result<Vec<_>, Error>>()?;
+    Ok(Some(Params::from_iter(encoded)))
 }

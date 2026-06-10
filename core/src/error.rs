@@ -19,6 +19,11 @@ pub enum Error {
     #[error("query error: {0}")]
     Query(String),
 
+    /// A supplied query parameter value cannot be encoded for Bolt (e.g. a node
+    /// or path, which are results, not inputs).
+    #[error("invalid query parameter: {0}")]
+    Parameter(String),
+
     /// The Bolt exchange was not understood (handshake/HELLO refused, etc.).
     #[error("protocol error: {0}")]
     Protocol(String),

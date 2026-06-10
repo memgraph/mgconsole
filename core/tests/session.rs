@@ -2,12 +2,14 @@
 
 mod common;
 
+use std::collections::BTreeMap;
+
 use mgconsole_core::{ConnectOptions, Credentials, Error, Session, Value};
 
 #[tokio::test]
 async fn runs_a_scalar_query_against_live_memgraph() {
-    let mg = common::start_memgraph().await;
-    let mut session = common::connect(&mg).await;
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
 
     let mut result = session.run("RETURN 1 AS n").await.expect("query runs");
 
@@ -29,8 +31,8 @@ async fn runs_a_scalar_query_against_live_memgraph() {
 
 #[tokio::test]
 async fn streams_a_large_result_incrementally() {
-    let mg = common::start_memgraph().await;
-    let mut session = common::connect(&mg).await;
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
 
     // 50k rows — far more than one batch, so this exercises lazy batched pulls.
     let mut result = session
@@ -48,6 +50,82 @@ async fn streams_a_large_result_incrementally() {
     }
     assert_eq!(count, 50_000);
     assert_eq!(last, 50_000);
+}
+
+#[tokio::test]
+async fn binds_named_parameters_of_every_kind() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    // A query referencing several parameters of different Value kinds; each must
+    // round-trip into the query and come back unchanged.
+    let mut params = BTreeMap::new();
+    params.insert("n".to_string(), Value::Integer(7));
+    params.insert("s".to_string(), Value::String("hello".to_string()));
+    params.insert(
+        "xs".to_string(),
+        Value::List(vec![Value::Integer(1), Value::Integer(2)]),
+    );
+    params.insert(
+        "m".to_string(),
+        Value::Map(BTreeMap::from([(
+            "k".to_string(),
+            Value::Boolean(true),
+        )])),
+    );
+    params.insert(
+        "d".to_string(),
+        Value::Date(chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap()),
+    );
+
+    let mut result = session
+        .run_with_params(
+            "RETURN $n AS n, $s AS s, $xs AS xs, $m AS m, $d AS d",
+            &params,
+        )
+        .await
+        .expect("parameterised query runs");
+    let record = result
+        .records()
+        .next()
+        .await
+        .expect("stream ok")
+        .expect("one record");
+    assert_eq!(
+        record.fields(),
+        &[
+            Value::Integer(7),
+            Value::String("hello".to_string()),
+            Value::List(vec![Value::Integer(1), Value::Integer(2)]),
+            Value::Map(BTreeMap::from([("k".to_string(), Value::Boolean(true))])),
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn parameter_resolves_against_stored_data() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    let mut created = session
+        .run("CREATE (:Person {name: 'Ada', age: 36})")
+        .await
+        .expect("create node");
+    created.records().discard().await.expect("commit create");
+
+    let params = BTreeMap::from([("name".to_string(), Value::String("Ada".to_string()))]);
+    let mut result = session
+        .run_with_params("MATCH (p:Person {name: $name}) RETURN p.age AS age", &params)
+        .await
+        .expect("lookup by parameter");
+    let record = result
+        .records()
+        .next()
+        .await
+        .expect("stream ok")
+        .expect("one record");
+    assert_eq!(record.fields(), &[Value::Integer(36)]);
 }
 
 #[tokio::test]
@@ -130,8 +208,8 @@ async fn connects_over_tls_to_an_ssl_configured_container() {
 
 #[tokio::test]
 async fn discard_after_partial_read_leaves_connection_usable() {
-    let mg = common::start_memgraph().await;
-    let mut session = common::connect(&mg).await;
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
 
     // Read only part of a large result, then discard the rest.
     let mut result = session

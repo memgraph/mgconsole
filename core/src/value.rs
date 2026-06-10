@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use chrono_tz::Tz;
 
+use crate::error::Error;
+
 /// A single piece of data Memgraph returns, in its Core form.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -156,6 +158,62 @@ impl From<bolt_proto::Value> for Value {
     }
 }
 
+/// Encode a Core [`Value`] as a `bolt_proto::Value` for use as a query
+/// parameter. The structural result types — nodes, relationships, paths — and
+/// enums are results, not inputs, so they cannot be parameters and are rejected
+/// with [`Error::Parameter`] rather than silently mangled.
+pub(crate) fn to_bolt(value: &Value) -> Result<bolt_proto::Value, Error> {
+    use bolt_proto::value::{Duration as BDuration, Point2D as BPoint2D, Point3D as BPoint3D};
+    use bolt_proto::Value as B;
+
+    Ok(match value {
+        Value::Null => B::Null,
+        Value::Boolean(b) => B::Boolean(*b),
+        Value::Integer(i) => B::Integer(*i),
+        Value::Float(f) => B::Float(*f),
+        Value::Bytes(b) => B::Bytes(b.clone()),
+        Value::String(s) => B::String(s.clone()),
+        Value::List(items) => {
+            B::List(items.iter().map(to_bolt).collect::<Result<Vec<_>, _>>()?)
+        }
+        Value::Map(m) => B::Map(
+            m.iter()
+                .map(|(k, v)| Ok((k.clone(), to_bolt(v)?)))
+                .collect::<Result<std::collections::HashMap<_, _>, Error>>()?,
+        ),
+        Value::Date(d) => B::Date(*d),
+        Value::Time(t, off) => B::Time(*t, *off),
+        Value::LocalTime(t) => B::LocalTime(*t),
+        Value::LocalDateTime(dt) => B::LocalDateTime(*dt),
+        Value::Duration(d) => B::Duration(BDuration::new(d.months, d.days, d.seconds, d.nanos)),
+        Value::DateTimeOffset(dt) => B::DateTimeOffset(*dt),
+        Value::DateTimeZoned(dt) => B::DateTimeZoned(*dt),
+        Value::Point2d(p) => B::Point2D(BPoint2D::new(p.srid, p.x, p.y)),
+        Value::Point3d(p) => B::Point3D(BPoint3D::new(p.srid, p.x, p.y, p.z)),
+        Value::Node(_)
+        | Value::Relationship(_)
+        | Value::UnboundRelationship(_)
+        | Value::Path(_)
+        | Value::Enum(_) => {
+            return Err(Error::Parameter(format!(
+                "{} cannot be used as a query parameter",
+                unsupported_kind(value)
+            )))
+        }
+    })
+}
+
+/// Name of a Value kind that cannot be a query parameter, for the error message.
+fn unsupported_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Node(_) => "a node",
+        Value::Relationship(_) | Value::UnboundRelationship(_) => "a relationship",
+        Value::Path(_) => "a path",
+        Value::Enum(_) => "an enum",
+        _ => "this value",
+    }
+}
+
 fn node(n: &bolt_proto::value::Node) -> Node {
     Node {
         id: n.node_identity(),
@@ -230,5 +288,68 @@ mod tests {
             Value::Map(bt) => assert_eq!(bt.get("a"), Some(&Value::Integer(1))),
             other => panic!("expected map, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn scalars_encode_to_bolt() {
+        assert_eq!(to_bolt(&Value::Integer(7)).unwrap(), bolt_proto::Value::Integer(7));
+        assert_eq!(to_bolt(&Value::Null).unwrap(), bolt_proto::Value::Null);
+        assert_eq!(
+            to_bolt(&Value::String("hi".into())).unwrap(),
+            bolt_proto::Value::String("hi".into())
+        );
+    }
+
+    #[test]
+    fn nested_list_and_map_encode_to_bolt() {
+        let value = Value::List(vec![
+            Value::Integer(1),
+            Value::Map(BTreeMap::from([("k".to_string(), Value::Boolean(true))])),
+        ]);
+        match to_bolt(&value).unwrap() {
+            bolt_proto::Value::List(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0], bolt_proto::Value::Integer(1));
+                match &items[1] {
+                    bolt_proto::Value::Map(m) => {
+                        assert_eq!(m.get("k"), Some(&bolt_proto::Value::Boolean(true)))
+                    }
+                    other => panic!("expected map, got {other:?}"),
+                }
+            }
+            other => panic!("expected list, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn temporal_and_point_encode_to_bolt() {
+        let dur = Value::Duration(Duration {
+            months: 1,
+            days: 2,
+            seconds: 3,
+            nanos: 4,
+        });
+        assert!(matches!(to_bolt(&dur).unwrap(), bolt_proto::Value::Duration(_)));
+
+        let point = Value::Point2d(Point2d {
+            srid: 4326,
+            x: 1.0,
+            y: 2.0,
+        });
+        assert!(matches!(to_bolt(&point).unwrap(), bolt_proto::Value::Point2D(_)));
+    }
+
+    #[test]
+    fn structural_values_are_rejected_as_parameters() {
+        let node = Value::Node(Node {
+            id: 1,
+            labels: vec!["L".into()],
+            properties: BTreeMap::new(),
+        });
+        assert!(matches!(to_bolt(&node), Err(Error::Parameter(_))));
+        assert!(matches!(
+            to_bolt(&Value::Enum("S::A".into())),
+            Err(Error::Parameter(_))
+        ));
     }
 }

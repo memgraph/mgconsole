@@ -20,6 +20,7 @@ use testcontainers::{
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
+use tokio::sync::{Mutex, MutexGuard, OnceCell};
 
 /// Pinned for reproducibility — the version the ADR-0001 fidelity spike used.
 pub const MEMGRAPH_TAG: &str = "3.10.1";
@@ -71,6 +72,63 @@ pub async fn connect(mg: &Memgraph) -> Session {
     Session::connect(&mg.host, mg.port)
         .await
         .expect("connect session")
+}
+
+// --- Shared container harness (issue 12) -----------------------------------
+//
+// One Memgraph per test binary, leased one test at a time. Each lease wipes the
+// database first, so tests are isolated by reset rather than by a fresh
+// container each — the database is shared, Memgraph Community has no
+// multi-database, so isolation is by wiping. Tests that mutate server-wide
+// state (auth, storage mode, TLS) keep their own dedicated container via
+// `start_memgraph` / `start_memgraph_tls` instead of leasing this one.
+
+struct Shared {
+    mg: Memgraph,
+    /// Held for the duration of a lease so leased tests run serially.
+    serial: Mutex<()>,
+}
+
+static SHARED: OnceCell<Shared> = OnceCell::const_new();
+
+async fn shared() -> &'static Shared {
+    SHARED
+        .get_or_init(|| async {
+            Shared {
+                mg: start_memgraph().await,
+                serial: Mutex::new(()),
+            }
+        })
+        .await
+}
+
+/// Exclusive access to the shared Memgraph for one test: holds the serial lock
+/// and a freshly reset Session until dropped.
+pub struct Lease {
+    _guard: MutexGuard<'static, ()>,
+    pub session: Session,
+}
+
+/// Lease the shared Memgraph: take the serial lock, wipe the database, and hand
+/// back a Session. Drop the returned `Lease` to release it for the next test.
+pub async fn lease() -> Lease {
+    let shared = shared().await;
+    let guard = shared.serial.lock().await;
+    let mut session = connect(&shared.mg).await;
+    reset(&mut session).await;
+    Lease {
+        _guard: guard,
+        session,
+    }
+}
+
+/// Aggressively wipe the shared database between leases.
+async fn reset(session: &mut Session) {
+    let mut result = session
+        .run("MATCH (n) DETACH DELETE n")
+        .await
+        .expect("reset: delete all");
+    result.records().discard().await.expect("reset: drain");
 }
 
 /// Start a Memgraph configured for Bolt TLS, using a freshly generated
