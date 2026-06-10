@@ -41,7 +41,9 @@ use tokio::sync::{mpsc, Mutex};
 
 use mgconsole_core::format::{CsvOptions, CsvWriter, CypherlWriter, Header, JsonlWriter, RowWriter};
 use mgconsole_core::{Error, Record, Session, Value};
+use rustyline::history::{FileHistory, History, SearchDirection};
 
+use crate::history::HistoryFile;
 use effect::ExportFormat;
 use schema::{parse_schema, NODE_PROPERTIES_QUERY, REL_PROPERTIES_QUERY};
 use terminal::TerminalGuard;
@@ -50,13 +52,26 @@ use terminal::TerminalGuard;
 /// terminal on quit and on panic. The Session is shared with the in-flight query
 /// task behind an async mutex so the task can hold it for a query's duration and
 /// release it on completion (or, in slice 07, on cancel).
-pub async fn run(session: Session, config: WorkbenchConfig, color: bool) -> io::Result<()> {
+pub async fn run(
+    session: Session,
+    config: WorkbenchConfig,
+    color: bool,
+    history: Option<HistoryFile>,
+) -> io::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut state = WorkbenchState::new(config, color);
 
     let session = Arc::new(Mutex::new(session));
     let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
+
+    // Persisted command history (slice 17): load prior entries for recall, and
+    // keep the store to append each submission to.
+    let mut history_store = FileHistory::new();
+    if let Some(file) = &history {
+        file.load(&mut history_store);
+        let _ = tx.send(Event::HistoryLoaded(history_entries(&history_store)));
+    }
     let mut input = EventStream::new();
     // Drives the running-query spinner; idle ticks are cheap (the buffer diff is
     // unchanged, so nothing is flushed to the terminal).
@@ -120,6 +135,11 @@ pub async fn run(session: Session, config: WorkbenchConfig, color: bool) -> io::
                     let session = Arc::clone(&session);
                     let tx = tx.clone();
                     tokio::spawn(evaluate_param(session, tx, name, expr, params));
+                }
+                Effect::AppendHistory(line) => {
+                    if let Some(file) = &history {
+                        file.record(&mut history_store, &line);
+                    }
                 }
                 Effect::Export {
                     format,
@@ -212,6 +232,20 @@ async fn fetch_schema(session: Arc<Mutex<Session>>, tx: mpsc::UnboundedSender<Ev
         }
     };
     let _ = tx.send(Event::SchemaLoaded(schema));
+}
+
+/// Extract the loaded history entries as plain strings, oldest→newest, for the
+/// reducer's recall list (slice 17).
+fn history_entries(history: &FileHistory) -> Vec<String> {
+    (0..history.len())
+        .filter_map(|i| {
+            history
+                .get(i, SearchDirection::Forward)
+                .ok()
+                .flatten()
+                .map(|entry| entry.entry.into_owned())
+        })
+        .collect()
 }
 
 /// Run a query and collect all its records (used for the small schema results).

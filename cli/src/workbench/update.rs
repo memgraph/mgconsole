@@ -59,6 +59,10 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
             set_schema(state, schema);
             Vec::new()
         }
+        Event::HistoryLoaded(entries) => {
+            state.history_entries = entries;
+            Vec::new()
+        }
         Event::ParamEvaluated { name, value } => {
             match value {
                 Ok(value) => {
@@ -333,6 +337,24 @@ fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             alt: false,
             shift: false,
         } => submit(state),
+        // Ctrl+Up / Ctrl+Down recall older / newer history into the editor
+        // (slice 17); plain Up/Down move the cursor (ordinary editing, below).
+        Key {
+            code: KeyCode::Up,
+            ctrl: true,
+            ..
+        } => {
+            recall_older(state);
+            Vec::new()
+        }
+        Key {
+            code: KeyCode::Down,
+            ctrl: true,
+            ..
+        } => {
+            recall_newer(state);
+            Vec::new()
+        }
         // Everything else is ordinary editing, delegated to the editor widget.
         other => {
             state.editor.edit(other);
@@ -593,7 +615,60 @@ fn submit(state: &mut WorkbenchState) -> Vec<Effect> {
         return Vec::new(); // a blank buffer submits nothing
     };
     state.pending = statements.collect();
-    start_query(state, first)
+    let mut effects = start_query(state, first);
+    // The whole submission is one recallable history entry (slice 17).
+    record_history(state, &buffer, &mut effects);
+    effects
+}
+
+/// Recall an older history entry into the editor (Ctrl+Up). On the first step the
+/// live buffer is saved so stepping back past the newest restores it.
+fn recall_older(state: &mut WorkbenchState) {
+    if state.history_entries.is_empty() {
+        return;
+    }
+    let index = match state.recall_index {
+        None => {
+            state.recall_saved = Some(state.editor.buffer());
+            state.history_entries.len() - 1
+        }
+        Some(i) => i.saturating_sub(1),
+    };
+    state.recall_index = Some(index);
+    let text = state.history_entries[index].clone();
+    state.editor.set_text(&text);
+}
+
+/// Recall a newer history entry (Ctrl+Down); stepping past the newest restores
+/// the saved live buffer.
+fn recall_newer(state: &mut WorkbenchState) {
+    let Some(index) = state.recall_index else {
+        return;
+    };
+    if index + 1 < state.history_entries.len() {
+        state.recall_index = Some(index + 1);
+        let text = state.history_entries[index + 1].clone();
+        state.editor.set_text(&text);
+    } else {
+        state.recall_index = None;
+        let saved = state.recall_saved.take().unwrap_or_default();
+        state.editor.set_text(&saved);
+    }
+}
+
+/// Record a submitted query in history (slice 17): append it in-memory (skipping
+/// a consecutive duplicate) and emit the persist effect; reset recall.
+fn record_history(state: &mut WorkbenchState, submission: &str, effects: &mut Vec<Effect>) {
+    let entry = submission.trim().to_string();
+    if entry.is_empty() {
+        return;
+    }
+    state.recall_index = None;
+    state.recall_saved = None;
+    if state.history_entries.last() != Some(&entry) {
+        state.history_entries.push(entry.clone());
+    }
+    effects.push(Effect::AppendHistory(entry));
 }
 
 /// Handle a submitted `:`-meta command, reusing the REPL's `MetaCommand`. The
@@ -773,13 +848,15 @@ mod tests {
         type_str(&mut s, "RETURN 1;");
         let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
         assert_eq!(
-            effects,
-            vec![Effect::RunQuery {
+            effects[0],
+            Effect::RunQuery {
                 id: 0,
                 query: "RETURN 1".to_string(),
                 params: BTreeMap::new(),
-            }]
+            }
         );
+        // The submission is also recorded in history (slice 17).
+        assert!(matches!(effects.get(1), Some(Effect::AppendHistory(_))));
         assert!(matches!(s.run, RunState::Running { id: 0 }));
         assert_eq!(s.editor.buffer(), "RETURN 1;", "the buffer is kept for re-run");
     }
@@ -790,12 +867,12 @@ mod tests {
         type_str(&mut s, "RETURN 1");
         let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
         assert_eq!(
-            effects,
-            vec![Effect::RunQuery {
+            effects[0],
+            Effect::RunQuery {
                 id: 0,
                 query: "RETURN 1".to_string(),
                 params: BTreeMap::new(),
-            }]
+            }
         );
         assert!(s.pending.is_empty());
     }
@@ -1502,6 +1579,54 @@ mod tests {
         assert_eq!(s.drawer, Some(DrawerKind::Params));
         update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('p'))));
         assert_eq!(s.drawer, None);
+    }
+
+    // --- persisted history recall (slice 17) --------------------------------
+
+    fn ctrl(code: KeyCode) -> Event {
+        Event::Key(Key::ctrl(code))
+    }
+
+    #[test]
+    fn loaded_history_is_recalled_into_the_editor() {
+        let mut s = wb();
+        update(
+            &mut s,
+            Event::HistoryLoaded(vec!["RETURN 1;".to_string(), "MATCH (n) RETURN n;".to_string()]),
+        );
+        // Ctrl+Up recalls the newest entry, then the older one.
+        update(&mut s, ctrl(KeyCode::Up));
+        assert_eq!(s.editor.buffer(), "MATCH (n) RETURN n;");
+        update(&mut s, ctrl(KeyCode::Up));
+        assert_eq!(s.editor.buffer(), "RETURN 1;");
+        // Ctrl+Down walks back toward the newest, then restores the (empty) live buffer.
+        update(&mut s, ctrl(KeyCode::Down));
+        assert_eq!(s.editor.buffer(), "MATCH (n) RETURN n;");
+        update(&mut s, ctrl(KeyCode::Down));
+        assert_eq!(s.editor.buffer(), "", "stepping past newest restores the live buffer");
+    }
+
+    #[test]
+    fn a_submitted_query_is_appended_to_history_and_persisted() {
+        let mut s = wb();
+        type_str(&mut s, "RETURN 7;");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(
+            effects.iter().any(|e| matches!(e, Effect::AppendHistory(line) if line == "RETURN 7;")),
+            "submission persisted: {effects:?}"
+        );
+        assert_eq!(s.history_entries, vec!["RETURN 7;".to_string()], "appended in-memory");
+    }
+
+    #[test]
+    fn the_live_buffer_is_preserved_across_recall() {
+        let mut s = wb();
+        update(&mut s, Event::HistoryLoaded(vec!["OLD;".to_string()]));
+        type_str(&mut s, "typing");
+        update(&mut s, ctrl(KeyCode::Up)); // recall OLD, saving "typing"
+        assert_eq!(s.editor.buffer(), "OLD;");
+        update(&mut s, ctrl(KeyCode::Down)); // past newest → restore
+        assert_eq!(s.editor.buffer(), "typing");
     }
 
     #[test]

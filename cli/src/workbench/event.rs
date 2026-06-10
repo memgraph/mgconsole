@@ -123,4 +123,7 @@ pub enum Event {
         name: String,
         value: Result<Value, String>,
     },
+    /// Prior command history loaded on start (oldest→newest), for recall
+    /// (slice 17).
+    HistoryLoaded(Vec<String>),
 }

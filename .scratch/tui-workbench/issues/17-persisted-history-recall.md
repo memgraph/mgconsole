@@ -1,6 +1,6 @@
 # 17 — Persisted command-history recall
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -16,12 +16,18 @@ history-recall gesture and/or a searchable history view).
 
 ## Acceptance criteria
 
-- [ ] Prior entries load on start and submitted queries are appended, honouring
+- [x] Prior entries load on start and submitted queries are appended, honouring
       `--history` / `--no-history` / the env override — the same resolution the
-      REPL uses.
-- [ ] The user can recall a previous query into the editor.
-- [ ] History recall state is covered at the reducer seam; the existing
-      history-resolution helpers are reused unchanged.
+      REPL uses. (`main` opens the history file via `open_history` for both
+      Frontends; the edge loads it into a `FileHistory`, sends `HistoryLoaded`,
+      and `record`s each `AppendHistory`.)
+- [x] The user can recall a previous query into the editor. (Ctrl+Up / Ctrl+Down
+      step older/newer through `history_entries`, replacing the editor buffer and
+      restoring the saved live buffer past the newest.)
+- [x] History recall state is covered at the reducer seam; the existing
+      history-resolution helpers are reused unchanged. (`HistoryLoaded`, recall
+      walk, append-on-submit, and live-buffer-preserved tests; `history.rs` reused
+      verbatim.)
 
 ## Blocked by
 

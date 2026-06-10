@@ -75,6 +75,8 @@ pub enum Effect {
         header: Vec<String>,
         rows: Vec<Record>,
     },
+    /// Append a submitted query to the persisted command history (slice 17).
+    AppendHistory(String),
     /// Leave the workbench and restore the terminal.
     Quit,
 }

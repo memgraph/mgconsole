@@ -96,6 +96,14 @@ pub struct WorkbenchState {
     /// The statement of the in-flight query, carried from submit to the result
     /// entry created when the query starts (for plan detection, slice 14).
     pub running_statement: Option<String>,
+    /// Persisted command history, oldest→newest, for recall (slice 17). Loaded on
+    /// start and appended on each submit.
+    pub history_entries: Vec<String>,
+    /// The recall position into [`history_entries`](Self::history_entries), or
+    /// `None` when editing the live buffer.
+    pub recall_index: Option<usize>,
+    /// The live buffer saved when recall began, restored on stepping past newest.
+    pub recall_saved: Option<String>,
     /// The transient status message (errors, hints; running/elapsed in slice 07).
     pub status: StatusLine,
     /// Whether colour is on (resolved `--color`/`NO_COLOR`); slice 05 uses it for
@@ -127,6 +135,9 @@ impl WorkbenchState {
             params: BTreeMap::new(),
             next_id: 0,
             running_statement: None,
+            history_entries: Vec::new(),
+            recall_index: None,
+            recall_saved: None,
             status: StatusLine::default(),
             color,
             config,
@@ -292,6 +303,11 @@ impl EditorState {
     /// Discard the buffer back to empty (Ctrl-C abandons typing when idle).
     pub fn clear(&mut self) {
         self.textarea = TextArea::default();
+    }
+
+    /// Replace the buffer with `text` (used by history recall, slice 17).
+    pub fn set_text(&mut self, text: &str) {
+        self.textarea = TextArea::new(text.split('\n').map(String::from).collect());
     }
 
     /// The physical lines, for the draw edge to render with per-token

@@ -167,6 +167,8 @@ fn run_interactive(
             false
         }
     };
+    // History resolution is shared by both interactive Frontends (slice 17).
+    let history = open_history(cli);
     match select_frontend(cli.plain, true, supports_tui) {
         Frontend::Workbench => {
             #[cfg(feature = "tui")]
@@ -175,6 +177,7 @@ fn run_interactive(
                     session,
                     workbench::WorkbenchConfig::default(),
                     colorize,
+                    history,
                 ))?;
             }
             #[cfg(not(feature = "tui"))]
@@ -190,7 +193,6 @@ fn run_interactive(
             let config = ReplConfig {
                 row_cap: DEFAULT_ROW_CAP,
             };
-            let history = open_history(cli);
             let mut source = RustylineSource::new(history, colorize)?;
             repl::run_loop(&mut source, &mut runner, out, err, &config)?;
         }
