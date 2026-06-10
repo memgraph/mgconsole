@@ -19,7 +19,7 @@ pub mod terminal;
 pub mod update;
 
 pub use effect::Effect;
-pub use event::{Event, Key, KeyCode};
+pub use event::{Connected, Event, Key, KeyCode};
 pub use state::{WorkbenchConfig, WorkbenchState};
 pub use update::update;
 
@@ -150,6 +150,45 @@ pub async fn run(
                     // access mode READ (issue 04). The reducer only ever emits
                     // `true`; the off direction is refused at runtime.
                     session.lock().await.set_read_only(on);
+                }
+                Effect::Connect(target) => {
+                    // Resolve the target and establish a fresh Session — a swap,
+                    // not a mutation (issue 07). The prior Session is replaced only
+                    // once the new one connects, so a failed connect leaves it intact.
+                    let resolved = {
+                        let guard = session.lock().await;
+                        crate::resolve_connect_target(
+                            &target,
+                            &state.config.connect.config,
+                            guard.endpoint(),
+                            &state.config.connect.options,
+                        )
+                    };
+                    let outcome = match resolved {
+                        Ok(target) => {
+                            match Session::connect_with(&target.endpoint, &target.options).await {
+                                Ok(new_session) => {
+                                    let label = match &target.profile {
+                                        Some(name) => format!("{name} ({})", target.endpoint),
+                                        None => target.endpoint.to_string(),
+                                    };
+                                    let read_only = new_session.is_read_only();
+                                    *session.lock().await = new_session;
+                                    // Re-fetch the Schema for the new database.
+                                    tokio::spawn(fetch_schema(Arc::clone(&session), tx.clone()));
+                                    Ok(Connected {
+                                        endpoint: target.endpoint.to_string(),
+                                        profile: target.profile,
+                                        read_only,
+                                        label,
+                                    })
+                                }
+                                Err(e) => Err(e.to_string()),
+                            }
+                        }
+                        Err(message) => Err(message),
+                    };
+                    let _ = tx.send(Event::Connected(outcome));
                 }
                 Effect::Transaction(op) => {
                     // Apply the explicit-transaction operation on the shared Session

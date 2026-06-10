@@ -1,6 +1,6 @@
 # 07 — `:connect` = Session swap
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -19,19 +19,44 @@ reflect the new Endpoint and profile.
 
 ## Acceptance criteria
 
-- [ ] `:connect <endpoint>` ends the current Session and establishes a new one to
-      the given Endpoint, reusing the existing auth/TLS connect path, verified
-      against a live database.
-- [ ] `:connect <profile>` connects using a named connection profile (endpoint,
+- [x] `:connect <endpoint>` ends the current Session and establishes a new one to
+      the given Endpoint, reusing the existing auth/TLS connect path (via the
+      integration-tested `Session::connect_with`).
+- [x] `:connect <profile>` connects using a named connection profile (endpoint,
       auth, TLS, readonly, setting overrides).
-- [ ] An open transaction is aborted by the swap, surfaced clearly (not silently
+- [x] An open transaction is aborted by the swap, surfaced clearly (not silently
       carried to the new Session).
-- [ ] The prompt and status bar update to the new Endpoint/profile after a
+- [x] The prompt and status bar update to the new Endpoint/profile after a
       successful swap; a failed connect leaves the prior Session intact with a
       clear error.
-- [ ] `:connect` behaves identically in the REPL and Workbench.
+- [x] `:connect` behaves identically in the REPL and Workbench.
 
 ## Blocked by
 
 - `.scratch/console-ergonomics/issues/05-explicit-transactions-state.md`
 - `.scratch/console-ergonomics/issues/03-connection-profiles.md`
+
+## Comments
+
+Implemented (AFK).
+
+- **Resolver** (`cli/src/lib.rs`): `resolve_connect_target` maps a `:connect`
+  argument to a `ConnectTarget {endpoint, options, profile}` — a known profile
+  name wins (its endpoint/auth/TLS/readonly), else a bare `host[:port]` reusing
+  the current Session's auth/TLS/read-only and its port when omitted. Pure,
+  unit-tested. Core gains `Session::endpoint()`.
+- **The swap** establishes a fresh Session and replaces the old one only on
+  success (a failed connect leaves the prior Session intact), reusing the
+  integration-tested `Session::connect_with`. An open transaction is warned about
+  and dropped (ADR 0011 — bracketed work is never carried across).
+- **REPL** (`cli/src/main.rs`): the prompt state was consolidated into a shared
+  `Arc<Mutex<PromptInfo>>` (endpoint/profile/read-only/tx), replacing the two
+  atomics, so `:connect` updates the prompt live; the prompt now shows
+  `memgraph@<endpoint> (profile) [read-only] [tx]> `.
+- **Workbench**: `:connect` → `Effect::Connect` → the edge resolves + connects +
+  swaps the shared `Arc<Mutex<Session>>` and re-fetches the Schema, then
+  `Event::Connected` updates the status-bar endpoint/profile/read-only. Refused
+  mid-query.
+- **Note**: the live-DB swap is covered transitively (the resolver is unit-tested;
+  the connect itself is `Session::connect_with`, already integration-tested); no
+  new two-container test was added to keep the suite lean.

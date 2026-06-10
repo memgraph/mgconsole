@@ -64,6 +64,9 @@ pub enum MetaCommand {
     Commit,
     /// `:rollback` — roll back the open transaction.
     Rollback,
+    /// `:connect <target>` — swap to a new Session at a profile or `host[:port]`
+    /// (issue 07).
+    Connect(String),
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -89,6 +92,16 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
         "begin" => MetaCommand::Begin,
         "commit" => MetaCommand::Commit,
         "rollback" => MetaCommand::Rollback,
+        "connect" => {
+            if args.is_empty() {
+                MetaCommand::Invalid(
+                    ":connect needs a profile name or host[:port], e.g. ':connect prod'"
+                        .to_string(),
+                )
+            } else {
+                MetaCommand::Connect(args.to_string())
+            }
+        }
         _ => MetaCommand::Unknown(trimmed.to_string()),
     })
 }
@@ -217,7 +230,8 @@ pub fn help_text() -> &'static str {
      \t:set readonly on       Guard the session read-only (off only at connect time)\n\
      \t:begin                 Open an explicit transaction\n\
      \t:commit                Commit the open transaction\n\
-     \t:rollback              Roll back the open transaction"
+     \t:rollback              Roll back the open transaction\n\
+     \t:connect <target>      Swap to another server (a profile or host[:port])"
 }
 
 /// Documentation pointers, printed by `:docs`. Carried over from `mgconsole`.
@@ -314,6 +328,11 @@ pub trait QueryRunner {
 
     /// The current explicit-transaction state, for the prompt marker.
     fn transaction_state(&self) -> TransactionState;
+
+    /// Swap to a new Session at `target` (a profile name or `host[:port]`, issue
+    /// 07). On success returns a label for the confirmation and the prompt
+    /// reflects the new connection; on failure the prior Session is left intact.
+    fn connect(&mut self, target: &str) -> Result<String, Error>;
 }
 
 /// Frontend-local REPL configuration.
@@ -406,6 +425,17 @@ fn dispatch_meta(
             Ok(()) => writeln!(out, "transaction rolled back")?,
             Err(e) => writeln!(err, "error: {e}")?,
         },
+        // `:connect` swaps the whole Session (issue 07). An open transaction is
+        // aborted by the swap — warn before it is silently lost (ADR 0011).
+        MetaCommand::Connect(target) => {
+            if runner.transaction_state() != TransactionState::Auto {
+                writeln!(err, "note: the open transaction is aborted by :connect")?;
+            }
+            match runner.connect(&target) {
+                Ok(label) => writeln!(out, "connected to {label}")?,
+                Err(e) => writeln!(err, "error: {e}")?,
+            }
+        }
         MetaCommand::Invalid(message) => writeln!(err, "error: {message}")?,
         MetaCommand::Unknown(cmd) => writeln!(err, "error: unknown command '{cmd}'")?,
     }
@@ -649,6 +679,33 @@ mod tests {
     }
 
     #[test]
+    fn connect_parses_its_target_and_rejects_an_empty_one() {
+        assert_eq!(
+            meta_command(":connect prod"),
+            Some(MetaCommand::Connect("prod".to_string()))
+        );
+        assert_eq!(
+            meta_command(":connect host:7688"),
+            Some(MetaCommand::Connect("host:7688".to_string()))
+        );
+        assert!(matches!(meta_command(":connect"), Some(MetaCommand::Invalid(_))));
+    }
+
+    #[test]
+    fn connect_drives_the_runner_and_warns_about_an_open_transaction() {
+        let mut runner = ScriptedRunner::returning(vec![]);
+        runner.begin().unwrap(); // open a tx so the swap warns
+        let (_src, runner, out, err) = drive_with(
+            vec![Line::Text(":connect prod".into())],
+            runner,
+        );
+        assert_eq!(runner.connected, vec!["prod".to_string()]);
+        assert!(out.contains("connected to prod"), "confirmation: {out}");
+        assert!(err.contains("aborted by :connect"), "tx-abort warning: {err}");
+        assert_eq!(runner.transaction_state(), TransactionState::Auto);
+    }
+
+    #[test]
     fn format_params_reads_clearly_when_empty() {
         assert_eq!(format_params(&BTreeMap::new()), "No parameters set.");
     }
@@ -721,6 +778,7 @@ mod tests {
         eval_results: VecDeque<Result<Value, Error>>,
         read_only: bool,
         tx: TransactionState,
+        connected: Vec<String>,
     }
 
     impl ScriptedRunner {
@@ -734,6 +792,7 @@ mod tests {
                 eval_results: VecDeque::new(),
                 read_only: false,
                 tx: TransactionState::Auto,
+                connected: Vec::new(),
             }
         }
 
@@ -793,6 +852,12 @@ mod tests {
 
         fn transaction_state(&self) -> TransactionState {
             self.tx
+        }
+
+        fn connect(&mut self, target: &str) -> Result<String, Error> {
+            self.connected.push(target.to_string());
+            self.tx = TransactionState::Auto;
+            Ok(target.to_string())
         }
     }
 

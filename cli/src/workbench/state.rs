@@ -8,7 +8,9 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use mgconsole_core::{Record, Summary, TransactionState, Value};
+use mgconsole_core::{ConnectOptions, Record, Summary, TransactionState, Value};
+
+use crate::config::Config;
 use tui_textarea::{Input, Key as TaKey, TextArea};
 
 use crate::settings::Settings;
@@ -122,6 +124,12 @@ pub struct WorkbenchState {
     /// The explicit-transaction state (issue 05), mirrored from the Session by the
     /// `TransactionApplied` event. Drives the `[tx]`/`[tx failed]` status marker.
     pub tx: TransactionState,
+    /// The active profile name (issue 03/07): seeded from config, updated by
+    /// `:connect`. Shown in the status bar.
+    pub profile: Option<String>,
+    /// The Endpoint shown in the status bar (issue 07): seeded from config,
+    /// updated by `:connect`.
+    pub endpoint: String,
     /// Frontend-local configuration.
     pub config: WorkbenchConfig,
 }
@@ -156,6 +164,8 @@ impl WorkbenchState {
             settings: config.settings.clone(),
             read_only: config.read_only,
             tx: TransactionState::Auto,
+            profile: config.profile.clone(),
+            endpoint: config.endpoint.clone(),
             config,
         }
     }
@@ -259,7 +269,9 @@ pub struct StatusLine {
 pub const DEFAULT_ROW_CAP: usize = 1_000_000;
 
 /// Frontend-local configuration resolved at startup.
-#[derive(Debug, Clone)]
+// Not `Debug`: carries the connect context (ConnectOptions has credentials, and
+// is not `Debug` — nor should secrets be printed).
+#[derive(Clone)]
 pub struct WorkbenchConfig {
     /// The editor pane's share of the vertical split, in percent.
     pub editor_percent: u16,
@@ -279,6 +291,18 @@ pub struct WorkbenchConfig {
     pub profile: Option<String>,
     /// Whether the Session started read-only (issue 04), seeding the marker state.
     pub read_only: bool,
+    /// The Endpoint the Session started on (issue 07), shown in the status bar.
+    pub endpoint: String,
+    /// The config + current connect options, so `:connect` can resolve a profile
+    /// or bare endpoint and re-establish (issue 07).
+    pub connect: ConnectContext,
+}
+
+/// What the `:connect` edge needs to resolve a target and re-establish (issue 07).
+#[derive(Clone, Default)]
+pub struct ConnectContext {
+    pub config: Config,
+    pub options: ConnectOptions,
 }
 
 impl Default for WorkbenchConfig {
@@ -291,6 +315,8 @@ impl Default for WorkbenchConfig {
             settings: Settings::default(),
             profile: None,
             read_only: false,
+            endpoint: String::new(),
+            connect: ConnectContext::default(),
         }
     }
 }

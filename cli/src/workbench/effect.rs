@@ -102,6 +102,9 @@ pub enum Effect {
     SetReadOnly(bool),
     /// Apply an explicit-transaction operation to the Session (issue 05).
     Transaction(TxOp),
+    /// Swap to a new Session at the given `:connect` target (issue 07): a profile
+    /// name or `host[:port]`.
+    Connect(String),
     /// Leave the workbench and restore the terminal.
     Quit,
 }

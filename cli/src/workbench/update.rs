@@ -70,6 +70,20 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Event::Connected(result) => {
+            match result {
+                Ok(connected) => {
+                    state.endpoint = connected.endpoint;
+                    state.profile = connected.profile;
+                    state.read_only = connected.read_only;
+                    state.tx = mgconsole_core::TransactionState::Auto;
+                    state.status.message = format!("connected to {}", connected.label);
+                }
+                // A failed connect leaves the prior Session (and its display) intact.
+                Err(message) => state.status.message = format!("error: {message}"),
+            }
+            Vec::new()
+        }
         Event::ParamEvaluated { name, value } => {
             match value {
                 Ok(value) => {
@@ -781,6 +795,19 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 MetaCommand::Commit => TxOp::Commit,
                 _ => TxOp::Rollback,
             })]
+        }
+        // `:connect` swaps the whole Session (issue 07). Refuse mid-query; warn
+        // that an open transaction is aborted by the swap (ADR 0011).
+        MetaCommand::Connect(target) => {
+            if matches!(state.run, RunState::Running { .. }) {
+                state.status.message = "session busy — cancel first".to_string();
+                return Vec::new();
+            }
+            state.editor.clear();
+            if state.tx != mgconsole_core::TransactionState::Auto {
+                state.status.message = "note: the open transaction is aborted by :connect".to_string();
+            }
+            vec![Effect::Connect(target)]
         }
         MetaCommand::Invalid(message) => {
             state.status.message = format!("error: {message}");
@@ -1767,6 +1794,59 @@ mod tests {
         let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
         assert!(effects.is_empty(), "no tx op while a query is in flight");
         assert!(s.status.message.contains("busy"), "status: {}", s.status.message);
+    }
+
+    // --- :connect (issue 07) ------------------------------------------------
+
+    #[test]
+    fn connect_emits_a_connect_effect_and_warns_about_an_open_transaction() {
+        let mut s = wb();
+        s.tx = mgconsole_core::TransactionState::Open;
+        type_str(&mut s, ":connect prod");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert_eq!(effects, vec![Effect::Connect("prod".to_string())]);
+        assert!(s.status.message.contains("aborted by :connect"), "warned: {}", s.status.message);
+        assert_eq!(s.editor.buffer(), "");
+    }
+
+    #[test]
+    fn a_successful_connect_event_updates_the_connection_display() {
+        use crate::workbench::event::Connected;
+        let mut s = wb();
+        s.tx = mgconsole_core::TransactionState::Open;
+        update(
+            &mut s,
+            Event::Connected(Ok(Connected {
+                endpoint: "db:7688".to_string(),
+                profile: Some("prod".to_string()),
+                read_only: true,
+                label: "prod (db:7688)".to_string(),
+            })),
+        );
+        assert_eq!(s.endpoint, "db:7688");
+        assert_eq!(s.profile.as_deref(), Some("prod"));
+        assert!(s.read_only);
+        assert_eq!(s.tx, mgconsole_core::TransactionState::Auto);
+        assert!(s.status.message.contains("connected to prod"));
+    }
+
+    #[test]
+    fn a_failed_connect_leaves_the_display_intact() {
+        let mut s = wb();
+        s.endpoint = "old:7687".to_string();
+        update(&mut s, Event::Connected(Err("refused".to_string())));
+        assert_eq!(s.endpoint, "old:7687", "prior connection display intact");
+        assert!(s.status.message.contains("error"));
+    }
+
+    #[test]
+    fn connect_is_refused_while_a_query_runs() {
+        let mut s = wb();
+        submit_query(&mut s, "MATCH (n) RETURN n;");
+        type_str(&mut s, ":connect prod");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(effects.is_empty());
+        assert!(s.status.message.contains("busy"));
     }
 
     #[test]

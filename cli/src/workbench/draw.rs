@@ -455,6 +455,7 @@ fn draw_result(frame: &mut Frame, area: Rect, result: &CurrentResult, focused: b
 /// message (if any), then the keybind hints, including the universal newline key
 /// (issue 01 AC).
 fn status_text(state: &WorkbenchState) -> String {
+    use std::fmt::Write as _;
     let hints = format!(
         "Enter: run · {}: newline · Tab: focus · Ctrl-C: cancel · Esc/Ctrl-D: quit",
         state.config.newline_hint
@@ -466,12 +467,17 @@ fn status_text(state: &WorkbenchState) -> String {
     } else {
         state.status.message.clone()
     };
-    // Stable prefixes that survive transient messages: the active profile (issue
-    // 03) and the read-only guard (issue 04).
+    // Stable prefixes that survive transient messages: the endpoint/profile
+    // (issues 03/07) and the read-only guard (issue 04).
     let mut prefix = String::new();
-    if let Some(name) = &state.config.profile {
-        use std::fmt::Write as _;
-        write!(prefix, "[{name}]").unwrap();
+    if !state.endpoint.is_empty() {
+        write!(prefix, "{}", state.endpoint).unwrap();
+    }
+    if let Some(name) = &state.profile {
+        if !prefix.is_empty() {
+            prefix.push(' ');
+        }
+        write!(prefix, "({name})").unwrap();
     }
     if state.read_only {
         if !prefix.is_empty() {
@@ -530,21 +536,23 @@ mod tests {
     }
 
     #[test]
-    fn the_status_bar_shows_the_active_profile() {
+    fn the_status_bar_shows_the_endpoint_and_profile() {
         let config = WorkbenchConfig {
             profile: Some("prod".to_string()),
+            endpoint: "db:7688".to_string(),
             ..WorkbenchConfig::default()
         };
         let mut state = WorkbenchState::new(config, true);
         let rendered = render(&mut state);
-        assert!(rendered.contains("[prod]"), "status bar names the profile");
+        assert!(rendered.contains("db:7688"), "status bar names the endpoint");
+        assert!(rendered.contains("(prod)"), "status bar names the profile");
     }
 
     #[test]
     fn the_status_bar_omits_the_profile_when_none_is_selected() {
         let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
         let rendered = render(&mut state);
-        assert!(!rendered.contains('['), "no stale profile marker: {rendered}");
+        assert!(!rendered.contains('('), "no stale profile marker: {rendered}");
     }
 
     #[test]

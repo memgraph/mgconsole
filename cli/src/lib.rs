@@ -7,9 +7,9 @@
 //! so they're covered by the unit tests below.
 
 use clap::{Parser, ValueEnum};
-use mgconsole_core::DisplayMode;
+use mgconsole_core::{ConnectOptions, Credentials, DisplayMode, Endpoint};
 
-use crate::config::Profile;
+use crate::config::{Config, Profile};
 
 pub mod config;
 pub mod frontend;
@@ -258,6 +258,80 @@ pub fn resolve_connection(
     }
 }
 
+/// Where a `:connect` is being pointed and how the swap is labelled afterwards
+/// (issue 07). Carries the new Endpoint and connect options for the swap, plus the
+/// profile name to show (`None` for a bare-endpoint connect). Not `Debug`/`Eq`:
+/// it carries `ConnectOptions` (with credentials), which are neither.
+pub struct ConnectTarget {
+    pub endpoint: Endpoint,
+    pub options: ConnectOptions,
+    pub profile: Option<String>,
+}
+
+/// Resolve a `:connect <target>` argument (issue 07). A `target` that matches a
+/// known profile name connects by that profile (its endpoint/auth/TLS/readonly);
+/// otherwise it is parsed as a bare `host[:port]`, reusing the *current* Session's
+/// auth/TLS/read-only and falling back to its host/port for an omitted part.
+pub fn resolve_connect_target(
+    target: &str,
+    config: &Config,
+    current_endpoint: &Endpoint,
+    current_options: &ConnectOptions,
+) -> Result<ConnectTarget, String> {
+    let target = target.trim();
+    if target.is_empty() {
+        return Err(":connect needs a profile name or host[:port]".to_string());
+    }
+    if let Some(profile) = config.profiles.get(target) {
+        let endpoint = Endpoint::new(
+            profile
+                .host
+                .clone()
+                .unwrap_or_else(|| current_endpoint.host().to_string()),
+            profile.port.unwrap_or_else(|| current_endpoint.port()),
+        );
+        let options = ConnectOptions {
+            credentials: profile.username.clone().map(|username| Credentials {
+                username,
+                password: profile.password.clone().unwrap_or_default(),
+            }),
+            use_tls: profile.use_ssl.unwrap_or(current_options.use_tls),
+            read_only: profile.readonly.unwrap_or(false),
+        };
+        return Ok(ConnectTarget {
+            endpoint,
+            options,
+            profile: Some(target.to_string()),
+        });
+    }
+    let endpoint = parse_endpoint(target, current_endpoint)?;
+    Ok(ConnectTarget {
+        endpoint,
+        // A bare endpoint reuses the current auth/TLS/read-only — the most useful
+        // default when hopping between servers in one deployment.
+        options: current_options.clone(),
+        profile: None,
+    })
+}
+
+/// Parse a `host[:port]` endpoint, defaulting the port to the current Session's
+/// when omitted. A missing host or an unparseable port is a clear error.
+fn parse_endpoint(target: &str, current: &Endpoint) -> Result<Endpoint, String> {
+    let (host, port) = match target.rsplit_once(':') {
+        Some((host, port)) => {
+            let port = port
+                .parse::<u16>()
+                .map_err(|_| format!("invalid port in '{target}'"))?;
+            (host, port)
+        }
+        None => (target, current.port()),
+    };
+    if host.is_empty() {
+        return Err(format!("missing host in '{target}'"));
+    }
+    Ok(Endpoint::new(host.to_string(), port))
+}
+
 /// Resolve the password to authenticate with, prompting only when a username is
 /// given without one.
 ///
@@ -486,6 +560,60 @@ mod tests {
         assert_eq!(conn.port, 7687);
         assert!(conn.use_ssl);
         assert!(!conn.readonly);
+    }
+
+    #[test]
+    fn connect_resolves_a_bare_endpoint_reusing_current_auth() {
+        let current = Endpoint::new("127.0.0.1", 7687);
+        let options = ConnectOptions {
+            use_tls: true,
+            ..ConnectOptions::default()
+        };
+        let config = Config::default();
+        // host:port given.
+        let t = resolve_connect_target("db.example.com:7690", &config, &current, &options)
+            .expect("endpoint");
+        assert_eq!(t.endpoint, Endpoint::new("db.example.com", 7690));
+        assert!(t.options.use_tls, "auth/TLS reused from current");
+        assert_eq!(t.profile, None);
+        // bare host reuses the current port.
+        let t = resolve_connect_target("other", &config, &current, &options).expect("host only");
+        assert_eq!(t.endpoint, Endpoint::new("other", 7687));
+    }
+
+    #[test]
+    fn connect_resolves_a_known_profile() {
+        let current = Endpoint::new("127.0.0.1", 7687);
+        let options = ConnectOptions::default();
+        let mut config = Config::default();
+        config.profiles.insert(
+            "prod".to_string(),
+            Profile {
+                host: Some("prod.db".to_string()),
+                port: Some(7688),
+                username: Some("neo".to_string()),
+                readonly: Some(true),
+                ..Profile::default()
+            },
+        );
+        let t = resolve_connect_target("prod", &config, &current, &options).expect("profile");
+        assert_eq!(t.endpoint, Endpoint::new("prod.db", 7688));
+        assert_eq!(t.profile.as_deref(), Some("prod"));
+        assert!(t.options.read_only);
+        assert_eq!(
+            t.options.credentials.as_ref().map(|c| c.username.as_str()),
+            Some("neo")
+        );
+    }
+
+    #[test]
+    fn connect_rejects_an_empty_or_bad_target() {
+        let current = Endpoint::new("127.0.0.1", 7687);
+        let options = ConnectOptions::default();
+        let config = Config::default();
+        assert!(resolve_connect_target("", &config, &current, &options).is_err());
+        assert!(resolve_connect_target("host:notaport", &config, &current, &options).is_err());
+        assert!(resolve_connect_target(":7687", &config, &current, &options).is_err());
     }
 
     #[test]

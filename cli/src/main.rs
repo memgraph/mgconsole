@@ -30,8 +30,8 @@ use mgconsole::syntax::{self, Completer};
 #[cfg(feature = "tui")]
 use mgconsole::workbench;
 use mgconsole::{
-    no_color_active, resolve_connection, resolve_password, Cli, Connection, ExplicitFlags,
-    ImportMode, OutputFormat,
+    no_color_active, resolve_connect_target, resolve_connection, resolve_password, Cli, Connection,
+    ExplicitFlags, ImportMode, OutputFormat,
 };
 use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
@@ -67,7 +67,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Resolve config, the selected profile, the effective connection, and the
     // settings (issue 03). An unknown --profile fails fast inside the helper.
-    let (connection, settings) = resolve_profile_connection(&cli, explicit);
+    let config = load_config();
+    let (connection, settings) = resolve_profile_connection(&cli, explicit, &config);
 
     // Resolve auth before touching the network: a username with no password gets
     // a hidden prompt; an empty username stays anonymous.
@@ -147,6 +148,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             table_options,
             settings,
             cli.profile.clone(),
+            config,
+            options,
             &mut out,
             &mut err,
         )?;
@@ -179,6 +182,8 @@ fn run_interactive(
     table_options: TableOptions,
     settings: Settings,
     profile: Option<String>,
+    config: mgconsole::config::Config,
+    options: ConnectOptions,
     out: &mut io::Stdout,
     err: &mut io::Stderr,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -208,38 +213,42 @@ fn run_interactive(
         Frontend::Workbench => {
             #[cfg(feature = "tui")]
             {
-                let config = workbench::WorkbenchConfig {
+                let wb_config = workbench::WorkbenchConfig {
                     verbose: cli.verbose_execution_info,
                     settings,
                     profile,
                     read_only,
+                    endpoint: session.endpoint().to_string(),
+                    connect: workbench::state::ConnectContext { config, options },
                     ..workbench::WorkbenchConfig::default()
                 };
-                runtime.block_on(workbench::run(session, config, colorize, history))?;
+                runtime.block_on(workbench::run(session, wb_config, colorize, history))?;
             }
             #[cfg(not(feature = "tui"))]
             unreachable!("the resolver cannot pick the workbench without the tui feature");
         }
         Frontend::Repl => {
-            let read_only_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(read_only));
-            let tx_flag = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(tx_to_code(
-                session.transaction_state(),
-            )));
+            let prompt = std::sync::Arc::new(std::sync::Mutex::new(PromptInfo {
+                endpoint: session.endpoint().to_string(),
+                profile: profile.clone(),
+                read_only,
+                tx: session.transaction_state(),
+            }));
             let mut runner = SessionRunner {
                 runtime,
                 session,
                 table_options,
                 row_cap: DEFAULT_ROW_CAP,
-                read_only: read_only_flag.clone(),
-                tx: tx_flag.clone(),
+                config,
+                options,
+                prompt: prompt.clone(),
             };
-            let config = ReplConfig {
+            let repl_config = ReplConfig {
                 row_cap: DEFAULT_ROW_CAP,
                 settings,
             };
-            let mut source =
-                RustylineSource::new(history, colorize, profile.clone(), read_only_flag, tx_flag)?;
-            repl::run_loop(&mut source, &mut runner, out, err, &config)?;
+            let mut source = RustylineSource::new(history, colorize, prompt)?;
+            repl::run_loop(&mut source, &mut runner, out, err, &repl_config)?;
         }
         Frontend::Piped => {
             unreachable!("the piped path is handled by the non-terminal branch")
@@ -372,8 +381,11 @@ fn load_config() -> config::Config {
 /// connection (flag > profile > default), and the console Settings
 /// (default < config < profile-settings < CLI flag). An unknown `--profile` is a
 /// fatal, clearly-reported error (issue 03).
-fn resolve_profile_connection(cli: &Cli, explicit: ExplicitFlags) -> (Connection, Settings) {
-    let config = load_config();
+fn resolve_profile_connection(
+    cli: &Cli,
+    explicit: ExplicitFlags,
+    config: &config::Config,
+) -> (Connection, Settings) {
     let profile = match cli.profile.as_deref() {
         Some(name) => match config.select(name) {
             Ok(profile) => Some(profile.clone()),
@@ -410,16 +422,16 @@ fn explicit_flags(matches: &clap::ArgMatches) -> ExplicitFlags {
 /// 03) and shows a `[read-only]` marker while the guard is active (issue 04), so
 /// the user always knows which connection they are on and whether writes are
 /// blocked. With neither, the prompt is the plain `memgraph> `.
-fn repl_prompt(profile: Option<&str>, read_only: bool, tx: TransactionState) -> String {
+fn repl_prompt(info: &PromptInfo) -> String {
     use std::fmt::Write as _;
-    let mut prompt = String::from("memgraph");
-    if let Some(name) = profile {
+    let mut prompt = format!("memgraph@{}", info.endpoint);
+    if let Some(name) = &info.profile {
         write!(prompt, " ({name})").unwrap();
     }
-    if read_only {
+    if info.read_only {
         prompt.push_str(" [read-only]");
     }
-    match tx {
+    match info.tx {
         TransactionState::Auto => {}
         TransactionState::Open => prompt.push_str(" [tx]"),
         TransactionState::Failed => prompt.push_str(" [tx failed]"),
@@ -492,23 +504,17 @@ impl RustylineHighlighter for MgHelper {
 struct RustylineSource {
     editor: Editor<MgHelper, rustyline::history::DefaultHistory>,
     history: Option<HistoryFile>,
-    /// The active profile name (issue 03), shown in the primary prompt.
-    profile: Option<String>,
-    /// Shared read-only flag (issue 04): the `SessionRunner` flips it on a runtime
-    /// `:set readonly on`, so the prompt's `[read-only]` marker tracks it live.
-    read_only: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Shared transaction-state code (issue 05), so the prompt shows the open /
-    /// failed transaction marker live.
-    tx: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    /// Shared prompt state (profile/read-only/transaction/endpoint), updated by
+    /// the `SessionRunner` and read each line so the prompt tracks them live
+    /// (issues 03–07).
+    prompt: std::sync::Arc<std::sync::Mutex<PromptInfo>>,
 }
 
 impl RustylineSource {
     fn new(
         history: Option<HistoryFile>,
         colorize: bool,
-        profile: Option<String>,
-        read_only: std::sync::Arc<std::sync::atomic::AtomicBool>,
-        tx: std::sync::Arc<std::sync::atomic::AtomicU8>,
+        prompt: std::sync::Arc<std::sync::Mutex<PromptInfo>>,
     ) -> rustyline::Result<Self> {
         let mut editor = Editor::new()?;
         editor.set_helper(Some(MgHelper::new(colorize)));
@@ -518,20 +524,17 @@ impl RustylineSource {
         Ok(Self {
             editor,
             history,
-            profile,
-            read_only,
-            tx,
+            prompt,
         })
     }
 }
 
 impl LineSource for RustylineSource {
     fn read(&mut self, continued: bool) -> io::Result<Line> {
-        let primary = repl_prompt(
-            self.profile.as_deref(),
-            self.read_only.load(std::sync::atomic::Ordering::Relaxed),
-            tx_from_code(self.tx.load(std::sync::atomic::Ordering::Relaxed)),
-        );
+        let primary = self
+            .prompt
+            .lock()
+            .map_or_else(|_| "memgraph> ".to_string(), |info| repl_prompt(&info));
         let prompt = if continued { "      -> " } else { &primary };
         match self.editor.readline(prompt) {
             Ok(line) => {
@@ -556,40 +559,33 @@ struct SessionRunner<'a> {
     session: Session,
     table_options: TableOptions,
     row_cap: usize,
-    /// Shared read-only flag, mirrored to the prompt source (issue 04).
-    read_only: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Shared transaction-state code, mirrored to the prompt source (issue 05):
-    /// 0 = autocommit, 1 = open, 2 = failed.
-    tx: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    /// The config (profiles) and the current connect options, so `:connect` can
+    /// resolve a profile or a bare endpoint and re-establish (issue 07).
+    config: mgconsole::config::Config,
+    options: ConnectOptions,
+    /// Shared prompt state, read by the rustyline source each line so the prompt
+    /// reflects read-only (issue 04), the transaction (issue 05), and the
+    /// connection (issue 07) live.
+    prompt: std::sync::Arc<std::sync::Mutex<PromptInfo>>,
 }
 
-/// Encode a [`TransactionState`] for the shared atomic the prompt reads.
-fn tx_to_code(state: TransactionState) -> u8 {
-    match state {
-        TransactionState::Auto => 0,
-        TransactionState::Open => 1,
-        TransactionState::Failed => 2,
-    }
-}
-
-/// Decode the shared transaction-state atomic back for the prompt.
-fn tx_from_code(code: u8) -> TransactionState {
-    match code {
-        1 => TransactionState::Open,
-        2 => TransactionState::Failed,
-        _ => TransactionState::Auto,
-    }
+/// The connection facts the REPL prompt shows, shared with the rustyline source.
+#[derive(Clone)]
+struct PromptInfo {
+    endpoint: String,
+    profile: Option<String>,
+    read_only: bool,
+    tx: TransactionState,
 }
 
 impl SessionRunner<'_> {
-    /// Mirror the Session's transaction state into the shared atomic so the prompt
+    /// Mirror the Session's transaction state into the shared prompt so the prompt
     /// reflects it (after begin/commit/rollback, and after a query that may have
     /// poisoned an open transaction).
     fn sync_tx(&self) {
-        self.tx.store(
-            tx_to_code(self.session.transaction_state()),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        if let Ok(mut prompt) = self.prompt.lock() {
+            prompt.tx = self.session.transaction_state();
+        }
     }
 }
 
@@ -666,8 +662,9 @@ impl QueryRunner for SessionRunner<'_> {
 
     fn set_read_only(&mut self, on: bool) {
         self.session.set_read_only(on);
-        self.read_only
-            .store(on, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut prompt) = self.prompt.lock() {
+            prompt.read_only = on;
+        }
     }
 
     fn is_read_only(&self) -> bool {
@@ -695,6 +692,31 @@ impl QueryRunner for SessionRunner<'_> {
     fn transaction_state(&self) -> TransactionState {
         self.session.transaction_state()
     }
+
+    fn connect(&mut self, target: &str) -> Result<String, Error> {
+        // Resolve the target (profile or host[:port]) against the current
+        // connection, then establish a fresh Session — a swap, not a mutation
+        // (issue 07). The prior Session is only dropped once the new one connects,
+        // so a failed connect leaves the session intact.
+        let resolved = resolve_connect_target(target, &self.config, self.session.endpoint(), &self.options)
+            .map_err(Error::Protocol)?;
+        let session = self
+            .runtime
+            .block_on(Session::connect_with(&resolved.endpoint, &resolved.options))?;
+        let label = match &resolved.profile {
+            Some(name) => format!("{name} ({})", resolved.endpoint),
+            None => resolved.endpoint.to_string(),
+        };
+        self.session = session;
+        self.options = resolved.options;
+        if let Ok(mut prompt) = self.prompt.lock() {
+            prompt.endpoint = resolved.endpoint.to_string();
+            prompt.profile = resolved.profile;
+            prompt.read_only = self.session.is_read_only();
+            prompt.tx = TransactionState::Auto;
+        }
+        Ok(label)
+    }
 }
 
 #[cfg(test)]
@@ -708,17 +730,31 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_names_the_active_profile_and_read_only_marker() {
+    fn the_prompt_shows_endpoint_profile_read_only_and_transaction() {
         use TransactionState::{Auto, Failed, Open};
-        assert_eq!(repl_prompt(None, false, Auto), "memgraph> ");
-        assert_eq!(repl_prompt(Some("prod"), false, Auto), "memgraph (prod)> ");
-        assert_eq!(repl_prompt(None, true, Auto), "memgraph [read-only]> ");
+        let info = |profile: Option<&str>, read_only, tx| PromptInfo {
+            endpoint: "127.0.0.1:7687".to_string(),
+            profile: profile.map(str::to_string),
+            read_only,
+            tx,
+        };
+        assert_eq!(repl_prompt(&info(None, false, Auto)), "memgraph@127.0.0.1:7687> ");
         assert_eq!(
-            repl_prompt(Some("prod"), true, Auto),
-            "memgraph (prod) [read-only]> "
+            repl_prompt(&info(Some("prod"), false, Auto)),
+            "memgraph@127.0.0.1:7687 (prod)> "
         );
-        assert_eq!(repl_prompt(None, false, Open), "memgraph [tx]> ");
-        assert_eq!(repl_prompt(None, false, Failed), "memgraph [tx failed]> ");
+        assert_eq!(
+            repl_prompt(&info(None, true, Auto)),
+            "memgraph@127.0.0.1:7687 [read-only]> "
+        );
+        assert_eq!(
+            repl_prompt(&info(None, false, Open)),
+            "memgraph@127.0.0.1:7687 [tx]> "
+        );
+        assert_eq!(
+            repl_prompt(&info(None, false, Failed)),
+            "memgraph@127.0.0.1:7687 [tx failed]> "
+        );
     }
 
     #[test]

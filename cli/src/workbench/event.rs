@@ -134,4 +134,16 @@ pub enum Event {
         state: TransactionState,
         message: Option<String>,
     },
+    /// A `:connect` swap finished (issue 07): `Ok` carries the new connection
+    /// facts to show; `Err` is a message and the prior Session stays intact.
+    Connected(Result<Connected, String>),
+}
+
+/// The new connection facts after a successful `:connect` swap (issue 07).
+#[derive(Debug, Clone)]
+pub struct Connected {
+    pub endpoint: String,
+    pub profile: Option<String>,
+    pub read_only: bool,
+    pub label: String,
 }

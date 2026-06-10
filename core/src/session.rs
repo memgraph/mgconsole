@@ -181,6 +181,12 @@ impl Session {
         self.tx
     }
 
+    /// The Endpoint this Session is connected to (for the prompt/status, and as
+    /// the fallback host/port when `:connect` is given a bare host, issue 07).
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
     /// Open an explicit transaction (`:begin`, ADR 0011). Subsequent queries run
     /// within it until [`commit`](Self::commit)/[`rollback`](Self::rollback). In
     /// read-only mode the transaction carries Bolt access mode READ, so writes are
