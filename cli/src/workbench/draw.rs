@@ -56,9 +56,11 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     // Results pane: a native table with a pinned header and a lazily-rendered
     // visible window, or just a summary line for a result with no columns.
     let results_focused = matches!(state.focus, Focus::Results);
-    let title = match state.result.as_ref() {
+    let title = match state.shown() {
         Some(result) => format!(
-            "Results ({} row{}{}{})",
+            "Results [{}/{}] ({} row{}{}{})",
+            state.view + 1,
+            state.history.len(),
             result.rows.len(),
             if result.rows.len() == 1 { "" } else { "s" },
             if result.truncated { ", truncated" } else { "" },
@@ -74,7 +76,7 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     frame.render_widget(results_block, results_area);
     // Cache the data-row viewport (height minus the pinned header row).
     state.viewport_rows = results_inner.height.saturating_sub(1) as usize;
-    if let Some(result) = state.result.as_ref() {
+    if let Some(result) = state.shown() {
         draw_result(frame, results_inner, result, results_focused);
     }
 
@@ -264,7 +266,7 @@ mod tests {
     fn renders_a_result_table_with_header_rows_and_a_live_count() {
         use mgconsole_core::{Record, Value};
         let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
-        state.result = Some(CurrentResult {
+        state.history.push(CurrentResult {
             header: vec!["name".to_string(), "age".to_string()],
             rows: vec![
                 Record::new(vec![Value::String("Ada".into()), Value::Integer(36)]),

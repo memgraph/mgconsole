@@ -66,23 +66,26 @@ fn is_current(state: &WorkbenchState, id: u64) -> bool {
     matches!(state.run, RunState::Running { id: running } if running == id)
 }
 
-/// A query began: start a fresh result for its rows to stream into.
+/// A query began: push a fresh result onto the history stack for its rows to
+/// stream into, and show it (auto-follow the running query).
 fn on_started(state: &mut WorkbenchState, id: u64, header: Vec<String>) {
     if !is_current(state, id) {
         return;
     }
-    state.result = Some(CurrentResult::new(header));
+    state.history.push(CurrentResult::new(header));
+    state.view = state.history.len() - 1;
 }
 
-/// A record streamed in: append it to the live result, up to the row-cap
+/// A record streamed in: append it to the live (last) result, up to the row-cap
 /// backstop (beyond which rows are dropped and the result marked truncated —
 /// a memory guard, not a usability limit).
 fn on_record(state: &mut WorkbenchState, id: u64, record: Record) {
     if !is_current(state, id) {
         return;
     }
-    if let Some(result) = state.result.as_mut() {
-        if result.rows.len() < state.config.row_cap {
+    let cap = state.config.row_cap;
+    if let Some(result) = state.live_mut() {
+        if result.rows.len() < cap {
             result.rows.push(record);
         } else {
             result.truncated = true;
@@ -102,9 +105,9 @@ fn on_completed(
     if !is_current(state, id) {
         return Vec::new();
     }
-    let rows = state.result.as_ref().map_or(0, |result| result.rows.len());
+    let rows = state.history.last().map_or(0, |result| result.rows.len());
     state.status.message = format_summary(rows, elapsed);
-    if let Some(result) = state.result.as_mut() {
+    if let Some(result) = state.live_mut() {
         result.summary = Some(summary);
     }
     advance(state)
@@ -152,8 +155,8 @@ fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
 /// ADR 0005). When idle, abandon the typed buffer (the REPL's interrupt).
 fn interrupt(state: &mut WorkbenchState) -> Vec<Effect> {
     if let RunState::Running { id } = state.run {
-        let rows = state.result.as_ref().map_or(0, |result| result.rows.len());
-        if let Some(result) = state.result.as_mut() {
+        let rows = state.history.last().map_or(0, |result| result.rows.len());
+        if let Some(result) = state.live_mut() {
             result.partial = true;
         }
         state.pending.clear();
@@ -255,22 +258,34 @@ fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// uses the viewport height the draw last cached. Only the visible window is
 /// ever rendered, so navigation over a huge result is cheap.
 fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
-    if key.code == KeyCode::Tab {
-        state.focus = Focus::Editor;
-        return Vec::new();
-    }
-    // Enter expands the selected cell into the detail overlay (slice 08).
-    if key.code == KeyCode::Enter {
-        open_detail(state);
-        return Vec::new();
-    }
-    // 'e' opens the export prompt for the on-screen result (slice 09).
-    if key.code == KeyCode::Char('e') {
-        open_export(state);
-        return Vec::new();
+    match key.code {
+        KeyCode::Tab => {
+            state.focus = Focus::Editor;
+            return Vec::new();
+        }
+        // Enter expands the selected cell into the detail overlay (slice 08).
+        KeyCode::Enter => {
+            open_detail(state);
+            return Vec::new();
+        }
+        // 'e' opens the export prompt for the on-screen result (slice 09).
+        KeyCode::Char('e') => {
+            open_export(state);
+            return Vec::new();
+        }
+        // '[' / ']' step back/forward through the result history (slice 10).
+        KeyCode::Char('[') => {
+            state.view = state.view.saturating_sub(1);
+            return Vec::new();
+        }
+        KeyCode::Char(']') => {
+            state.view = (state.view + 1).min(state.history.len().saturating_sub(1));
+            return Vec::new();
+        }
+        _ => {}
     }
     let page = state.viewport_rows.max(1);
-    if let Some(result) = state.result.as_mut() {
+    if let Some(result) = state.shown_mut() {
         let last_row = result.rows.len().saturating_sub(1);
         let last_col = result.header.len().saturating_sub(1);
         match key.code {
@@ -298,7 +313,7 @@ fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// row and column are present. The Value is cloned so the overlay owns it and
 /// the table's selection is untouched.
 fn open_detail(state: &mut WorkbenchState) {
-    let value = state.result.as_ref().and_then(|result| {
+    let value = state.shown().and_then(|result| {
         result
             .rows
             .get(result.selected_row)
@@ -313,7 +328,7 @@ fn open_detail(state: &mut WorkbenchState) {
 
 /// Open the export prompt for the on-screen result (slice 09), if there is one.
 fn open_export(state: &mut WorkbenchState) {
-    if state.result.is_some() {
+    if state.shown().is_some() {
         state.export = Some(ExportPrompt::default());
     } else {
         state.status.message = "no result to export".to_string();
@@ -357,7 +372,7 @@ fn confirm_export(state: &mut WorkbenchState) -> Vec<Effect> {
     }
     let format = prompt.format;
     let path = PathBuf::from(prompt.path.trim());
-    let Some(result) = state.result.as_ref() else {
+    let Some(result) = state.shown() else {
         return Vec::new();
     };
     let header = result.header.clone();
@@ -648,7 +663,7 @@ mod tests {
         );
         assert!(effects.is_empty(), "no further query to run");
         assert!(matches!(s.run, RunState::Idle), "idle once drained");
-        let result = s.result.as_ref().expect("a result");
+        let result = s.shown().expect("a result");
         assert_eq!(result.rows.len(), 3, "all three rows appended");
         assert_eq!(s.status.message, "3 rows in set (0.005 sec)");
     }
@@ -713,7 +728,7 @@ mod tests {
         let mut s = wb();
         s.focus = Focus::Results;
         s.viewport_rows = viewport;
-        s.result = Some(CurrentResult {
+        s.history.push(CurrentResult {
             header: vec!["a".to_string(), "b".to_string()],
             rows: (0..n).map(|_| one_row()).collect(),
             ..CurrentResult::default()
@@ -730,35 +745,35 @@ mod tests {
         let mut s = with_result(5, 10);
         press(&mut s, KeyCode::Down);
         press(&mut s, KeyCode::Down);
-        assert_eq!(s.result.as_ref().unwrap().selected_row, 2);
+        assert_eq!(s.shown().unwrap().selected_row, 2);
         for _ in 0..10 {
             press(&mut s, KeyCode::Down);
         }
-        assert_eq!(s.result.as_ref().unwrap().selected_row, 4, "clamped to last row");
+        assert_eq!(s.shown().unwrap().selected_row, 4, "clamped to last row");
         for _ in 0..10 {
             press(&mut s, KeyCode::Up);
         }
-        assert_eq!(s.result.as_ref().unwrap().selected_row, 0, "clamped to first row");
+        assert_eq!(s.shown().unwrap().selected_row, 0, "clamped to first row");
     }
 
     #[test]
     fn home_and_end_jump_to_first_and_last_row() {
         let mut s = with_result(50, 10);
         press(&mut s, KeyCode::End);
-        assert_eq!(s.result.as_ref().unwrap().selected_row, 49);
+        assert_eq!(s.shown().unwrap().selected_row, 49);
         press(&mut s, KeyCode::Home);
-        assert_eq!(s.result.as_ref().unwrap().selected_row, 0);
+        assert_eq!(s.shown().unwrap().selected_row, 0);
     }
 
     #[test]
     fn column_navigation_clamps_to_the_header_width() {
         let mut s = with_result(3, 10);
         press(&mut s, KeyCode::Right);
-        assert_eq!(s.result.as_ref().unwrap().selected_col, 1);
+        assert_eq!(s.shown().unwrap().selected_col, 1);
         press(&mut s, KeyCode::Right); // only two columns, so clamp at 1
-        assert_eq!(s.result.as_ref().unwrap().selected_col, 1);
+        assert_eq!(s.shown().unwrap().selected_col, 1);
         press(&mut s, KeyCode::Left);
-        assert_eq!(s.result.as_ref().unwrap().selected_col, 0);
+        assert_eq!(s.shown().unwrap().selected_col, 0);
     }
 
     #[test]
@@ -767,7 +782,7 @@ mod tests {
         // selection stays visible (only the visible window is ever drawn).
         let mut s = with_result(20, 3);
         press(&mut s, KeyCode::PageDown);
-        let r = s.result.as_ref().unwrap();
+        let r = s.shown().unwrap();
         assert_eq!(r.selected_row, 3);
         assert_eq!(r.scroll, 1, "scrolled so row 3 sits at the window bottom");
     }
@@ -781,7 +796,7 @@ mod tests {
         for _ in 0..5 {
             update(&mut s, Event::RecordArrived { id, record: one_row() });
         }
-        let result = s.result.as_ref().unwrap();
+        let result = s.shown().unwrap();
         assert_eq!(result.rows.len(), 2, "held rows capped at the backstop");
         assert!(result.truncated, "truncation flagged");
     }
@@ -798,7 +813,7 @@ mod tests {
         let effects = update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('c'))));
         assert_eq!(effects, vec![Effect::Cancel { id }], "the edge is told to cancel");
         assert!(matches!(s.run, RunState::Idle), "session ready for the next query");
-        let result = s.result.as_ref().unwrap();
+        let result = s.shown().unwrap();
         assert_eq!(result.rows.len(), 2, "streamed rows stay on screen");
         assert!(result.partial, "result labelled partial");
         assert!(s.status.message.contains("partial"), "status: {}", s.status.message);
@@ -841,7 +856,7 @@ mod tests {
     fn with_one_cell(value: Value) -> WorkbenchState {
         let mut s = wb();
         s.focus = Focus::Results;
-        s.result = Some(CurrentResult {
+        s.history.push(CurrentResult {
             header: vec!["v".to_string()],
             rows: vec![Record::new(vec![value])],
             ..CurrentResult::default()
@@ -860,10 +875,10 @@ mod tests {
     fn esc_dismisses_the_overlay_and_keeps_the_table_selection() {
         let mut s = with_one_cell(Value::Integer(7));
         update(&mut s, Event::Key(Key::plain(KeyCode::Enter))); // open
-        s.result.as_mut().unwrap().selected_row = 0;
+        s.shown_mut().unwrap().selected_row = 0;
         update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
         assert!(s.detail.is_none(), "overlay closed");
-        assert_eq!(s.result.as_ref().unwrap().selected_row, 0, "selection intact");
+        assert_eq!(s.shown().unwrap().selected_row, 0, "selection intact");
     }
 
     #[test]
@@ -936,6 +951,70 @@ mod tests {
         assert!(s.status.message.contains("disk full"));
     }
 
+    // --- result history stack (slice 10) ------------------------------------
+
+    fn complete(state: &mut WorkbenchState, id: u64, rows: usize) {
+        update(state, Event::QueryStarted { id, header: vec!["n".to_string()] });
+        for _ in 0..rows {
+            update(state, Event::RecordArrived { id, record: one_row() });
+        }
+        update(
+            state,
+            Event::QueryCompleted {
+                id,
+                summary: Summary::default(),
+                elapsed: Duration::from_millis(1),
+            },
+        );
+    }
+
+    #[test]
+    fn a_multi_statement_submit_pushes_one_history_entry_per_statement() {
+        let mut s = wb();
+        let id0 = submit_query(&mut s, "RETURN 1; RETURN 2;");
+        complete(&mut s, id0, 1); // first statement; advance starts the second (id 1)
+        complete(&mut s, 1, 2); // second statement
+        assert_eq!(s.history.len(), 2, "one entry per statement");
+        assert_eq!(s.history[0].rows.len(), 1);
+        assert_eq!(s.history[1].rows.len(), 2);
+        assert_eq!(s.view, 1, "showing the latest");
+    }
+
+    #[test]
+    fn back_and_forward_navigate_results_across_submits() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "RETURN 1;");
+        complete(&mut s, id, 1);
+        let id = submit_query(&mut s, "RETURN 2;");
+        complete(&mut s, id, 2);
+        assert_eq!(s.history.len(), 2);
+        s.focus = Focus::Results;
+        press(&mut s, KeyCode::Char('['));
+        assert_eq!(s.view, 0);
+        press(&mut s, KeyCode::Char('['));
+        assert_eq!(s.view, 0, "clamped at the oldest");
+        press(&mut s, KeyCode::Char(']'));
+        assert_eq!(s.view, 1);
+        press(&mut s, KeyCode::Char(']'));
+        assert_eq!(s.view, 1, "clamped at the newest");
+    }
+
+    #[test]
+    fn a_revisited_result_keeps_its_own_rows() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "RETURN 1;");
+        complete(&mut s, id, 3);
+        let id = submit_query(&mut s, "RETURN 2;");
+        complete(&mut s, id, 1);
+        s.focus = Focus::Results;
+        press(&mut s, KeyCode::Char('[')); // back to the first result
+        assert_eq!(
+            s.shown().unwrap().rows.len(),
+            3,
+            "the older result's rows are intact"
+        );
+    }
+
     #[test]
     fn lifecycle_events_from_a_superseded_query_are_ignored() {
         let mut s = wb();
@@ -955,6 +1034,6 @@ mod tests {
                 record: one_row(),
             },
         );
-        assert_eq!(s.result.as_ref().expect("result").rows.len(), 0);
+        assert_eq!(s.shown().expect("result").rows.len(), 0);
     }
 }

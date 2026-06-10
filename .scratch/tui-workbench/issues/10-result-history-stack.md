@@ -1,6 +1,6 @@
 # 10 — Result-history stack
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -17,12 +17,17 @@ result," which the REPL cannot offer.
 
 ## Acceptance criteria
 
-- [ ] Every statement's result is pushed onto a history stack; a multi-statement
-      submit pushes N entries in order.
-- [ ] Back/forward navigation moves between results, across statements and across
-      submits; the status indicates position (e.g. "result 3 of 5").
-- [ ] Each revisited result keeps its rows, summary, and partial/plan state.
-- [ ] History push/navigation is covered at the reducer seam.
+- [x] Every statement's result is pushed onto a history stack; a multi-statement
+      submit pushes N entries in order. (`on_started` pushes one `CurrentResult`
+      per statement; test asserts N entries.)
+- [x] Back/forward navigation moves between results, across statements and across
+      submits; the status indicates position (e.g. "result 3 of 5"). (`[` / `]`
+      move `view`, clamped; the results pane title shows `[N/M]`.)
+- [x] Each revisited result keeps its rows, summary, and partial/plan state.
+      (each entry is its own `CurrentResult` with its own rows/scroll/summary;
+      test confirms an older result's rows survive.)
+- [x] History push/navigation is covered at the reducer seam. (push-per-statement,
+      back/forward-clamped, and revisited-rows tests.)
 
 ## Blocked by
 

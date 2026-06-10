@@ -41,9 +41,14 @@ pub struct WorkbenchState {
     pub run: RunState,
     /// Statements from one multi-statement submit still to run, in order.
     pub pending: VecDeque<String>,
-    /// The result currently on screen (rows stream into it); `None` before the
-    /// first query. Slice 10 turns this into a history stack.
-    pub result: Option<CurrentResult>,
+    /// The navigable history of results, one entry per statement run, in order
+    /// (slice 10). The in-flight query streams into the last entry; [`view`]
+    /// selects which entry is shown.
+    ///
+    /// [`view`]: Self::view
+    pub history: Vec<CurrentResult>,
+    /// Index into [`history`](Self::history) of the result currently shown.
+    pub view: usize,
     /// A spinner frame counter, advanced by ticks while a query is in flight, so
     /// the draw can show a running indicator (slice 07).
     pub spinner: usize,
@@ -80,7 +85,8 @@ impl WorkbenchState {
             focus: Focus::Editor,
             run: RunState::Idle,
             pending: VecDeque::new(),
-            result: None,
+            history: Vec::new(),
+            view: 0,
             spinner: 0,
             detail: None,
             detail_scroll: 0,
@@ -92,6 +98,22 @@ impl WorkbenchState {
             color,
             config,
         }
+    }
+
+    /// The result currently shown (selected by [`view`](Self::view)), if any.
+    pub fn shown(&self) -> Option<&CurrentResult> {
+        self.history.get(self.view)
+    }
+
+    /// Mutable access to the shown result (for table navigation of it).
+    pub fn shown_mut(&mut self) -> Option<&mut CurrentResult> {
+        self.history.get_mut(self.view)
+    }
+
+    /// The in-flight query's result — always the last entry, since results are
+    /// pushed in order and only one query runs at a time (rows stream into it).
+    pub fn live_mut(&mut self) -> Option<&mut CurrentResult> {
+        self.history.last_mut()
     }
 }
 
