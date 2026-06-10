@@ -57,6 +57,8 @@ pub enum Effect {
     /// Cancel the in-flight query `id`: abort its task and recover the Session
     /// via Bolt `RESET` (ADR 0005). Rows already streamed stay on screen.
     Cancel { id: u64 },
+    /// Fetch the database Schema (on connect and on manual refresh, slice 12).
+    FetchSchema,
     /// Write the on-screen result to `path` in `format`, reusing the Core's
     /// streaming writers (slice 09). Carries the loaded rows (including a partial
     /// result after a cancel), so the export reflects exactly what is shown.

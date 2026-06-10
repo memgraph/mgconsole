@@ -13,9 +13,11 @@ use std::time::Duration;
 use mgconsole_core::{Error, QueryAssembler, Record, Summary};
 
 use crate::repl::{format_summary, meta_command, MetaCommand};
+use crate::syntax::Completer;
 
 use super::effect::Effect;
 use super::event::{Event, Key, KeyCode};
+use super::schema::{Schema, SchemaSource};
 use super::state::{Completion, CurrentResult, ExportPrompt, Focus, RunState, WorkbenchState};
 
 /// Apply one event to the state, returning the effects to perform.
@@ -48,6 +50,10 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
                 Ok(path) => format!("exported to {}", path.display()),
                 Err(message) => format!("export failed: {message}"),
             };
+            Vec::new()
+        }
+        Event::SchemaLoaded(schema) => {
+            set_schema(state, schema);
             Vec::new()
         }
         Event::Tick => {
@@ -196,6 +202,11 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     if key.ctrl && key.code == KeyCode::Char('c') {
         return interrupt(state);
     }
+    // Ctrl-R refreshes the Schema (slice 12): re-fetch labels/types/keys.
+    if key.ctrl && key.code == KeyCode::Char('r') {
+        state.status.message = "refreshing schema…".to_string();
+        return vec![Effect::FetchSchema];
+    }
     match state.focus {
         Focus::Editor => editor_key(state, key),
         Focus::Results => results_key(state, key),
@@ -293,6 +304,20 @@ fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             Vec::new()
         }
     }
+}
+
+/// Register the fetched Schema (slice 12): rebuild the completer as the static
+/// vocabulary plus a schema source (so a re-fetch replaces, not stacks), and keep
+/// the Schema for the sidebar. `None` (feature off) leaves static-only completion.
+fn set_schema(state: &mut WorkbenchState, schema: Option<Schema>) {
+    let mut completer = Completer::with_static_vocabulary();
+    if let Some(schema) = &schema {
+        completer.add_source(Box::new(SchemaSource::new(schema.all_names())));
+        let total = schema.labels.len() + schema.rel_types.len() + schema.property_keys.len();
+        state.status.message = format!("schema loaded ({total} names)");
+    }
+    state.completer = completer;
+    state.schema = schema;
 }
 
 /// Open the completion popup for the word under the cursor, using the existing
@@ -1148,6 +1173,63 @@ mod tests {
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
         assert!(s.completion.is_none());
         assert_eq!(s.focus, Focus::Results);
+    }
+
+    // --- live schema completion source (slice 12) ---------------------------
+
+    #[test]
+    fn a_loaded_schema_contributes_completion_candidates() {
+        // Names chosen not to collide with any static keyword/function prefix.
+        let mut s = wb();
+        let schema = Schema {
+            labels: vec!["Wombat".to_string()],
+            rel_types: vec!["GNAWS_AT".to_string()],
+            property_keys: vec!["furriness".to_string()],
+        };
+        update(&mut s, Event::SchemaLoaded(Some(schema)));
+        // The label is offered alongside the static keyword/function vocabulary.
+        assert!(s.completer.candidates("Wom").contains(&"Wombat".to_string()));
+        assert!(s.completer.candidates("RET").contains(&"RETURN".to_string()));
+        assert!(s.schema.is_some(), "schema kept for the sidebar");
+    }
+
+    #[test]
+    fn no_schema_degrades_silently_to_static_only_completion() {
+        let mut s = wb();
+        update(&mut s, Event::SchemaLoaded(None));
+        assert!(s.schema.is_none());
+        // Static vocabulary still completes; no schema names are present.
+        assert!(s.completer.candidates("RET").contains(&"RETURN".to_string()));
+        assert!(s.completer.candidates("Wom").is_empty());
+    }
+
+    #[test]
+    fn a_refetched_schema_replaces_rather_than_stacks() {
+        let mut s = wb();
+        update(
+            &mut s,
+            Event::SchemaLoaded(Some(Schema {
+                labels: vec!["Wombat".to_string()],
+                ..Schema::default()
+            })),
+        );
+        update(
+            &mut s,
+            Event::SchemaLoaded(Some(Schema {
+                labels: vec!["Zonk".to_string()],
+                ..Schema::default()
+            })),
+        );
+        // The stale label is gone, the fresh one present (replaced, not stacked).
+        assert!(s.completer.candidates("Wom").is_empty());
+        assert!(s.completer.candidates("Zon").contains(&"Zonk".to_string()));
+    }
+
+    #[test]
+    fn ctrl_r_requests_a_schema_refresh() {
+        let mut s = wb();
+        let effects = update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('r'))));
+        assert_eq!(effects, vec![Effect::FetchSchema]);
     }
 
     #[test]

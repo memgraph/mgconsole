@@ -12,6 +12,8 @@ use std::time::Duration;
 
 use mgconsole_core::{Error, Record, Summary};
 
+use super::schema::Schema;
+
 /// A key the reducer can act on, modifier flags alongside a [`KeyCode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Key {
@@ -111,4 +113,8 @@ pub enum Event {
     QueryFailed { id: u64, error: Error },
     /// An export finished: `Ok(path)` written, or `Err(message)` (slice 09).
     ExportFinished(Result<PathBuf, String>),
+    /// The Schema fetch completed: `Some` when the metadata feature is on,
+    /// `None` when it is off/unavailable (degrade silently to static-only,
+    /// slice 12).
+    SchemaLoaded(Option<Schema>),
 }

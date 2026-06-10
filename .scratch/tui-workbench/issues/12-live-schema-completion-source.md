@@ -1,6 +1,6 @@
 # 12 — Live schema completion source
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -22,15 +22,28 @@ verification item (see the PRD); prefer the schema feature over any scan.
 
 ## Acceptance criteria
 
-- [ ] With Memgraph's schema feature enabled, labels / relationship types /
+- [x] With Memgraph's schema feature enabled, labels / relationship types /
       property keys are fetched eagerly on connect and offered as completion
-      candidates alongside keywords/functions.
-- [ ] With the feature off/unavailable, completion degrades silently to
-      static-only; no graph scan is issued.
-- [ ] A manual refresh re-fetches the Schema; the fetch never competes with an
-      in-flight user query (one Session).
-- [ ] The result→names parser is a pure unit test; the enabled/disabled paths are
-      covered against a live Memgraph (testcontainers).
+      candidates alongside keywords/functions. (`fetch_schema` spawned on connect;
+      `set_schema` adds a `SchemaSource` to the completer; integration-verified.)
+- [x] With the feature off/unavailable, completion degrades silently to
+      static-only; no graph scan is issued. (a failed metadata query maps to
+      `None`; the queries are the schema-metadata procedures, never a scan.)
+- [x] A manual refresh re-fetches the Schema; the fetch never competes with an
+      in-flight user query (one Session). (Ctrl-R → `Effect::FetchSchema`; the
+      fetch serialises behind any query on the shared `Arc<Mutex<Session>>`.)
+- [x] The result→names parser is a pure unit test; the enabled/disabled paths are
+      covered against a live Memgraph (testcontainers). (`parse_schema` unit tests;
+      `tests/schema_integration.rs` enabled + empty/unavailable paths.)
+
+## Build-time verification (resolved)
+
+The introspection queries are the schema-metadata procedures
+`CALL schema.node_type_properties()` and `schema.rel_type_properties()`, enabled
+by `--storage-enable-schema-metadata=true`, verified against Memgraph 3.10.1.
+On 3.10.1 the procedures are present and return empty (not an error) without
+data, so the silent-degrade path is: a procedure error (feature truly absent)
+→ `None`, and an empty result → no names — static-only either way.
 
 ## Blocked by
 

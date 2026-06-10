@@ -15,6 +15,7 @@ use crate::syntax::{word_start, Completer};
 
 use super::effect::ExportFormat;
 use super::event::{Key, KeyCode};
+use super::schema::Schema;
 
 /// The open completion popup (slice 11): the candidates for the word under the
 /// cursor, the highlighted one, and the length (in characters) of the prefix a
@@ -75,8 +76,12 @@ pub struct WorkbenchState {
     /// When `Some`, the completion popup is open (slice 11).
     pub completion: Option<Completion>,
     /// The completion candidate source(s): the static keyword/function vocabulary
-    /// (slice 11), joined by a live schema source in slice 12.
+    /// (slice 11), joined by a live schema source when the Schema is loaded
+    /// (slice 12).
     pub completer: Completer,
+    /// The fetched database Schema (slice 12): `None` when the metadata feature
+    /// is off/unfetched. Backs both schema completion and the sidebar (slice 13).
+    pub schema: Option<Schema>,
     /// The results-table viewport height (data rows) from the last draw, cached so
     /// the reducer can page and keep the selection visible without re-deriving the
     /// layout. The draw is the only writer.
@@ -110,6 +115,7 @@ impl WorkbenchState {
             export: None,
             completion: None,
             completer: Completer::with_static_vocabulary(),
+            schema: None,
             viewport_rows: 0,
             params: BTreeMap::new(),
             next_id: 0,

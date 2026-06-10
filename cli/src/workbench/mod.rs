@@ -12,6 +12,7 @@ pub mod draw;
 pub mod effect;
 pub mod event;
 pub mod highlight;
+pub mod schema;
 pub mod state;
 pub mod terminal;
 pub mod update;
@@ -38,9 +39,10 @@ use ratatui::Terminal;
 use tokio::sync::{mpsc, Mutex};
 
 use mgconsole_core::format::{CsvOptions, CsvWriter, CypherlWriter, Header, JsonlWriter, RowWriter};
-use mgconsole_core::{Record, Session, Value};
+use mgconsole_core::{Error, Record, Session, Value};
 
 use effect::ExportFormat;
+use schema::{parse_schema, NODE_PROPERTIES_QUERY, REL_PROPERTIES_QUERY};
 use terminal::TerminalGuard;
 
 /// Run the workbench to completion over a connected Session, restoring the
@@ -60,6 +62,9 @@ pub async fn run(session: Session, config: WorkbenchConfig, color: bool) -> io::
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(120));
     // The single in-flight query task (one-live-result, ADR 0005).
     let mut running: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Fetch the Schema on connect (Session idle), to back completion + sidebar.
+    tokio::spawn(fetch_schema(Arc::clone(&session), tx.clone()));
 
     loop {
         terminal.draw(|frame| draw::draw(frame, &mut state))?;
@@ -104,6 +109,11 @@ pub async fn run(session: Session, config: WorkbenchConfig, color: bool) -> io::
                     if let Some(task) = running.take() {
                         task.abort();
                     }
+                }
+                Effect::FetchSchema => {
+                    // The fetch shares the one Session, so it serialises behind any
+                    // in-flight query rather than competing with it (ADR 0005).
+                    tokio::spawn(fetch_schema(Arc::clone(&session), tx.clone()));
                 }
                 Effect::Export {
                     format,
@@ -178,6 +188,30 @@ async fn run_query(
             }
         }
     }
+}
+
+/// Fetch the database Schema over the shared Session and deliver it as
+/// [`Event::SchemaLoaded`] (slice 12). When the schema-metadata feature is off
+/// the procedures error, so the result is `None` and the workbench degrades
+/// silently to static-only completion — it never scans the graph.
+async fn fetch_schema(session: Arc<Mutex<Session>>, tx: mpsc::UnboundedSender<Event>) {
+    let schema = {
+        let mut session = session.lock().await;
+        match (
+            collect(&mut session, NODE_PROPERTIES_QUERY).await,
+            collect(&mut session, REL_PROPERTIES_QUERY).await,
+        ) {
+            (Ok(nodes), Ok(rels)) => Some(parse_schema(&nodes, &rels)),
+            _ => None,
+        }
+    };
+    let _ = tx.send(Event::SchemaLoaded(schema));
+}
+
+/// Run a query and collect all its records (used for the small schema results).
+async fn collect(session: &mut Session, query: &str) -> Result<Vec<Record>, Error> {
+    let mut result = session.run(query).await?;
+    result.records().collect().await
 }
 
 /// Write the on-screen result to `path` in `format`, reusing the Core's streaming
