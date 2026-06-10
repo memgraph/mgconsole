@@ -22,8 +22,9 @@ use rustyline::{Context, Editor, Helper, Hinter};
 
 use mgconsole::frontend::{select_frontend, Frontend};
 use mgconsole::history::{self, HistoryFile};
+use mgconsole::config;
 use mgconsole::repl::{self, Line, LineSource, QueryRunner, Rendered, ReplConfig};
-use mgconsole::settings::Settings;
+use mgconsole::settings::{FileSettings, Settings};
 use mgconsole::syntax::{self, Completer};
 #[cfg(feature = "tui")]
 use mgconsole::workbench;
@@ -113,9 +114,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|(width, _)| width.0);
     let table_options = TableOptions { fit_width };
 
-    // Resolve the console Settings: built-in default < CLI flag (the config-file
-    // layer joins in issue 02, the runtime `:set` layer lives in each Frontend).
-    let settings = Settings::from_cli(cli.display);
+    // Resolve the console Settings: built-in default < config file < CLI flag
+    // (ADR 0012; the runtime `:set` layer lives in each Frontend). A malformed
+    // config is reported but never fatal — the console starts on defaults.
+    let settings = Settings::resolve(&load_config(), cli.display);
 
     let mut out = io::stdout();
     let mut err = io::stderr();
@@ -314,6 +316,25 @@ fn open_history(cli: &Cli) -> Option<HistoryFile> {
         Err(message) => {
             eprintln!("warning: {message}; continuing without history");
             None
+        }
+    }
+}
+
+/// Load the config-file Setting overlay (issue 02): resolve the path from
+/// `MGCONSOLE_CONFIG_PATH`/home, then read it. A missing file is the normal case
+/// (empty overlay); a malformed file is reported and treated as empty so the
+/// console still starts on defaults (ADR 0012).
+fn load_config() -> FileSettings {
+    let env = std::env::var(config::CONFIG_ENV).ok();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let Some(path) = config::resolve_config_path(env.as_deref(), home.as_deref()) else {
+        return FileSettings::default();
+    };
+    match config::load(&path) {
+        Ok(overlay) => overlay,
+        Err(message) => {
+            eprintln!("warning: {message}; continuing on defaults");
+            FileSettings::default()
         }
     }
 }

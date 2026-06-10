@@ -9,6 +9,7 @@
 use clap::{Parser, ValueEnum};
 use mgconsole_core::DisplayMode;
 
+pub mod config;
 pub mod frontend;
 pub mod history;
 pub mod keywords;
@@ -141,8 +142,9 @@ pub struct Cli {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub csv_doublequote: bool,
 
-    /// Path to the persisted command-history file.
-    #[arg(long, default_value = "~/.memgraph")]
+    /// Path to the persisted command-history directory (ADR 0012: under the
+    /// `~/.mgconsole` state directory by default).
+    #[arg(long, default_value = "~/.mgconsole")]
     pub history: String,
 
     /// Disable persisting command history.
@@ -238,7 +240,7 @@ mod tests {
         assert_eq!(cli.csv_delimiter, ',');
         assert_eq!(cli.csv_escapechar, None);
         assert!(cli.csv_doublequote);
-        assert_eq!(cli.history, "~/.memgraph");
+        assert_eq!(cli.history, "~/.mgconsole");
         assert!(!cli.no_history);
         assert!(!cli.verbose_execution_info);
         assert_eq!(cli.import_mode, ImportMode::Serial);

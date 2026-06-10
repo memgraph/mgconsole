@@ -24,6 +24,10 @@ tui = ["dep:ratatui", "dep:tui-textarea", "dep:crossterm", "dep:futures"]
 clap = { version = "4.6.1", features = ["derive"] }
 mgconsole-core = { path = "../core" }
 rpassword = "7.5.4"
+# Config file (issue 02): a hand-edited `~/.mgconsole/config.toml` with a
+# `[settings]` table, parsed via serde-derived raw types.
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 rustyline = { version = "15", features = ["derive", "with-file-history"] }
 terminal_size = "0.4"
 tokio = { workspace = true }

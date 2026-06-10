@@ -19,12 +19,26 @@ pub struct Settings {
     pub display: DisplayMode,
 }
 
+/// The config-file layer of the precedence chain (issue 02): each setting is
+/// optional, an absent value meaning "no override at this layer". Populated by
+/// the `config.toml` `[settings]` reader and folded in by [`Settings::resolve`]
+/// between the built-in defaults and the CLI flags.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileSettings {
+    pub display: Option<DisplayMode>,
+}
+
 impl Settings {
-    /// Resolve the default and CLI-flag layers: start from the built-in defaults
-    /// and apply each flag that was given (a `None` flag leaves the default).
-    pub fn from_cli(display: Option<DisplayMode>) -> Self {
+    /// Resolve the full precedence chain below runtime `:set`: built-in default <
+    /// config file < CLI flag. Each later layer overrides only the values it
+    /// actually supplies (`None`/absent leaves the layer below intact). The
+    /// runtime `:set` layer is applied later, in each Frontend's loop.
+    pub fn resolve(file: &FileSettings, cli_display: Option<DisplayMode>) -> Self {
         let mut settings = Self::default();
-        if let Some(display) = display {
+        if let Some(display) = file.display {
+            settings.display = display;
+        }
+        if let Some(display) = cli_display {
             settings.display = display;
         }
         settings
@@ -76,18 +90,30 @@ mod tests {
     }
 
     #[test]
-    fn a_cli_flag_overrides_the_default() {
-        // No flag keeps the default; a flag wins.
-        assert_eq!(Settings::from_cli(None).display, DisplayMode::Auto);
+    fn the_precedence_chain_is_default_then_config_then_cli() {
+        let none = FileSettings::default();
+        let config = FileSettings {
+            display: Some(DisplayMode::Vertical),
+        };
+        // Default only.
+        assert_eq!(Settings::resolve(&none, None).display, DisplayMode::Auto);
+        // Config overrides the default.
+        assert_eq!(Settings::resolve(&config, None).display, DisplayMode::Vertical);
+        // CLI flag overrides the config layer.
         assert_eq!(
-            Settings::from_cli(Some(DisplayMode::Vertical)).display,
-            DisplayMode::Vertical
+            Settings::resolve(&config, Some(DisplayMode::Tabular)).display,
+            DisplayMode::Tabular
+        );
+        // A CLI flag with no config still wins over the default.
+        assert_eq!(
+            Settings::resolve(&none, Some(DisplayMode::Tabular)).display,
+            DisplayMode::Tabular
         );
     }
 
     #[test]
     fn a_runtime_set_overrides_the_cli_layer() {
-        let mut settings = Settings::from_cli(Some(DisplayMode::Tabular));
+        let mut settings = Settings::resolve(&FileSettings::default(), Some(DisplayMode::Tabular));
         settings.set("display", "vertical").expect("valid");
         assert_eq!(settings.display, DisplayMode::Vertical);
     }

@@ -1,6 +1,6 @@
 # 02 — `~/.mgconsole` state directory + TOML `[settings]` loader
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -21,19 +21,40 @@ function as in slice 17.
 
 ## Acceptance criteria
 
-- [ ] History resolves under `~/.mgconsole` (the bare default), with
+- [x] History resolves under `~/.mgconsole` (the bare default), with
       `MGCONSOLE_HISTORY_PATH` still winning; resolver comments no longer claim
       `~/.memgraph` mgconsole compatibility.
-- [ ] `~/.mgconsole/config.toml` `[settings]` values load and sit between
+- [x] `~/.mgconsole/config.toml` `[settings]` values load and sit between
       built-in defaults and the CLI flag in the precedence chain (verified by a
       pure resolution test).
-- [ ] `MGCONSOLE_CONFIG_PATH` overrides the config-file location; a missing
+- [x] `MGCONSOLE_CONFIG_PATH` overrides the config-file location; a missing
       config file is not an error (defaults apply).
-- [ ] A malformed `config.toml` is reported with a clear message and the console
+- [x] A malformed `config.toml` is reported with a clear message and the console
       still starts on defaults.
-- [ ] `display` (and any other issue-01 setting) is honoured when set in
+- [x] `display` (and any other issue-01 setting) is honoured when set in
       `config.toml`.
 
 ## Blocked by
 
 - `.scratch/console-ergonomics/issues/01-set-mechanism-vertical-display.md`
+
+## Comments
+
+Implemented (AFK).
+
+- **State dir** (`cli/src/history.rs`): default moved `~/.memgraph` →
+  `~/.mgconsole` (constants, the `--history` flag default, comments, tests); the
+  `MGCONSOLE_HISTORY_PATH` override is unchanged. The one remaining `.memgraph`
+  mention is the deliberate ADR-0012 "clean break from" note.
+- **Config loader** (`cli/src/config.rs`): pure `resolve_config_path`
+  (`MGCONSOLE_CONFIG_PATH` override < `~/.mgconsole/config.toml`) and a `[settings]`
+  TOML reader via serde-derived raw types with `deny_unknown_fields`. Each value
+  is a string validated through the setting's own `FromStr`, so the file and
+  runtime `:set` share one vocabulary. Missing file → empty overlay; malformed
+  file / unknown key / invalid value → clear path-naming error.
+- **Precedence** (`cli/src/settings.rs`): `FileSettings` overlay +
+  `Settings::resolve(file, cli_flag)` give built-in default < config file < CLI
+  flag < runtime `:set`, covered by a pure resolution test.
+- **Wiring** (`cli/src/main.rs`): `load_config()` resolves + reads the file,
+  warning and falling back to defaults on error so the console always starts.
+- Added `serde` + `toml` deps to `cli/Cargo.toml`.

@@ -5,32 +5,32 @@
 //! the `--no-history` switch, and the user's home directory — so the precedence
 //! rules are tested without touching the filesystem. The directory is then
 //! created by [`prepare_history_dir`], and [`HistoryFile`] loads prior entries
-//! and persists each new one. Mirrors today's `mgconsole`: history is a
-//! directory holding a `client_history` file, the env override wins over the
-//! flag, and the bare default `~/.memgraph` expands against the home directory.
+//! and persists each new one. History is a directory holding a `client_history`
+//! file, the env override wins over the flag, and the bare default `~/.mgconsole`
+//! expands against the home directory (ADR 0012: a clean break from mgconsole's
+//! `~/.memgraph`, all console state under one `~/.mgconsole`).
 
 use std::path::{Path, PathBuf};
 
 use rustyline::history::History;
 
-/// The environment variable that overrides the history location, matching
-/// today's `mgconsole`.
+/// The environment variable that overrides the history location.
 pub const HISTORY_ENV: &str = "MGCONSOLE_HISTORY_PATH";
 
-/// The default `--history` value: a directory under the user's home.
-pub const DEFAULT_HISTORY_DIR: &str = "~/.memgraph";
+/// The default `--history` value: the `~/.mgconsole` state directory (ADR 0012).
+pub const DEFAULT_HISTORY_DIR: &str = "~/.mgconsole";
 
 /// The home-relative directory the bare default expands to.
-const DEFAULT_SUBDIR: &str = ".memgraph";
+const DEFAULT_SUBDIR: &str = ".mgconsole";
 
-/// The history file kept inside the history directory (matches `mgconsole`).
+/// The history file kept inside the history directory.
 pub const HISTORY_FILENAME: &str = "client_history";
 
 /// Resolve the history file path, or `None` when history is disabled.
 ///
-/// Precedence mirrors `mgconsole`: the `MGCONSOLE_HISTORY_PATH` environment
-/// override wins; otherwise the `--history` directory is used (its default is
-/// `~/.memgraph`). The resolved directory holds a `client_history` file. Only
+/// Precedence: the `MGCONSOLE_HISTORY_PATH` environment override wins; otherwise
+/// the `--history` directory is used (its default is `~/.mgconsole`, ADR 0012).
+/// The resolved directory holds a `client_history` file. Only
 /// the bare default expands its leading `~` against `home`; any other value —
 /// flag or env — is taken literally (the shell expands a typed `~`).
 pub fn resolve_history_file(
@@ -105,7 +105,7 @@ mod tests {
     fn the_default_expands_against_the_home_directory() {
         let path = resolve_history_file(DEFAULT_HISTORY_DIR, None, false, Some(&home()))
             .expect("history enabled");
-        assert_eq!(path, PathBuf::from("/home/user/.memgraph/client_history"));
+        assert_eq!(path, PathBuf::from("/home/user/.mgconsole/client_history"));
     }
 
     #[test]
