@@ -1,6 +1,16 @@
 //! Shared integration-test harness: a Memgraph container started on demand via
 //! `testcontainers`, so `cargo test` needs only a Docker daemon (no CI). Reused
 //! by the Session, import, and parallel-execution slices.
+//!
+//! Container strategy (agreed): as the integration suite grows past a handful of
+//! tests, prefer **one shared container per test binary** plus a `reset()`
+//! (`MATCH (n) DETACH DELETE n` + drop indexes/enums) that each test calls,
+//! running those tests serially within the file — rather than a fresh container
+//! per test, which would run dozens of heavyweight Memgraph containers at once.
+//! Memgraph Community has no multi-database, so isolation is by wiping, and
+//! `reset()` should be aggressive. Storage-mode-specific tests (analytical, for
+//! parallel import) keep their own dedicated container. `start_memgraph()` below
+//! stays available for those dedicated cases.
 
 use std::time::Duration;
 

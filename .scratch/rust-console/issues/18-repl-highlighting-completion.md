@@ -8,11 +8,12 @@ Status: ready-for-agent
 
 ## What to build
 
-REPL Frontend ergonomics via reedline's highlighter and completer: syntax
-highlighting of Cypher as the user types, and autocompletion from the built-in
-tables of Memgraph keywords, Cypher keywords, and functions (the static tables
-carried over from `mgconsole`). The completer architecture should leave room for
-live schema-aware completion later (out of scope here).
+REPL Frontend ergonomics via rustyline's `Highlighter` and `Completer` (see
+slice 16 for the rustyline-over-reedline choice): syntax highlighting of Cypher
+as the user types, and autocompletion from the built-in tables of Memgraph
+keywords, Cypher keywords, and functions (the static tables carried over from
+`mgconsole`). The completer architecture should leave room for live schema-aware
+completion later (out of scope here).
 
 ## Acceptance criteria
 

@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 description = "Core library for the Rust Memgraph console: Session, Value model, rendering."
 
+[lints]
+workspace = true
+
 [dependencies]
 tokio = { workspace = true }
 tokio-util = { workspace = true }

@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 description = "Rust Memgraph console (interactive REPL frontend)."
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "mgconsole"
 path = "src/main.rs"

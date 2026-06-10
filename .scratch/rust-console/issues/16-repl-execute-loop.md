@@ -1,4 +1,4 @@
-# 16 — REPL execute loop (reedline)
+# 16 — REPL execute loop (rustyline)
 
 Status: ready-for-agent
 
@@ -8,17 +8,21 @@ Status: ready-for-agent
 
 ## What to build
 
-The interactive REPL Frontend's core loop, built on reedline: read input
-(assembled into queries via slice 15), run each through the Session, render the
-result (tabular via slice 08), and print the round-trip timing and row-count
-summary. Surface query errors without ending the session and surface
-fatal-error reconnect attempts (slice 14). Exit on Ctrl-D and `:quit`.
+The interactive REPL Frontend's core loop, built on **rustyline** (chosen over
+reedline: every requirement maps to a first-class rustyline `Helper` trait —
+`Validator` for multiline, `Highlighter`/`Completer` for slice 18,
+`FileBackedHistory` for slice 17 — and the line editor is frontend-local behind
+the ADR-0002 seam, so the choice carries no Core lock-in). Read input (assembled
+into queries via slice 15), run each through the Session, render the result
+(tabular via slice 08), and print the round-trip timing and row-count summary.
+Surface query errors without ending the session and surface fatal-error
+reconnect attempts (slice 14). Exit on Ctrl-D and `:quit`.
 
 This is the first demoable interactive shell.
 
 ## Acceptance criteria
 
-- [ ] reedline reads multiline queries with a continuation prompt
+- [ ] rustyline's `Validator` keeps editing until the `QueryAssembler` (slice 15) reports a complete query, with a continuation prompt
 - [ ] Each completed query runs and its result renders as tabular
 - [ ] Per-query round-trip time and a row-count summary print after results
 - [ ] A query error is shown and the prompt returns (session survives)

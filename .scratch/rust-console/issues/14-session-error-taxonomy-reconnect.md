@@ -22,6 +22,11 @@ the `TransientError` substring — otherwise a permanent user error reads as
 retryable. Prefer matching the specific leaf code against a small known set
 rather than the broad tier.
 
+Also implements the **one-live-result guard** (ADR 0005): `run()` returns
+`Error::ResultStillOpen` if a previous result is still live, and recovers from an
+abandoned result (its `RecordStream` dropped before drain) by sending Bolt
+`RESET` before the new query. A drained/`discard`ed stream clears the guard.
+
 ## Acceptance criteria
 
 - [ ] Query errors are distinguished from fatal connection errors in the Core's error type
@@ -29,6 +34,7 @@ rather than the broad tier.
 - [ ] A query error leaves the Session usable for the next query
 - [ ] A fatal error triggers reconnect with a bounded number of retries
 - [ ] Exhausting retries surfaces a clear terminal failure
+- [ ] `run()` errors (`ResultStillOpen`) when a prior result is still live; recovers via `RESET` from an abandoned one (ADR 0005)
 - [ ] Integration tests induce a query error and a connection drop and assert the respective behaviour
 
 ## Blocked by

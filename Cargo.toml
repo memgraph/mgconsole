@@ -15,3 +15,13 @@ bolt-proto = "0.12"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = "0.8"
 thiserror = "2"
+
+# Central lint policy (applied via `[lints] workspace = true` in each crate).
+# unsafe is forbidden — ADR 0001's "pure Rust, no unsafe boundary" becomes a
+# compile-time guarantee. Warnings stay at `warn` (not `deny`) so mid-development
+# todos/unused imports don't block the build; clippy is advisory.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"

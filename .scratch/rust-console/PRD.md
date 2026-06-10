@@ -181,8 +181,9 @@ streaming-first Records; see ADR 0002.
   `:params` lists, `:params clear` empties. This mirrors today's behaviour.
 
 - **Import engine.** Serial mode runs queries in input order. Batched-parallel
-  mode runs Batches concurrently over a small pool of Bolt connections (a
-  Session is a single stream, so N workers need N connections), bounded by a
+  mode runs Batches concurrently over N worker Sessions via a worker-pull model
+  — workers pull Batches from a shared queue (a Session is a single stream, so N
+  workers need N connections; ADR 0006, no connection-pool crate) — bounded by a
   worker count, preserving vertices-first ordering and retrying conflicted
   Batches with backoff. Parser mode inspects queries and reports without
   executing. Batch size and worker count are configurable.
@@ -281,6 +282,7 @@ ADR-0001 fidelity spike.
   ordering.
 - The fidelity spike is the single gating risk and should be the first
   increment; every other increment assumes Values decode faithfully.
-- Minor library picks deliberately left open: temporal crate (`time` vs
-  `chrono`, decided by what `bolt-proto` exposes) and the connection-pool crate
-  for parallel import (`deadpool` vs `bb8`).
+- Minor library picks, now resolved: temporal crate is `chrono` (what
+  `bolt-proto` exposes; spike) and parallel import uses a worker-pull model with
+  no connection-pool crate (ADR 0006), so the `deadpool`-vs-`bb8` question is
+  dropped.

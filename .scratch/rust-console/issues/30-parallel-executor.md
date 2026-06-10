@@ -9,16 +9,17 @@ Status: ready-for-agent
 ## What to build
 
 The concurrency engine of the batched-parallel Import mode: read the input into
-Batches of a configurable size, and execute Batches concurrently over the
-connection pool (29) using a tokio JoinSet bounded by a Semaphore set to the
-worker count. Wire up the batch-size and workers-number flags. This slice
-delivers raw parallel execution; correctness guarantees (ordering, retry) come
-in 31 and 32. Integration tested against a container.
+Batches of a configurable size, and execute them across the N worker Sessions
+(29) via a **worker-pull** model (ADR 0006) — workers pull Batches from a shared
+queue until it drains. The worker count *is* the concurrency bound (no separate
+Semaphore). Wire up the batch-size and workers-number flags. This slice delivers
+raw parallel execution; correctness guarantees (ordering, retry) come in 31 and
+32. Integration tested against a container.
 
 ## Acceptance criteria
 
 - [ ] Input is split into Batches of the configured size
-- [ ] Batches run concurrently over the pool, bounded by the worker count (Semaphore)
+- [ ] Batches are pulled and run concurrently by the N worker Sessions; concurrency is bounded by the worker count
 - [ ] batch-size and workers-number flags control batching and concurrency
 - [ ] All Batches complete and their effects are applied to the database
 - [ ] Integration test imports a dataset in parallel and asserts the resulting data

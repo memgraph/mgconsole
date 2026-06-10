@@ -61,7 +61,7 @@ Built with TDD: each issue is sized to roughly one red-green-refactor cycle.
                          │                                   └─ 25 serial import ─┬─ 26 dump/export (+24)
                          │                                                        └─ 28 parser mode (+27)
                          ├─ 27 clause scanner
-                         └─ 29 conn pool ─┐
+                         └─ 29 workers ───┐
                             25 ───────────┴─ 30 parallel exec ─ 31 vertices-first (+27) ─ 32 retry/backoff
 ```
 
@@ -84,8 +84,9 @@ Built with TDD: each issue is sized to roughly one red-green-refactor cycle.
    (needs 08 + 14 + 15). Then 17–20 add ergonomics and `:param`.
 5. **Output + import:** 22–24 (writers) → 25 (serial import) → 26 (export) and
    28 (parser mode).
-6. **Parallel import:** 29 (pool) + 30 (executor) → 31 (vertices-first) → 32
-   (retry/backoff). The thickest correctness work; do it last.
+6. **Parallel import:** 29 (worker Sessions) + 30 (executor) → 31
+   (vertices-first) → 32 (retry/backoff). The thickest correctness work; do it
+   last.
 
 The pure-function runs (03–08, 15, 22–24, 27) need no container, so they're the
 fastest cycles for early momentum.
