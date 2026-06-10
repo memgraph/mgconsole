@@ -12,6 +12,10 @@
 //! parallel import) keep their own dedicated container. `start_memgraph()` below
 //! stays available for those dedicated cases.
 
+// Each integration-test binary includes this whole module but uses only the
+// helpers it needs, so unused items here are expected, not a defect.
+#![allow(dead_code)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
