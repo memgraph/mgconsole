@@ -1,6 +1,6 @@
 # 20 — `run [FILES…]` / `run -` explicit batch subcommand
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

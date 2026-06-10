@@ -124,6 +124,47 @@ async fn a_piped_run_defaults_to_jsonl_with_data_only_on_stdout() {
 }
 
 #[tokio::test]
+async fn the_run_subcommand_executes_files_in_order_and_stops_on_a_missing_file() {
+    // Issue 20: `mgconsole run a b` runs cypherl files in argument order through
+    // the serial path; a missing file errors, exits non-zero, and stops.
+    let mg = start_memgraph().await;
+    let dir = std::env::temp_dir().join(format!("mgconsole-run-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let a = dir.join("a.cypherl");
+    let b = dir.join("b.cypherl");
+    std::fs::write(&a, "CREATE (:Doc {n: 1});\n").expect("write a");
+    std::fs::write(&b, "MATCH (d:Doc) RETURN count(d) AS n;\n").expect("write b");
+
+    let ok = run_cli(
+        &mg,
+        &["--output-format", "csv", "run", a.to_str().unwrap(), b.to_str().unwrap()],
+        "",
+    );
+    assert!(
+        ok.status.success(),
+        "run exits zero; stderr: {}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    // b's read observes a's write — files ran in order.
+    assert_eq!(String::from_utf8(ok.stdout).unwrap(), "n\n1\n");
+
+    // A missing file reports a clear error and exits non-zero.
+    let missing = run_cli(
+        &mg,
+        &["run", a.to_str().unwrap(), "/no/such/file.cypherl"],
+        "",
+    );
+    assert!(!missing.status.success(), "a missing file exits non-zero");
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("/no/such/file.cypherl"),
+        "the error names the missing file: {}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn batched_parallel_import_loads_data_via_the_cli_flags() {
     let mg = start_memgraph().await;
 

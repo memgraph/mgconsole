@@ -31,8 +31,8 @@ use mgconsole::syntax::{self, Completer};
 #[cfg(feature = "tui")]
 use mgconsole::workbench;
 use mgconsole::{
-    no_color_active, resolve_connect_target, resolve_connection, resolve_password, Cli, Connection,
-    ExplicitFlags, ImportMode, OutputFormat,
+    no_color_active, resolve_connect_target, resolve_connection, resolve_password,
+    resolve_sources, Cli, Connection, ExplicitFlags, ImportMode, OutputFormat, QuerySource,
 };
 use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
@@ -42,6 +42,10 @@ use mgconsole_core::{
     DEFAULT_ROW_CAP,
 };
 
+// The startup flow is one linear sequence — parse, resolve sources/auth, then
+// dispatch to the parser/parallel/serial/interactive paths — that reads better
+// whole than split across helpers that each take the same dozen locals.
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse via ArgMatches (not the bare derive) so we can see which connection
     // flags were given explicitly — a profile fills only the unset ones (issue 03).
@@ -56,14 +60,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let explicit = explicit_flags(&matches);
 
-    // Parser mode validates a piped import file with the clause scanner and never
-    // touches the database (PRD: validate before touching Memgraph), so handle it
-    // before resolving auth or connecting. It is meaningful only non-interactively.
-    if !io::stdin().is_terminal() && cli.import_mode == ImportMode::Parser {
-        let queries = read_queries(io::stdin().lock())?;
-        let report = run_parser(queries);
-        print!("{}", format_parser_report(&report, cli.parser_stats));
-        return Ok(());
+    // Resolve the non-interactive query sources (issue 20): the `run` subcommand
+    // names them (`-` = stdin), and a bare invocation reads piped stdin (the sugar
+    // for `run -`); a TTY stdin with no subcommand is interactive (`None`).
+    let sources = resolve_sources(cli.command.as_ref(), io::stdin().is_terminal());
+
+    // Parser mode validates the sources with the clause scanner and never touches
+    // the database (PRD: validate before touching Memgraph), so handle it before
+    // resolving auth or connecting. It is meaningful only non-interactively.
+    if let Some(sources) = &sources {
+        if cli.import_mode == ImportMode::Parser {
+            let queries = read_all_sources(sources);
+            let report = run_parser(queries);
+            print!("{}", format_parser_report(&report, cli.parser_stats));
+            return Ok(());
+        }
     }
 
     // Resolve config, the selected profile, the effective connection, and the
@@ -100,19 +111,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the REPL/serial path uses, so establish them and run the executor here
     // (slice 30). Vertices-first ordering keeps a mixed node/edge dataset correct
     // (slice 31). Non-interactive only; exits non-zero if any query fails.
-    if !io::stdin().is_terminal() && cli.import_mode == ImportMode::BatchedParallel {
-        let queries = read_queries(io::stdin().lock())?;
-        let report = runtime.block_on(async {
-            let workers = Workers::connect(&endpoint, &options, cli.workers_number).await?;
-            Ok::<_, Error>(run_parallel_ordered(workers, queries, cli.batch_size as usize).await)
-        })?;
-        for failure in &report.failures {
-            eprintln!("error: {}: {}", failure.query, failure.error);
+    if let Some(sources) = &sources {
+        if cli.import_mode == ImportMode::BatchedParallel {
+            let queries = read_all_sources(sources);
+            let report = runtime.block_on(async {
+                let workers = Workers::connect(&endpoint, &options, cli.workers_number).await?;
+                Ok::<_, Error>(run_parallel_ordered(workers, queries, cli.batch_size as usize).await)
+            })?;
+            for failure in &report.failures {
+                eprintln!("error: {}: {}", failure.query, failure.error);
+            }
+            if !report.is_success() {
+                std::process::exit(1);
+            }
+            return Ok(());
         }
-        if !report.is_success() {
-            std::process::exit(1);
-        }
-        return Ok(());
     }
 
     let mut session = runtime.block_on(Session::connect_with(&endpoint, &options))?;
@@ -136,40 +149,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut out = io::stdout();
     let mut err = io::stderr();
 
-    // An interactive terminal gets one of the two interactive Frontends, chosen by
-    // the pure resolver (ADR 0010): the full-screen workbench by default, the line
-    // REPL when `--plain` is set or the terminal cannot host the workbench. A pipe
-    // gets the non-interactive serial import path (slice 25), which streams output
-    // in the selected format and exits non-zero if any query fails.
-    if io::stdin().is_terminal() {
-        run_interactive(
-            &cli,
-            session,
-            &runtime,
-            table_options,
-            settings,
-            cli.profile.clone(),
-            config,
-            options,
-            &mut out,
-            &mut err,
-        )?;
-    } else {
-        let queries = read_queries(io::stdin().lock())?;
-        // The default format is a function of stdout (issue 19): jsonl into a pipe
-        // so `… | mgconsole | jq` composes, table at a terminal. An explicit
-        // `--output-format` still wins. Result data goes to stdout; the per-query
-        // failure reporting below goes to stderr (stream discipline, ADR 0014).
-        let resolved = OutputFormat::resolve(cli.output_format, out.is_terminal());
-        let format = import_format(&cli, resolved, table_options);
-        let report = runtime.block_on(run_serial(&mut session, queries, &mut out, &format));
-        // The Core stays diagnostic-free (ADR 0002); the Frontend reports each
-        // failed query and maps any failure to a non-zero exit code.
-        for failure in &report.failures {
-            eprintln!("error: {}: {}", failure.query, failure.error);
+    // With no non-interactive sources, an interactive terminal gets one of the two
+    // Frontends, chosen by the pure resolver (ADR 0010): the full-screen workbench
+    // by default, the line REPL when `--plain` is set or the terminal cannot host
+    // it. Otherwise the non-interactive serial path runs the sources (`run` files
+    // or piped stdin, issue 20), streaming output in the resolved format and
+    // exiting non-zero if any query fails.
+    match &sources {
+        None => {
+            run_interactive(
+                &cli,
+                session,
+                &runtime,
+                table_options,
+                settings,
+                cli.profile.clone(),
+                config,
+                options,
+                &mut out,
+                &mut err,
+            )?;
         }
-        if !report.is_success() {
-            std::process::exit(1);
+        Some(sources) => {
+            let queries = read_all_sources(sources);
+            // The default format is a function of stdout (issue 19): jsonl into a
+            // pipe so `… | mgconsole | jq` composes, table at a terminal. An
+            // explicit `--output-format` still wins. Result data goes to stdout;
+            // the per-query failure reporting goes to stderr (ADR 0014).
+            let resolved = OutputFormat::resolve(cli.output_format, out.is_terminal());
+            let format = import_format(&cli, resolved, table_options);
+            let report = runtime.block_on(run_serial(&mut session, queries, &mut out, &format));
+            // The Core stays diagnostic-free (ADR 0002); the Frontend reports each
+            // failed query and maps any failure to a non-zero exit code.
+            for failure in &report.failures {
+                eprintln!("error: {}: {}", failure.query, failure.error);
+            }
+            if !report.is_success() {
+                std::process::exit(1);
+            }
         }
     }
 
@@ -325,6 +342,40 @@ fn read_queries(mut reader: impl BufRead) -> io::Result<Vec<String>> {
         queries.push(assembler.pending().trim().to_string());
     }
     Ok(queries)
+}
+
+/// Read every query source in order into one list of queries (issue 20). A `-`
+/// source reads stdin; a file source opens and reads the named file. An unreadable
+/// or missing file is a clear, path-naming error that exits non-zero *before*
+/// running anything downstream — so later files are never run (acceptance: a
+/// missing file stops the run). The same `QueryAssembler` discipline as the piped
+/// path splits each source into queries.
+fn read_all_sources(sources: &[QuerySource]) -> Vec<String> {
+    let mut queries = Vec::new();
+    for source in sources {
+        let result = match source {
+            QuerySource::Stdin => read_queries(io::stdin().lock()),
+            QuerySource::File(path) => match std::fs::File::open(path) {
+                Ok(file) => read_queries(io::BufReader::new(file)),
+                Err(e) => {
+                    eprintln!("error: cannot open {}: {e}", path.display());
+                    std::process::exit(1);
+                }
+            },
+        };
+        match result {
+            Ok(read) => queries.extend(read),
+            Err(e) => {
+                let what = match source {
+                    QuerySource::Stdin => "stdin".to_string(),
+                    QuerySource::File(path) => path.display().to_string(),
+                };
+                eprintln!("error: reading {what}: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    queries
 }
 
 /// Render a parser-mode report. Always lists each query's detected clauses (the

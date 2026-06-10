@@ -6,7 +6,9 @@
 //! cannot express alone. Parsing and validation are pure — no database, no IO —
 //! so they're covered by the unit tests below.
 
-use clap::{Parser, ValueEnum};
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand, ValueEnum};
 use mgconsole_core::{ConnectOptions, Credentials, DisplayMode, Endpoint};
 
 use crate::config::{Config, Profile};
@@ -259,6 +261,64 @@ pub struct Cli {
     /// Collect and print per-query statistics in parser mode.
     #[arg(long)]
     pub parser_stats: bool,
+
+    /// An optional subcommand (issue 20). With none, the bare invocation runs the
+    /// interactive Frontend (TTY stdin) or the serial path over piped stdin.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// The explicit subcommands (issue 20, ADR 0014). Additive: the bare top-level
+/// invocation keeps its behaviour; a subcommand makes the non-interactive path
+/// explicit so committed scripts and CI need not rely on stdin being a pipe.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Run one or more cypherl sources in order through the serial path. `-` means
+    /// stdin, so `mgconsole run -` is the explicit spelling of `… | mgconsole`.
+    /// Batch options (`--import-mode`/`--output-format`/csv) are the same top-level
+    /// flags; place them before `run`.
+    Run {
+        /// Files to run in argument order; `-` (which may be mixed in) is stdin.
+        files: Vec<String>,
+    },
+}
+
+/// A source of queries for a non-interactive run (issue 20): standard input or a
+/// named file. `-` resolves to [`Stdin`](QuerySource::Stdin).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuerySource {
+    Stdin,
+    File(PathBuf),
+}
+
+/// Resolve the non-interactive query sources from the parsed command and whether
+/// stdin is a terminal (issue 20), or `None` for the interactive Frontend. Pure,
+/// so the routing is unit-tested: `run` names its sources (`-` → stdin, possibly
+/// mixed); a bare invocation reads stdin only when it is *not* a TTY (the
+/// `… | mgconsole` sugar for `run -`), and otherwise goes interactive.
+pub fn resolve_sources(command: Option<&Command>, stdin_is_tty: bool) -> Option<Vec<QuerySource>> {
+    match command {
+        Some(Command::Run { files }) => {
+            // A bare `run` with no files reads stdin, like `run -`.
+            if files.is_empty() {
+                return Some(vec![QuerySource::Stdin]);
+            }
+            Some(
+                files
+                    .iter()
+                    .map(|f| {
+                        if f == "-" {
+                            QuerySource::Stdin
+                        } else {
+                            QuerySource::File(PathBuf::from(f))
+                        }
+                    })
+                    .collect(),
+            )
+        }
+        None if !stdin_is_tty => Some(vec![QuerySource::Stdin]),
+        None => None,
+    }
 }
 
 /// clap value parser for `--display`, deferring to [`DisplayMode`]'s `FromStr` so
@@ -477,6 +537,7 @@ mod tests {
         assert_eq!(cli.batch_size, 10_000);
         assert_eq!(cli.workers_number, 0);
         assert!(!cli.parser_stats);
+        assert!(cli.command.is_none(), "bare invocation has no subcommand");
         cli.validate().expect("defaults validate");
     }
 
@@ -708,6 +769,49 @@ mod tests {
             let cli = parse(&["--output-format", text]).expect("format parses");
             assert_eq!(cli.output_format, Some(want));
         }
+    }
+
+    #[test]
+    fn run_subcommand_parses_files_in_order() {
+        let cli = parse(&["run", "a.cypherl", "b.cypherl"]).expect("run parses");
+        match cli.command {
+            Some(Command::Run { files }) => assert_eq!(files, vec!["a.cypherl", "b.cypherl"]),
+            other => panic!("expected run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn batch_flags_precede_the_run_subcommand() {
+        let cli = parse(&["--output-format", "csv", "run", "a.cypherl"]).expect("parses");
+        assert_eq!(cli.output_format, Some(OutputFormat::Csv));
+        assert!(matches!(cli.command, Some(Command::Run { .. })));
+    }
+
+    #[test]
+    fn sources_resolve_from_the_command_and_stdin_tty() {
+        use QuerySource::{File, Stdin};
+        // `run` names its sources; `-` is stdin and may be mixed in at its position.
+        let run = Command::Run {
+            files: vec!["a.cypherl".to_string(), "-".to_string(), "b.cypherl".to_string()],
+        };
+        assert_eq!(
+            resolve_sources(Some(&run), true),
+            Some(vec![
+                File(PathBuf::from("a.cypherl")),
+                Stdin,
+                File(PathBuf::from("b.cypherl")),
+            ]),
+            "run resolves regardless of stdin TTY (you can run from a terminal)"
+        );
+        // `run -` is the explicit spelling of `… | mgconsole`.
+        let run_dash = Command::Run { files: vec!["-".to_string()] };
+        assert_eq!(resolve_sources(Some(&run_dash), true), Some(vec![Stdin]));
+        // A bare `run` reads stdin, like `run -`.
+        let run_bare = Command::Run { files: vec![] };
+        assert_eq!(resolve_sources(Some(&run_bare), true), Some(vec![Stdin]));
+        // No subcommand: a piped stdin is sugar for `run -`; a TTY goes interactive.
+        assert_eq!(resolve_sources(None, false), Some(vec![Stdin]));
+        assert_eq!(resolve_sources(None, true), None, "interactive");
     }
 
     #[test]
