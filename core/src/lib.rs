@@ -6,6 +6,7 @@
 //! Session yields a [`QueryResult`] of a header, a [`RecordStream`], and a
 //! trailing [`Summary`] (ADR 0004).
 
+pub mod clause;
 pub mod error;
 pub mod parse;
 pub mod render;
@@ -14,6 +15,7 @@ pub mod session;
 pub mod tabular;
 pub mod value;
 
+pub use clause::{scan_clauses, Clause};
 pub use error::Error;
 pub use parse::QueryAssembler;
 pub use result::{QueryResult, Record, RecordStream, Summary};

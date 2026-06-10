@@ -1,6 +1,6 @@
 # 27 — Clause scanner (vertices-first detection)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -17,11 +17,11 @@ clause-detection state machine, kept fast and DRY.
 
 ## Acceptance criteria
 
-- [ ] The scanner detects each relevant clause from query text
-- [ ] Detection is robust to casing, comments, and multiline/multi-query input
-- [ ] Results compose across the lines of one logical query
-- [ ] The scanner is a pure function with no DB/session dependency
-- [ ] Comprehensive pure unit tests, including ordering-relevant edge cases
+- [x] The scanner detects each relevant clause from query text
+- [x] Detection is robust to casing, comments, and multiline/multi-query input
+- [x] Results compose across the lines of one logical query
+- [x] The scanner is a pure function with no DB/session dependency
+- [x] Comprehensive pure unit tests, including ordering-relevant edge cases
 
 ## Blocked by
 
