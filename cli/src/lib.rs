@@ -38,6 +38,9 @@ pub enum ImportMode {
 }
 
 /// The complete flag surface for the binary. Defaults mirror today's mgconsole.
+// A CLI flag struct is a flat bag of independent toggles by nature; grouping the
+// bools to satisfy the lint would only obscure their 1:1 map to command flags.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Parser)]
 #[command(name = "mgconsole", version, about = "Rust Memgraph console")]
 pub struct Cli {

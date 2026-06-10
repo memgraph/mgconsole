@@ -50,7 +50,7 @@ enum State {
 /// Scan a buffer into (complete queries, unterminated remainder). Empty queries
 /// (e.g. between `;;`) are skipped.
 fn scan(buf: &str) -> (Vec<String>, String) {
-    use State::*;
+    use State::{Normal, Single, Double, Backtick, LineComment, BlockComment};
 
     let chars: Vec<char> = buf.chars().collect();
     let mut complete = Vec::new();

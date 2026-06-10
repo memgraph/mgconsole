@@ -392,7 +392,7 @@ async fn exhausting_reconnect_retries_surfaces_a_terminal_error() {
 
     match session.run("RETURN 2").await {
         Err(Error::Connection(msg)) => {
-            assert!(msg.contains("reconnect"), "terminal error mentions reconnect: {msg}")
+            assert!(msg.contains("reconnect"), "terminal error mentions reconnect: {msg}");
         }
         Err(other) => panic!("expected a terminal connection error, got {other:?}"),
         Ok(_) => panic!("query must fail when the server is unreachable"),

@@ -165,7 +165,7 @@ async fn execute_and_render<W: Write>(
                 .collect()
                 .await?
                 .into_iter()
-                .map(|r| r.into_fields())
+                .map(super::result::Record::into_fields)
                 .collect();
             writeln!(sink, "{}", render_table(&header, &rows, opts))?;
         }
@@ -394,7 +394,7 @@ mod tests {
     use super::*;
 
     fn queries(qs: &[&str]) -> Vec<String> {
-        qs.iter().map(|s| s.to_string()).collect()
+        qs.iter().map(std::string::ToString::to_string).collect()
     }
 
     #[test]

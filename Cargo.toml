@@ -23,5 +23,27 @@ thiserror = "2"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# `all` and `pedantic` give us idiomatic-Rust nudges; both run at `warn` (see
+# above for why not `deny`). They carry `priority = -1` so the individual
+# `allow`s below — which sit at the default priority 0 — win over the groups.
+# Each `allow` is a conscious opt-out, not an oversight:
 [workspace.lints.clippy]
-all = "warn"
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+# Pure noise / near-universally disabled: flags every `FooError` in `foo.rs`.
+module_name_repetitions = "allow"
+# This is an end-user binary, not a published library: `#[must_use]` spam and
+# `# Errors`/`# Panics` doc sections on internal fns add ceremony, not safety.
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Numeric casts here (row counts, buffer sizes, Bolt ints) are deliberate and
+# reviewed at the call site; a blanket warn would bury the signal in noise.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+# Subjective style calls we don't want clippy adjudicating:
+similar_names = "allow"
+too_long_first_doc_paragraph = "allow"

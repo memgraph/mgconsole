@@ -7,6 +7,7 @@
 //! must refine.
 
 use crate::value::Value;
+use std::fmt::Write as _;
 
 /// Format a float so it is always distinguishable from an integer (`3.0`, not
 /// `3`), matching Cypher's float display.
@@ -35,12 +36,9 @@ fn duration(d: &crate::value::Duration) -> String {
     let micros = (d.nanos / 1000).abs();
     let mut out = String::from("P");
     if d.months != 0 {
-        out.push_str(&format!("{}M", d.months));
+        write!(out, "{}M", d.months).unwrap();
     }
-    out.push_str(&format!(
-        "{}DT{}H{}M{}.{:06}S",
-        d.days, hours, minutes, seconds, micros
-    ));
+    write!(out, "{}DT{}H{}M{}.{:06}S", d.days, hours, minutes, seconds, micros).unwrap();
     out
 }
 
@@ -123,13 +121,15 @@ fn render(value: &Value, quote: bool) -> String {
 
 /// `(:Label1:Label2 {props})`. No labels and/or no props collapse cleanly.
 fn render_node(n: &crate::value::Node) -> String {
-    let labels: String = n.labels.iter().map(|l| format!(":{l}")).collect();
-    let mut inner = labels;
+    let mut inner = String::new();
+    for l in &n.labels {
+        write!(inner, ":{l}").unwrap();
+    }
     if !n.properties.is_empty() {
         if !inner.is_empty() {
             inner.push(' ');
         }
-        inner.push_str(&format!("{{{}}}", render_pairs(&n.properties)));
+        write!(inner, "{{{}}}", render_pairs(&n.properties)).unwrap();
     }
     format!("({inner})")
 }
@@ -139,7 +139,7 @@ fn render_node(n: &crate::value::Node) -> String {
 fn rel_body(rel_type: &str, properties: &std::collections::BTreeMap<String, Value>) -> String {
     let mut inner = format!(":{rel_type}");
     if !properties.is_empty() {
-        inner.push_str(&format!(" {{{}}}", render_pairs(properties)));
+        write!(inner, " {{{}}}", render_pairs(properties)).unwrap();
     }
     format!("[{inner}]")
 }
@@ -158,9 +158,9 @@ fn render_path(p: &crate::value::Path) -> String {
         let rel = &p.relationships[rel_signed.unsigned_abs() as usize - 1];
         let body = rel_body(&rel.rel_type, &rel.properties);
         if rel_signed >= 0 {
-            out.push_str(&format!("-{body}->"));
+            write!(out, "-{body}->").unwrap();
         } else {
-            out.push_str(&format!("<-{body}-"));
+            write!(out, "<-{body}-").unwrap();
         }
         out.push_str(&render_node(&p.nodes[node_idx]));
     }

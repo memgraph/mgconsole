@@ -193,7 +193,7 @@ pub async fn start_proxy(upstream_host: String, upstream_port: u16) -> Proxy {
                     _ = tokio::io::copy(&mut cr, &mut uw) => {}
                     _ = tokio::io::copy(&mut ur, &mut cw) => {}
                     // On cut, return — dropping all four halves closes both sockets.
-                    _ = cut.notified() => {}
+                    () = cut.notified() => {}
                 }
             });
         }

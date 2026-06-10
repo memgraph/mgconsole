@@ -6,7 +6,7 @@ mod common;
 
 use std::time::Duration;
 
-use mgconsole_core::{Session, Value, Workers};
+use mgconsole_core::{ConnectOptions, Session, Value, Workers};
 
 /// Run `RETURN <n>` on a single Session and assert the scalar comes back,
 /// draining the result so it is cleanly finished before the next query (ADR 0005).
@@ -28,7 +28,7 @@ async fn establishes_n_workers_and_runs_a_query_on_each() {
     // A dedicated container: this opens several extra connections of its own.
     let mg = common::start_memgraph().await;
 
-    let mut workers = Workers::connect(&mg.host, mg.port, &Default::default(), 4)
+    let mut workers = Workers::connect(&mg.host, mg.port, &ConnectOptions::default(), 4)
         .await
         .expect("establish 4 workers");
     // The worker count bounds the number of connections.
@@ -43,7 +43,7 @@ async fn establishes_n_workers_and_runs_a_query_on_each() {
 #[tokio::test]
 async fn zero_workers_auto_detects_at_least_one() {
     let mg = common::start_memgraph().await;
-    let workers = Workers::connect(&mg.host, mg.port, &Default::default(), 0)
+    let workers = Workers::connect(&mg.host, mg.port, &ConnectOptions::default(), 0)
         .await
         .expect("auto-detect workers");
     assert!(!workers.is_empty(), "auto-detect yields at least one worker");

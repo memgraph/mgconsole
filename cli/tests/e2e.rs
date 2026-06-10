@@ -3,6 +3,7 @@
 //! `mgconsole`'s `run-tests.sh`. Kept thin — the rendering and import seams carry
 //! the detail; this proves the non-interactive path is wired end to end.
 
+use std::fmt::Write as _;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -114,7 +115,7 @@ async fn batched_parallel_import_loads_data_via_the_cli_flags() {
     // entirely by the CLI flags (workers + batch size).
     let mut stream = String::new();
     for i in 0..60 {
-        stream.push_str(&format!("CREATE (:Item {{n: {i}}});\n"));
+        writeln!(stream, "CREATE (:Item {{n: {i}}});").unwrap();
     }
     let imported = run_cli(
         &mg,

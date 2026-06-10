@@ -5,7 +5,7 @@ mod golden;
 use mgconsole_core::{render_table, TableOptions, Value};
 
 fn header(cols: &[&str]) -> Vec<String> {
-    cols.iter().map(|c| c.to_string()).collect()
+    cols.iter().map(std::string::ToString::to_string).collect()
 }
 
 #[test]

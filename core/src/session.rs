@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bolt_client::{Client, Metadata, Params};
-use bolt_proto::{version::*, Message};
+use bolt_proto::{version::{V4_4, V4_3, V4_2, V4_1}, Message};
 use tokio::io::BufStream;
 use tokio::sync::Mutex;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt};

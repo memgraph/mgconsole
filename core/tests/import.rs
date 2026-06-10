@@ -7,7 +7,8 @@ mod common;
 
 use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
-    run_parallel, run_parallel_ordered, run_serial, ImportFormat, Session, Value, Workers,
+    run_parallel, run_parallel_ordered, run_serial, ConnectOptions, ImportFormat, Session, Value,
+    Workers,
 };
 
 #[tokio::test]
@@ -102,7 +103,7 @@ async fn batched_parallel_import_loads_a_dataset_across_workers() {
         .map(|i| format!("CREATE (:Item {{n: {i}}})"))
         .collect();
 
-    let workers = Workers::connect(&mg.host, mg.port, &Default::default(), 4)
+    let workers = Workers::connect(&mg.host, mg.port, &ConnectOptions::default(), 4)
         .await
         .expect("4 workers");
 
@@ -154,7 +155,7 @@ async fn vertices_first_ordering_imports_a_mixed_graph_correctly() {
         queries.push(format!("CREATE (:N {{id: {i}}})"));
     }
 
-    let workers = Workers::connect(&mg.host, mg.port, &Default::default(), 4)
+    let workers = Workers::connect(&mg.host, mg.port, &ConnectOptions::default(), 4)
         .await
         .expect("4 workers");
     let report = run_parallel_ordered(workers, queries, 8).await;
@@ -194,7 +195,7 @@ async fn retry_resolves_serialization_conflicts_in_transactional_mode() {
         .map(|_| "MATCH (c:Counter) SET c.n = c.n + 1".to_string())
         .collect();
 
-    let workers = Workers::connect(&mg.host, mg.port, &Default::default(), 4)
+    let workers = Workers::connect(&mg.host, mg.port, &ConnectOptions::default(), 4)
         .await
         .expect("4 workers");
     let report = run_parallel(workers, queries, 1).await;

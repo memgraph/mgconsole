@@ -20,7 +20,7 @@ use mgconsole_core::{render, tabular, Error, QueryAssembler, Value};
 /// Whether a buffer the user has entered is a complete submission, or still
 /// needs a continuation line. Drives rustyline's `Validator`: incomplete input
 /// keeps the editor open (slice 16 acceptance: "keeps editing until the
-/// QueryAssembler reports a complete query").
+/// `QueryAssembler` reports a complete query").
 ///
 /// A line beginning with `:` is a single-line meta-command, always complete.
 /// Otherwise the buffer is complete once scanning it leaves no unterminated

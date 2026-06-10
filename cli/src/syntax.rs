@@ -88,8 +88,7 @@ impl Completer {
 pub fn word_start(line: &str, pos: usize) -> usize {
     line[..pos]
         .rfind(WORD_BOUNDARIES)
-        .map(|boundary| boundary + line[boundary..].chars().next().map_or(1, char::len_utf8))
-        .unwrap_or(0)
+        .map_or(0, |boundary| boundary + line[boundary..].chars().next().map_or(1, char::len_utf8))
 }
 
 /// What a word is, for colouring.

@@ -80,7 +80,7 @@ fn json_value(v: &Value) -> J {
         Value::Integer(i) => J::Number((*i).into()),
         Value::Float(f) => serde_json::Number::from_f64(*f).map_or(J::Null, J::Number),
         Value::String(s) => J::String(s.clone()),
-        Value::Bytes(b) => J::Array(b.iter().map(|x| J::Number((*x as u64).into())).collect()),
+        Value::Bytes(b) => J::Array(b.iter().map(|x| J::Number(u64::from(*x).into())).collect()),
         Value::List(items) => J::Array(items.iter().map(json_value).collect()),
         Value::Map(m) => json_props(m),
         Value::Enum(q) => J::String(q.clone()),
@@ -118,7 +118,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = JsonlWriter::new(&mut buf);
-            let hdr: Vec<String> = header.iter().map(|s| s.to_string()).collect();
+            let hdr: Vec<String> = header.iter().map(std::string::ToString::to_string).collect();
             w.write_header(&hdr).unwrap();
             w.write_row(row).unwrap();
             w.finish().unwrap();

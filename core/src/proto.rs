@@ -1,5 +1,5 @@
 //! Small helpers for reading Bolt message metadata. Shared by the Session and
-//! the RecordStream so the two agree on how a header, a failure message, and
+//! the `RecordStream` so the two agree on how a header, a failure message, and
 //! the streaming `has_more` flag are extracted.
 
 use std::collections::HashMap;

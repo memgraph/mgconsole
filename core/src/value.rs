@@ -312,7 +312,7 @@ mod tests {
                 assert_eq!(items[0], bolt_proto::Value::Integer(1));
                 match &items[1] {
                     bolt_proto::Value::Map(m) => {
-                        assert_eq!(m.get("k"), Some(&bolt_proto::Value::Boolean(true)))
+                        assert_eq!(m.get("k"), Some(&bolt_proto::Value::Boolean(true)));
                     }
                     other => panic!("expected map, got {other:?}"),
                 }

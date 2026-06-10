@@ -9,6 +9,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::{self, BufRead, IsTerminal};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -181,16 +182,13 @@ fn format_parser_report(report: &ParserReport, stats: bool) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        out.push_str(&format!("{}: {clauses}\n", i + 1));
+        writeln!(out, "{}: {clauses}", i + 1).unwrap();
     }
-    out.push_str(&format!(
-        "Parsed {} queries; nothing executed.\n",
-        report.query_count()
-    ));
+    writeln!(out, "Parsed {} queries; nothing executed.", report.query_count()).unwrap();
     if stats {
         out.push_str("Clause statistics:\n");
         for (clause, count) in &report.clause_counts {
-            out.push_str(&format!("  {clause:?}: {count}\n"));
+            writeln!(out, "  {clause:?}: {count}").unwrap();
         }
     }
     out
@@ -351,7 +349,7 @@ impl QueryRunner for SessionRunner<'_> {
             result.records().discard().await?;
             let elapsed = start.elapsed();
 
-            let rows: Vec<Vec<Value>> = records.into_iter().map(|r| r.into_fields()).collect();
+            let rows: Vec<Vec<Value>> = records.into_iter().map(mgconsole_core::Record::into_fields).collect();
             // A write returns no columns; rendering an empty table is just a
             // degenerate box, so leave it out and let the summary speak.
             let table = if header.is_empty() {
