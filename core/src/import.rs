@@ -222,19 +222,51 @@ pub fn into_batches<I: IntoIterator<Item = String>>(queries: I, batch_size: usiz
 /// semaphore. Query output is discarded (parallel import loads data; result
 /// ordering across workers is meaningless); a failed query is recorded.
 ///
-/// This slice delivers raw parallelism: Batches run in input order *within* a
-/// worker but interleave *across* workers, so cross-Batch ordering is not
-/// guaranteed — vertices-first ordering (slice 31) and retry (slice 32) layer on.
+/// This is *raw* parallelism: Batches run in input order *within* a worker but
+/// interleave *across* workers, so an edge-creating Batch may run before the
+/// nodes it depends on. [`run_parallel_ordered`] adds the vertices-first barrier
+/// that makes a mixed node/edge dataset correct (slice 31).
 pub async fn run_parallel<I: IntoIterator<Item = String>>(
     workers: Workers,
     queries: I,
     batch_size: usize,
 ) -> ParallelReport {
-    let queue: Arc<Mutex<VecDeque<Batch>>> =
-        Arc::new(Mutex::new(into_batches(queries, batch_size).into()));
+    let (_sessions, report) =
+        run_phase(workers.into_sessions(), into_batches(queries, batch_size)).await;
+    report
+}
+
+/// Run a batched-parallel import with **vertices-first ordering** (ADR 0006): the
+/// node-creating Batches are drained to completion across all workers (a barrier)
+/// before any edge-creating Batch runs, so an edge never references a node that
+/// has not been created yet. The two phases are partitioned by the clause scanner
+/// (slice 27) — see [`classify_phase`].
+pub async fn run_parallel_ordered<I: IntoIterator<Item = String>>(
+    workers: Workers,
+    queries: I,
+    batch_size: usize,
+) -> ParallelReport {
+    let (vertices, edges) = partition_phases(queries);
+    let sessions = workers.into_sessions();
+
+    // Phase 1: all vertices. The barrier is the join — every node-Batch is done
+    // before phase 2 begins, on the same reused worker Sessions.
+    let (sessions, mut report) = run_phase(sessions, into_batches(vertices, batch_size)).await;
+    // Phase 2: edges and anything else that depends on existing nodes.
+    let (_sessions, edge_report) = run_phase(sessions, into_batches(edges, batch_size)).await;
+
+    report.executed += edge_report.executed;
+    report.failures.extend(edge_report.failures);
+    report
+}
+
+/// Run one set of Batches across the given worker Sessions via the worker-pull
+/// model, returning the Sessions (so a later phase reuses them) and the outcome.
+async fn run_phase(sessions: Vec<Session>, batches: Vec<Batch>) -> (Vec<Session>, ParallelReport) {
+    let queue: Arc<Mutex<VecDeque<Batch>>> = Arc::new(Mutex::new(batches.into()));
 
     let mut handles = Vec::new();
-    for mut session in workers.into_sessions() {
+    for mut session in sessions {
         let queue = queue.clone();
         handles.push(tokio::spawn(async move {
             let mut outcome = ParallelReport::default();
@@ -247,17 +279,58 @@ pub async fn run_parallel<I: IntoIterator<Item = String>>(
                     }
                 }
             }
-            outcome
+            // Hand the Session back so a subsequent phase reuses the connection.
+            (session, outcome)
         }));
     }
 
+    let mut sessions = Vec::new();
     let mut report = ParallelReport::default();
     for handle in handles {
-        let outcome = handle.await.expect("worker task joins");
+        let (session, outcome) = handle.await.expect("worker task joins");
+        sessions.push(session);
         report.executed += outcome.executed;
         report.failures.extend(outcome.failures);
     }
-    report
+    (sessions, report)
+}
+
+/// The import phase a query belongs to under vertices-first ordering (ADR 0006).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// Creates vertices, or is otherwise independent of pre-existing nodes — runs
+    /// in the first phase.
+    Vertices,
+    /// Depends on already-created nodes (it matches them), e.g. an edge create —
+    /// runs after the vertices barrier.
+    Edges,
+}
+
+/// Decide a query's import phase from the clauses the scanner finds (slice 27).
+/// A query that matches existing nodes (`MATCH`) depends on the vertices phase —
+/// the cypherl dump form of an edge is `MATCH (a), (b) CREATE (a)-[:R]->(b)`.
+/// Everything else creates vertices or is self-contained (e.g. a standalone
+/// `CREATE`/`MERGE`, an index, a storage-mode change) and runs first.
+pub fn classify_phase(query: &str) -> Phase {
+    if scan_clauses(query).contains(&Clause::Match) {
+        Phase::Edges
+    } else {
+        Phase::Vertices
+    }
+}
+
+/// Split a query stream into the vertices phase and the edges phase, preserving
+/// input order within each.
+fn partition_phases<I: IntoIterator<Item = String>>(queries: I) -> (Vec<String>, Vec<String>) {
+    let mut vertices = Vec::new();
+    let mut edges = Vec::new();
+    for query in queries {
+        match classify_phase(&query) {
+            Phase::Vertices => vertices.push(query),
+            Phase::Edges => edges.push(query),
+        }
+    }
+    (vertices, edges)
 }
 
 /// Run one import query and discard its result, leaving the Session ready for the
@@ -338,5 +411,35 @@ mod tests {
     #[test]
     fn a_zero_batch_size_is_treated_as_one() {
         assert_eq!(batch_sizes(&["a", "b"], 0), vec![1, 1]);
+    }
+
+    #[test]
+    fn a_plain_create_is_a_vertices_phase_query() {
+        assert_eq!(classify_phase("CREATE (:Person {name: 'Ada'})"), Phase::Vertices);
+        // A self-contained MERGE creates its own endpoints — no dependency.
+        assert_eq!(classify_phase("MERGE (n:X {id: 1})"), Phase::Vertices);
+    }
+
+    #[test]
+    fn an_edge_create_matching_endpoints_is_an_edges_phase_query() {
+        assert_eq!(
+            classify_phase("MATCH (a), (b) CREATE (a)-[:KNOWS]->(b)"),
+            Phase::Edges
+        );
+    }
+
+    #[test]
+    fn partition_keeps_vertices_before_edges_preserving_order() {
+        // Interleaved input: an edge appears before its endpoint nodes.
+        let (vertices, edges) = partition_phases(queries(&[
+            "MATCH (a {id:0}),(b {id:1}) CREATE (a)-[:R]->(b)",
+            "CREATE ({id:0})",
+            "CREATE ({id:1})",
+        ]));
+        assert_eq!(
+            vertices,
+            vec!["CREATE ({id:0})".to_string(), "CREATE ({id:1})".to_string()]
+        );
+        assert_eq!(edges.len(), 1);
     }
 }

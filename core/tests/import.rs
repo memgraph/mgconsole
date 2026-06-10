@@ -6,7 +6,9 @@
 mod common;
 
 use mgconsole_core::format::CsvOptions;
-use mgconsole_core::{run_parallel, run_serial, ImportFormat, Session, Value, Workers};
+use mgconsole_core::{
+    run_parallel, run_parallel_ordered, run_serial, ImportFormat, Session, Value, Workers,
+};
 
 #[tokio::test]
 async fn runs_a_cypherl_stream_serially_and_takes_effect() {
@@ -115,6 +117,57 @@ async fn batched_parallel_import_loads_a_dataset_across_workers() {
     assert_eq!(count, 200);
     let distinct = scalar(&mut verify, "MATCH (i:Item) RETURN count(DISTINCT i.n)").await;
     assert_eq!(distinct, 200, "no query ran twice or was dropped");
+}
+
+#[tokio::test]
+async fn vertices_first_ordering_imports_a_mixed_graph_correctly() {
+    // Analytical mode: a MATCH that binds nothing silently creates no edge (no
+    // error), so an edge applied before its endpoints would be lost. This makes
+    // the test sensitive to ordering — only the vertices-first barrier yields a
+    // complete graph.
+    let mg = common::start_memgraph().await;
+    {
+        let mut setup = common::connect(&mg).await;
+        setup
+            .run("STORAGE MODE IN_MEMORY_ANALYTICAL")
+            .await
+            .expect("switch to analytical")
+            .records()
+            .discard()
+            .await
+            .expect("drain");
+    }
+
+    // A 50-node chain 0->1->...->49, with every edge query placed *before* its
+    // endpoint nodes in input order, so any path that respects input order would
+    // drop edges.
+    let n = 50;
+    let mut queries = Vec::new();
+    for i in 0..n {
+        if i > 0 {
+            queries.push(format!(
+                "MATCH (a:N {{id: {}}}), (b:N {{id: {}}}) CREATE (a)-[:NEXT]->(b)",
+                i - 1,
+                i
+            ));
+        }
+        queries.push(format!("CREATE (:N {{id: {i}}})"));
+    }
+
+    let workers = Workers::connect(&mg.host, mg.port, &Default::default(), 4)
+        .await
+        .expect("4 workers");
+    let report = run_parallel_ordered(workers, queries, 8).await;
+    assert!(report.is_success(), "ordered import is clean: {report:?}");
+
+    // The graph is complete: every node and every edge, no missing endpoints.
+    let mut verify = common::connect(&mg).await;
+    assert_eq!(scalar(&mut verify, "MATCH (x:N) RETURN count(x)").await, n);
+    assert_eq!(
+        scalar(&mut verify, "MATCH (:N)-[r:NEXT]->(:N) RETURN count(r)").await,
+        n - 1,
+        "all edges created — vertices-first put the nodes in first"
+    );
 }
 
 /// Run a query expected to return a single integer scalar.

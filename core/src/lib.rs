@@ -23,8 +23,9 @@ pub mod workers;
 pub use clause::{scan_clauses, Clause};
 pub use error::Error;
 pub use import::{
-    into_batches, run_parallel, run_parser, run_serial, Batch, ImportFailure, ImportReport,
-    OutputFormat as ImportFormat, ParallelReport, ParsedQuery, ParserReport,
+    classify_phase, into_batches, run_parallel, run_parallel_ordered, run_parser, run_serial, Batch,
+    ImportFailure, ImportReport, OutputFormat as ImportFormat, ParallelReport, ParsedQuery,
+    ParserReport, Phase,
 };
 pub use parse::QueryAssembler;
 pub use result::{ExecutionInfo, Notification, QueryResult, Record, RecordStream, Summary};
