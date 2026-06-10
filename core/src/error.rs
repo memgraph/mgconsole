@@ -65,6 +65,12 @@ pub enum Error {
     #[error("transaction failed; :rollback to recover")]
     TransactionFailed,
 
+    /// The connection dropped while a transaction was open (ADR 0011): the
+    /// uncommitted work is gone and the console never silently resurrects a
+    /// bracketed transaction, so it aborts and returns to autocommit.
+    #[error("transaction aborted: the connection dropped; the session is back in autocommit")]
+    TransactionAborted,
+
     /// `:begin` was issued while a transaction was already open, or `:commit`/
     /// `:rollback` with no transaction open — a transaction-state misuse.
     #[error("{0}")]

@@ -196,16 +196,34 @@ impl Session {
             TransactionState::Failed => return Err(Error::TransactionFailed),
         }
         self.enforce_one_live_result().await?;
+        // `:begin` is autocommit-state work, so a connection loss here reconnects
+        // and retries once (like an autocommit query) — nothing bracketed is yet
+        // at stake (ADR 0011).
+        match self.begin_once().await {
+            Ok(()) => {
+                self.tx = TransactionState::Open;
+                Ok(())
+            }
+            Err(Error::Connection(_)) => {
+                self.reconnect().await?;
+                self.begin_once().await?;
+                self.tx = TransactionState::Open;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Issue one BEGIN with the current access mode. A `FAILURE` is cleared with
+    /// `RESET`; a transport failure becomes [`Error::Connection`] for the caller
+    /// to reconnect.
+    async fn begin_once(&self) -> Result<(), Error> {
         let metadata = self
             .read_only
             .then(|| Metadata::from_iter([("mode", "r")]));
         let mut client = self.conn.lock().await;
         match client.begin(metadata).await.map_err(Error::connection)? {
-            Message::Success(_) => {
-                drop(client);
-                self.tx = TransactionState::Open;
-                Ok(())
-            }
+            Message::Success(_) => Ok(()),
             Message::Failure(f) => {
                 let error = proto::query_error(f.metadata());
                 client.reset().await.map_err(Error::connection)?;
@@ -227,19 +245,26 @@ impl Session {
         }
         self.enforce_one_live_result().await?;
         let mut client = self.conn.lock().await;
-        match client.commit().await.map_err(Error::connection)? {
-            Message::Success(_) => {
+        match client.commit().await {
+            // A transport failure during COMMIT means the uncommitted work is gone;
+            // never silently resurrect it — abort to autocommit (ADR 0011).
+            Err(_) => {
+                drop(client);
+                self.tx = TransactionState::Auto;
+                Err(Error::TransactionAborted)
+            }
+            Ok(Message::Success(_)) => {
                 drop(client);
                 self.tx = TransactionState::Auto;
                 Ok(())
             }
-            Message::Failure(f) => {
+            Ok(Message::Failure(f)) => {
                 let error = proto::query_error(f.metadata());
                 client.reset().await.map_err(Error::connection)?;
                 self.tx = TransactionState::Auto;
                 Err(Error::Query(error))
             }
-            other => Err(Error::Protocol(format!("unexpected COMMIT reply: {other:?}"))),
+            Ok(other) => Err(Error::Protocol(format!("unexpected COMMIT reply: {other:?}"))),
         }
     }
 
@@ -254,15 +279,18 @@ impl Session {
             TransactionState::Open => {
                 self.enforce_one_live_result().await?;
                 let mut client = self.conn.lock().await;
-                match client.rollback().await.map_err(Error::connection)? {
-                    Message::Success(_) => {}
-                    Message::Failure(f) => {
+                match client.rollback().await {
+                    // Either a clean ROLLBACK, or a connection loss that already
+                    // discarded the transaction — both meet the goal (back to
+                    // autocommit), so report success.
+                    Err(_) | Ok(Message::Success(_)) => {}
+                    Ok(Message::Failure(f)) => {
                         let error = proto::query_error(f.metadata());
                         client.reset().await.map_err(Error::connection)?;
                         self.tx = TransactionState::Auto;
                         return Err(Error::Query(error));
                     }
-                    other => {
+                    Ok(other) => {
                         return Err(Error::Protocol(format!(
                             "unexpected ROLLBACK reply: {other:?}"
                         )))
@@ -328,8 +356,15 @@ impl Session {
         let (header, summary) = match self.run_once(query, bolt_params.clone(), wrap_read_only).await
         {
             Ok(reply) => reply,
-            // Fatal transport error: reconnect (bounded) and retry once on the
-            // fresh connection. Exhausted retries surface as a terminal error.
+            // Fatal transport error. State-dependent (ADR 0011): in autocommit,
+            // reconnect (bounded) and retry once on the fresh connection. Inside an
+            // open transaction, the uncommitted work is gone — never silently
+            // resurrect bracketed work — so abort to autocommit without retrying;
+            // the next query reconnects lazily.
+            Err(Error::Connection(_)) if self.tx != TransactionState::Auto => {
+                self.tx = TransactionState::Auto;
+                return Err(Error::TransactionAborted);
+            }
             Err(Error::Connection(_)) => {
                 self.reconnect().await?;
                 self.run_once(query, bolt_params, wrap_read_only).await?

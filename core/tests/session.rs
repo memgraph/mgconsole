@@ -595,3 +595,52 @@ async fn one_live_result_still_holds_inside_a_transaction() {
     open.records().discard().await.expect("drain");
     session.rollback().await.expect("rollback");
 }
+
+#[tokio::test]
+async fn connection_loss_in_a_transaction_aborts_to_autocommit() {
+    // Dedicated container behind a severable proxy.
+    let mg = common::start_memgraph().await;
+    let proxy = common::start_proxy(mg.host.clone(), mg.port).await;
+    let mut session = Session::connect(&proxy.endpoint())
+        .await
+        .expect("connect via proxy");
+
+    // The reconnect observer must NOT fire on the transactional abort path (it
+    // reports abortion, not a reconnect attempt).
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let seen = attempts.clone();
+    session.on_reconnect(move |_| {
+        seen.fetch_add(1, Ordering::SeqCst);
+    });
+
+    session.begin().await.expect("begin");
+    // Sever the connection mid-transaction.
+    proxy.cut();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // The next query in the open transaction aborts — no silent retry.
+    match session.run("RETURN 1").await {
+        Err(Error::TransactionAborted) => {}
+        Err(other) => panic!("expected TransactionAborted, got {other:?}"),
+        Ok(_) => panic!("a transaction must abort on connection loss"),
+    }
+    assert_eq!(
+        session.transaction_state(),
+        mgconsole_core::TransactionState::Auto,
+        "back in autocommit"
+    );
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        0,
+        "the transactional path must not announce a reconnect attempt"
+    );
+
+    // The session is usable again: the next autocommit query reconnects silently.
+    let mut ok = session.run("RETURN 2 AS n").await.expect("reconnect in autocommit");
+    let rec = ok.records().next().await.expect("ok").expect("row");
+    assert_eq!(rec.fields(), &[Value::Integer(2)]);
+    assert!(
+        attempts.load(Ordering::SeqCst) >= 1,
+        "the autocommit path announces the reconnect"
+    );
+}
