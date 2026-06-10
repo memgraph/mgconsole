@@ -11,7 +11,7 @@
 //! without disturbing the others — there is no pool replacing connections.
 
 use crate::error::Error;
-use crate::session::{ConnectOptions, Session};
+use crate::session::{ConnectOptions, Endpoint, Session};
 
 /// A fixed set of long-lived worker Sessions, each its own Bolt connection.
 pub struct Workers {
@@ -19,22 +19,21 @@ pub struct Workers {
 }
 
 impl Workers {
-    /// Establish `count` worker Sessions against `host:port`, each authenticating
+    /// Establish `count` worker Sessions against `endpoint`, each authenticating
     /// with the same `options` as a single Session. `count` of 0 auto-detects
     /// from available parallelism (the `--workers-number 0` default).
     ///
     /// If any worker fails to connect, the error surfaces and the Sessions opened
     /// so far are dropped (closing their connections).
     pub async fn connect(
-        host: &str,
-        port: u16,
+        endpoint: &Endpoint,
         options: &ConnectOptions,
         count: usize,
     ) -> Result<Self, Error> {
         let count = resolve_count(count);
         let mut sessions = Vec::with_capacity(count);
         for _ in 0..count {
-            sessions.push(Session::connect_with(host, port, options).await?);
+            sessions.push(Session::connect_with(endpoint, options).await?);
         }
         Ok(Self { sessions })
     }

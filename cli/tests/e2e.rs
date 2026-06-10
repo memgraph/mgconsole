@@ -8,7 +8,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use mgconsole_core::Session;
+use mgconsole_core::{Endpoint, Session};
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
@@ -41,7 +41,7 @@ async fn start_memgraph() -> Memgraph {
     // The "running" log line can precede Bolt being ready; retry the handshake so
     // the spawned binary connects on its first attempt.
     for attempt in 0..30 {
-        match Session::connect(&host, port).await {
+        match Session::connect(&Endpoint::new(host.clone(), port)).await {
             Ok(_) => break,
             Err(e) if attempt == 29 => panic!("memgraph never accepted a session: {e}"),
             Err(_) => tokio::time::sleep(Duration::from_millis(300)).await,

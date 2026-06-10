@@ -19,7 +19,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use mgconsole_core::{ConnectOptions, Session};
+use mgconsole_core::{ConnectOptions, Endpoint, Session};
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
@@ -38,6 +38,13 @@ pub struct Memgraph {
     _container: ContainerAsync<GenericImage>,
     pub host: String,
     pub port: u16,
+}
+
+impl Memgraph {
+    /// The endpoint a Session connects to.
+    pub fn endpoint(&self) -> Endpoint {
+        Endpoint::new(self.host.clone(), self.port)
+    }
 }
 
 /// Start a fresh Memgraph and wait until Bolt accepts a Session.
@@ -65,7 +72,7 @@ pub async fn start_memgraph() -> Memgraph {
     };
     // The "running" log line can precede Bolt being ready; retry the handshake.
     for attempt in 0..30 {
-        match Session::connect(&mg.host, mg.port).await {
+        match Session::connect(&mg.endpoint()).await {
             Ok(_) => return mg,
             Err(e) if attempt == 29 => panic!("memgraph never accepted a session: {e}"),
             Err(_) => tokio::time::sleep(Duration::from_millis(300)).await,
@@ -76,7 +83,7 @@ pub async fn start_memgraph() -> Memgraph {
 
 /// Open a Session to a started Memgraph.
 pub async fn connect(mg: &Memgraph) -> Session {
-    Session::connect(&mg.host, mg.port)
+    Session::connect(&mg.endpoint())
         .await
         .expect("connect session")
 }
@@ -154,6 +161,11 @@ pub struct Proxy {
 }
 
 impl Proxy {
+    /// The endpoint a Session connects to (the proxy's own listen address).
+    pub fn endpoint(&self) -> Endpoint {
+        Endpoint::new(self.host.clone(), self.port)
+    }
+
     /// Sever the currently-piped connection (both halves close), while the proxy
     /// keeps listening so a reconnect re-establishes through it.
     pub fn cut(&self) {
@@ -248,7 +260,7 @@ pub async fn start_memgraph_tls() -> Memgraph {
         ..ConnectOptions::default()
     };
     for attempt in 0..30 {
-        match Session::connect_with(&mg.host, mg.port, &tls).await {
+        match Session::connect_with(&mg.endpoint(), &tls).await {
             Ok(_) => return mg,
             Err(e) if attempt == 29 => panic!("memgraph never accepted a TLS session: {e}"),
             Err(_) => tokio::time::sleep(Duration::from_millis(300)).await,

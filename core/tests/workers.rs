@@ -28,7 +28,7 @@ async fn establishes_n_workers_and_runs_a_query_on_each() {
     // A dedicated container: this opens several extra connections of its own.
     let mg = common::start_memgraph().await;
 
-    let mut workers = Workers::connect(&mg.host, mg.port, &ConnectOptions::default(), 4)
+    let mut workers = Workers::connect(&mg.endpoint(), &ConnectOptions::default(), 4)
         .await
         .expect("establish 4 workers");
     // The worker count bounds the number of connections.
@@ -43,7 +43,7 @@ async fn establishes_n_workers_and_runs_a_query_on_each() {
 #[tokio::test]
 async fn zero_workers_auto_detects_at_least_one() {
     let mg = common::start_memgraph().await;
-    let workers = Workers::connect(&mg.host, mg.port, &ConnectOptions::default(), 0)
+    let workers = Workers::connect(&mg.endpoint(), &ConnectOptions::default(), 0)
         .await
         .expect("auto-detect workers");
     assert!(
@@ -60,10 +60,10 @@ async fn a_broken_worker_reconnects_without_disturbing_the_others() {
     let proxy0 = common::start_proxy(mg.host.clone(), mg.port).await;
     let proxy1 = common::start_proxy(mg.host.clone(), mg.port).await;
 
-    let worker0 = Session::connect(&proxy0.host, proxy0.port)
+    let worker0 = Session::connect(&proxy0.endpoint())
         .await
         .expect("worker 0 via proxy 0");
-    let worker1 = Session::connect(&proxy1.host, proxy1.port)
+    let worker1 = Session::connect(&proxy1.endpoint())
         .await
         .expect("worker 1 via proxy 1");
     let mut workers = Workers::from_sessions(vec![worker0, worker1]);

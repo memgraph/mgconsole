@@ -26,9 +26,9 @@ use mgconsole::syntax::{self, Completer};
 use mgconsole::{resolve_password, Cli, ImportMode, OutputFormat};
 use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
-    render_table, run_parallel_ordered, run_parser, run_serial, ConnectOptions, Credentials, Error,
-    ImportFormat, ParserReport, QueryAssembler, ReconnectNotice, Session, TableOptions, Value,
-    Workers, DEFAULT_ROW_CAP,
+    render_table, run_parallel_ordered, run_parser, run_serial, ConnectOptions, Credentials,
+    Endpoint, Error, ImportFormat, ParserReport, QueryAssembler, ReconnectNotice, Session,
+    TableOptions, Value, Workers, DEFAULT_ROW_CAP,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -66,6 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
         use_tls: cli.use_ssl,
     };
+    let endpoint = Endpoint::new(cli.host.clone(), cli.port);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -78,8 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !io::stdin().is_terminal() && cli.import_mode == ImportMode::BatchedParallel {
         let queries = read_queries(io::stdin().lock())?;
         let report = runtime.block_on(async {
-            let workers =
-                Workers::connect(&cli.host, cli.port, &options, cli.workers_number).await?;
+            let workers = Workers::connect(&endpoint, &options, cli.workers_number).await?;
             Ok::<_, Error>(run_parallel_ordered(workers, queries, cli.batch_size as usize).await)
         })?;
         for failure in &report.failures {
@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let mut session = runtime.block_on(Session::connect_with(&cli.host, cli.port, &options))?;
+    let mut session = runtime.block_on(Session::connect_with(&endpoint, &options))?;
     // Surface fatal-error reconnect attempts to the user (slice 14 hook).
     session.on_reconnect(|notice: ReconnectNotice| {
         eprintln!(

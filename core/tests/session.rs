@@ -222,7 +222,7 @@ async fn authenticates_with_valid_credentials_and_rejects_bad_ones() {
         }),
         ..ConnectOptions::default()
     };
-    let mut session = Session::connect_with(&mg.host, mg.port, &good)
+    let mut session = Session::connect_with(&mg.endpoint(), &good)
         .await
         .expect("valid credentials authenticate");
     let mut result = session
@@ -244,7 +244,7 @@ async fn authenticates_with_valid_credentials_and_rejects_bad_ones() {
         }),
         ..ConnectOptions::default()
     };
-    match Session::connect_with(&mg.host, mg.port, &bad).await {
+    match Session::connect_with(&mg.endpoint(), &bad).await {
         Err(Error::Auth(_)) => {}
         Err(other) => panic!("expected an auth error, got {other:?}"),
         Ok(_) => panic!("bad credentials must not authenticate"),
@@ -259,7 +259,7 @@ async fn connects_over_tls_to_an_ssl_configured_container() {
         use_tls: true,
         ..ConnectOptions::default()
     };
-    let mut session = Session::connect_with(&mg.host, mg.port, &tls)
+    let mut session = Session::connect_with(&mg.endpoint(), &tls)
         .await
         .expect("TLS connection established");
     let mut result = session.run("RETURN 42 AS n").await.expect("query over TLS");
@@ -272,7 +272,7 @@ async fn connects_over_tls_to_an_ssl_configured_container() {
     assert_eq!(record.fields(), &[Value::Integer(42)]);
 
     // A plaintext connection to the same (TLS-only) port must fail, not panic.
-    match Session::connect(&mg.host, mg.port).await {
+    match Session::connect(&mg.endpoint()).await {
         Err(_) => {}
         Ok(_) => panic!("plaintext must not connect to a TLS-only Bolt port"),
     }
@@ -357,7 +357,7 @@ async fn reconnects_after_a_dropped_connection() {
     // container is not reachable through a proxy).
     let mg = common::start_memgraph().await;
     let proxy = common::start_proxy(mg.host.clone(), mg.port).await;
-    let mut session = Session::connect(&proxy.host, proxy.port)
+    let mut session = Session::connect(&proxy.endpoint())
         .await
         .expect("connect via proxy");
 
@@ -395,7 +395,7 @@ async fn reconnects_after_a_dropped_connection() {
 async fn exhausting_reconnect_retries_surfaces_a_terminal_error() {
     let mg = common::start_memgraph().await;
     let proxy = common::start_proxy(mg.host.clone(), mg.port).await;
-    let mut session = Session::connect(&proxy.host, proxy.port)
+    let mut session = Session::connect(&proxy.endpoint())
         .await
         .expect("connect via proxy");
 

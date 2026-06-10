@@ -50,6 +50,40 @@ pub struct Credentials {
     pub password: String,
 }
 
+/// The host and port identifying the one Memgraph server a Session connects to:
+/// the *where* of a connection, distinct from the *how* ([`ConnectOptions`]).
+/// `Display` is the single home for the `host:port` rendering.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Endpoint {
+    host: String,
+    port: u16,
+}
+
+impl Endpoint {
+    /// Build an endpoint. Infallible: `u16` already bounds the port, and there is
+    /// no invalid host clap can hand us that warrants a `Result` at every site.
+    pub fn new(host: impl Into<String>, port: u16) -> Self {
+        Endpoint {
+            host: host.into(),
+            port,
+        }
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+impl std::fmt::Display for Endpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
+    }
+}
+
 /// How a [`Session`] is opened: authentication and transport security. Retained
 /// by the Session so a reconnect re-establishes with the same options.
 #[derive(Clone, Default)]
@@ -76,8 +110,8 @@ type ReconnectObserver = Arc<dyn Fn(ReconnectNotice) + Send + Sync>;
 
 pub struct Session {
     conn: SharedConn,
-    host: String,
-    port: u16,
+    /// The server this Session is bound to; reused verbatim on reconnect.
+    endpoint: Endpoint,
     /// Retained so a reconnect re-authenticates identically.
     options: ConnectOptions,
     /// Liveness token of the last result issued, for the one-live-result guard.
@@ -89,8 +123,8 @@ pub struct Session {
 
 impl Session {
     /// Connect unauthenticated over plaintext (HELLO with `scheme: none`).
-    pub async fn connect(host: &str, port: u16) -> Result<Self, Error> {
-        Self::connect_with(host, port, &ConnectOptions::default()).await
+    pub async fn connect(endpoint: &Endpoint) -> Result<Self, Error> {
+        Self::connect_with(endpoint, &ConnectOptions::default()).await
     }
 
     /// Connect to a Memgraph server and perform the Bolt handshake + HELLO,
@@ -101,15 +135,13 @@ impl Session {
     /// rejected password apart from a transport failure; a TLS handshake failure
     /// surfaces as [`Error::Connection`].
     pub async fn connect_with(
-        host: &str,
-        port: u16,
+        endpoint: &Endpoint,
         options: &ConnectOptions,
     ) -> Result<Self, Error> {
-        let conn = establish(host, port, options).await?;
+        let conn = establish(endpoint, options).await?;
         Ok(Self {
             conn,
-            host: host.to_string(),
-            port,
+            endpoint: endpoint.clone(),
             options: options.clone(),
             last: None,
             on_reconnect: None,
@@ -232,7 +264,7 @@ impl Session {
             if attempt > 0 {
                 tokio::time::sleep(RECONNECT_BACKOFF).await;
             }
-            match establish(&self.host, self.port, &self.options).await {
+            match establish(&self.endpoint, &self.options).await {
                 Ok(conn) => {
                     self.conn = conn;
                     self.last = None;
@@ -242,16 +274,16 @@ impl Session {
             }
         }
         Err(Error::Connection(format!(
-            "reconnect to {}:{} failed after {RECONNECT_ATTEMPTS} attempts: {last_err}",
-            self.host, self.port
+            "reconnect to {} failed after {RECONNECT_ATTEMPTS} attempts: {last_err}",
+            self.endpoint
         )))
     }
 }
 
 /// Open a connection and complete the Bolt handshake + HELLO, returning the
 /// shared connection. Shared by the initial connect and by reconnect.
-async fn establish(host: &str, port: u16, options: &ConnectOptions) -> Result<SharedConn, Error> {
-    let stream = transport::connect_stream(host, port, options.use_tls).await?;
+async fn establish(endpoint: &Endpoint, options: &ConnectOptions) -> Result<SharedConn, Error> {
+    let stream = transport::connect_stream(endpoint, options.use_tls).await?;
     let mut client = Client::new(BufStream::new(stream).compat(), &[V4_4, V4_3, V4_2, V4_1])
         .await
         .map_err(|e| Error::Connection(e.to_string()))?;
@@ -288,4 +320,17 @@ fn encode_params(params: &BTreeMap<String, Value>) -> Result<Option<Params>, Err
         .map(|(name, v)| Ok((name.clone(), value::to_bolt(v)?)))
         .collect::<Result<Vec<_>, Error>>()?;
     Ok(Some(Params::from_iter(encoded)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_displays_as_host_colon_port() {
+        let endpoint = Endpoint::new("localhost", 7687);
+        assert_eq!(endpoint.to_string(), "localhost:7687");
+        assert_eq!(endpoint.host(), "localhost");
+        assert_eq!(endpoint.port(), 7687);
+    }
 }

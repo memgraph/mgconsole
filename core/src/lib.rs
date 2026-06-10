@@ -29,7 +29,7 @@ pub use import::{
 };
 pub use parse::QueryAssembler;
 pub use result::{ExecutionInfo, Notification, QueryResult, Record, RecordStream, Summary};
-pub use session::{ConnectOptions, Credentials, ReconnectNotice, Session};
+pub use session::{ConnectOptions, Credentials, Endpoint, ReconnectNotice, Session};
 pub use tabular::{render_table, TableOptions, DEFAULT_ROW_CAP};
 pub use value::Value;
 pub use workers::Workers;

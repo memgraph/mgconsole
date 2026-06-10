@@ -25,6 +25,7 @@ use tokio_rustls::rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme}
 use tokio_rustls::TlsConnector;
 
 use crate::error::Error;
+use crate::session::Endpoint;
 
 /// A Bolt byte transport: plaintext TCP, or the same TCP wrapped in TLS. Both
 /// inner streams are `Unpin`, so this type is `Unpin` and its async-IO impls
@@ -74,20 +75,20 @@ impl AsyncWrite for MaybeTlsStream {
     }
 }
 
-/// Open a TCP connection to `host:port`, wrapping it in TLS when `use_tls`.
+/// Open a TCP connection to the endpoint, wrapping it in TLS when `use_tls`.
 /// A TLS handshake failure surfaces as [`Error::Connection`], never a panic.
 pub(crate) async fn connect_stream(
-    host: &str,
-    port: u16,
+    endpoint: &Endpoint,
     use_tls: bool,
 ) -> Result<MaybeTlsStream, Error> {
-    let tcp = TcpStream::connect((host, port))
+    let tcp = TcpStream::connect((endpoint.host(), endpoint.port()))
         .await
         .map_err(|e| Error::Connection(e.to_string()))?;
     if !use_tls {
         return Ok(MaybeTlsStream::Plain(tcp));
     }
 
+    let host = endpoint.host();
     let connector = TlsConnector::from(Arc::new(tls_config()));
     let server_name = ServerName::try_from(host.to_string())
         .map_err(|e| Error::Connection(format!("invalid TLS server name '{host}': {e}")))?;
