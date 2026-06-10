@@ -8,6 +8,7 @@
 
 use clap::{Parser, ValueEnum};
 
+pub mod history;
 pub mod repl;
 
 /// Output format for a Query result (CONTEXT.md: tabular buffers; csv/jsonl/
