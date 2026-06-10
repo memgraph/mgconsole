@@ -69,6 +69,10 @@ pub struct Cli {
     #[arg(long)]
     pub fit_to_screen: bool,
 
+    /// Syntax-highlight Cypher input using terminal colors.
+    #[arg(long)]
+    pub term_colors: bool,
+
     /// Field delimiter for csv output (a single character).
     #[arg(long, default_value_t = ',')]
     pub csv_delimiter: char,
@@ -170,6 +174,7 @@ mod tests {
         assert!(cli.use_ssl);
         assert_eq!(cli.output_format, OutputFormat::Tabular);
         assert!(!cli.fit_to_screen);
+        assert!(!cli.term_colors);
         assert_eq!(cli.csv_delimiter, ',');
         assert_eq!(cli.csv_escapechar, None);
         assert!(cli.csv_doublequote);
@@ -181,6 +186,12 @@ mod tests {
         assert_eq!(cli.workers_number, 0);
         assert!(!cli.parser_stats);
         cli.validate().expect("defaults validate");
+    }
+
+    #[test]
+    fn term_colors_is_off_by_default_and_opt_in() {
+        assert!(!parse(&[]).expect("bare").term_colors);
+        assert!(parse(&["--term-colors"]).expect("flag").term_colors);
     }
 
     #[test]

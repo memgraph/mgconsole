@@ -7,16 +7,20 @@
 //! `block_on` at this boundary (ADR 0002). Auth/TLS/flag parsing (slices 09–11)
 //! are reused unchanged; the loop itself is covered by unit tests in `repl`.
 
+use std::borrow::Cow;
 use std::io::{self, BufRead, IsTerminal};
 use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::Parser;
+use rustyline::completion::Completer as RustylineCompleter;
+use rustyline::highlight::{CmdKind, Highlighter as RustylineHighlighter};
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
-use rustyline::{Completer, Editor, Helper, Highlighter, Hinter};
+use rustyline::{Context, Editor, Helper, Hinter};
 
 use mgconsole::history::{self, HistoryFile};
 use mgconsole::repl::{self, Line, LineSource, QueryRunner, Rendered, ReplConfig};
+use mgconsole::syntax::{self, Completer};
 use mgconsole::{resolve_password, Cli};
 use mgconsole_core::{
     render_table, ConnectOptions, Credentials, Error, ReconnectNotice, Session, TableOptions, Value,
@@ -88,7 +92,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // scripted input (and slice 25's import) runs without a TTY.
     if io::stdin().is_terminal() {
         let history = open_history(&cli);
-        let mut source = RustylineSource::new(history)?;
+        let mut source = RustylineSource::new(history, cli.term_colors)?;
         repl::run_loop(&mut source, &mut runner, &mut out, &mut err, &config)?;
     } else {
         let stdin = io::stdin();
@@ -119,12 +123,24 @@ fn open_history(cli: &Cli) -> Option<HistoryFile> {
     }
 }
 
-/// rustyline helper whose only custom behaviour is multiline validation: keep
-/// editing until [`repl::is_complete`] reports the buffer is a whole query
-/// (slice 16). Completion/hinting/highlighting are the no-op defaults until
-/// slice 18 fills them in.
-#[derive(Completer, Helper, Highlighter, Hinter)]
-struct MgHelper;
+/// rustyline helper for the REPL: multiline validation (slice 16), static
+/// keyword/function completion, and optional Cypher highlighting (slice 18).
+/// Hinting stays the no-op default.
+#[derive(Helper, Hinter)]
+struct MgHelper {
+    completer: Completer,
+    /// Whether to colour input; gated by `--term-colors` (mgconsole default off).
+    term_colors: bool,
+}
+
+impl MgHelper {
+    fn new(term_colors: bool) -> Self {
+        Self {
+            completer: Completer::with_static_vocabulary(),
+            term_colors,
+        }
+    }
+}
 
 impl Validator for MgHelper {
     fn validate(&self, ctx: &mut ValidationContext) -> rustyline::Result<ValidationResult> {
@@ -133,6 +149,35 @@ impl Validator for MgHelper {
         } else {
             Ok(ValidationResult::Incomplete)
         }
+    }
+}
+
+impl RustylineCompleter for MgHelper {
+    type Candidate = String;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<String>)> {
+        let start = syntax::word_start(line, pos);
+        Ok((start, self.completer.candidates(&line[start..pos])))
+    }
+}
+
+impl RustylineHighlighter for MgHelper {
+    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
+        if self.term_colors {
+            Cow::Owned(syntax::highlight(line))
+        } else {
+            Cow::Borrowed(line)
+        }
+    }
+
+    fn highlight_char(&self, line: &str, _pos: usize, _kind: CmdKind) -> bool {
+        // Re-highlight on every keystroke while colouring is on.
+        self.term_colors && !line.is_empty()
     }
 }
 
@@ -145,9 +190,9 @@ struct RustylineSource {
 }
 
 impl RustylineSource {
-    fn new(history: Option<HistoryFile>) -> rustyline::Result<Self> {
+    fn new(history: Option<HistoryFile>, term_colors: bool) -> rustyline::Result<Self> {
         let mut editor = Editor::new()?;
-        editor.set_helper(Some(MgHelper));
+        editor.set_helper(Some(MgHelper::new(term_colors)));
         if let Some(history) = &history {
             history.load(editor.history_mut());
         }

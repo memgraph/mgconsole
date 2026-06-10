@@ -17,10 +17,10 @@ completion later (out of scope here).
 
 ## Acceptance criteria
 
-- [ ] Cypher input is syntax-highlighted as typed
-- [ ] Completion offers Memgraph keywords, Cypher keywords, and functions from the static tables
-- [ ] Highlighting/completion can be toggled consistently with today's term-colors behaviour
-- [ ] The completer is structured so a live-schema source can be added later without rework
+- [x] Cypher input is syntax-highlighted as typed
+- [x] Completion offers Memgraph keywords, Cypher keywords, and functions from the static tables
+- [x] Highlighting/completion can be toggled consistently with today's term-colors behaviour
+- [x] The completer is structured so a live-schema source can be added later without rework
 
 ## Blocked by
 
