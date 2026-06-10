@@ -22,10 +22,11 @@ use rustyline::{Context, Editor, Helper, Hinter};
 use mgconsole::history::{self, HistoryFile};
 use mgconsole::repl::{self, Line, LineSource, QueryRunner, Rendered, ReplConfig};
 use mgconsole::syntax::{self, Completer};
-use mgconsole::{resolve_password, Cli};
+use mgconsole::{resolve_password, Cli, OutputFormat};
+use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
-    render_table, ConnectOptions, Credentials, Error, ReconnectNotice, Session, TableOptions, Value,
-    DEFAULT_ROW_CAP,
+    render_table, run_serial, ConnectOptions, Credentials, Error, ImportFormat, QueryAssembler,
+    ReconnectNotice, Session, TableOptions, Value, DEFAULT_ROW_CAP,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -76,34 +77,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|(width, _)| width.0);
     let table_options = TableOptions { fit_width };
 
-    let mut runner = SessionRunner {
-        runtime: &runtime,
-        session,
-        table_options,
-        row_cap: DEFAULT_ROW_CAP,
-    };
-    let config = ReplConfig {
-        row_cap: DEFAULT_ROW_CAP,
-    };
-
     let mut out = io::stdout();
     let mut err = io::stderr();
 
-    // A terminal gets the full line editor; a pipe gets a plain reader so
-    // scripted input (and slice 25's import) runs without a TTY.
+    // A terminal gets the interactive REPL (line editor, tabular results); a pipe
+    // gets the non-interactive serial import path (slice 25), which streams output
+    // in the selected format and exits non-zero if any query fails.
     if io::stdin().is_terminal() {
+        let mut runner = SessionRunner {
+            runtime: &runtime,
+            session,
+            table_options,
+            row_cap: DEFAULT_ROW_CAP,
+        };
+        let config = ReplConfig {
+            row_cap: DEFAULT_ROW_CAP,
+        };
         let history = open_history(&cli);
         let mut source = RustylineSource::new(history, cli.term_colors)?;
         repl::run_loop(&mut source, &mut runner, &mut out, &mut err, &config)?;
     } else {
-        let stdin = io::stdin();
-        let mut source = PipeSource {
-            reader: stdin.lock(),
-        };
-        repl::run_loop(&mut source, &mut runner, &mut out, &mut err, &config)?;
+        let queries = read_queries(io::stdin().lock())?;
+        let format = import_format(&cli, table_options);
+        let report = runtime.block_on(run_serial(&mut session, queries, &mut out, &format));
+        // The Core stays diagnostic-free (ADR 0002); the Frontend reports each
+        // failed query and maps any failure to a non-zero exit code.
+        for failure in &report.failures {
+            eprintln!("error: {}: {}", failure.query, failure.error);
+        }
+        if !report.is_success() {
+            std::process::exit(1);
+        }
     }
 
     Ok(())
+}
+
+/// Read a piped query stream into complete queries, in input order. Physical
+/// lines are assembled across `;` boundaries by the Core's [`QueryAssembler`]
+/// (multiline queries, several per line, `;` inside strings/comments). A trailing
+/// query missing its terminating `;` is still run rather than silently dropped.
+fn read_queries(mut reader: impl BufRead) -> io::Result<Vec<String>> {
+    let mut assembler = QueryAssembler::new();
+    let mut queries = Vec::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        queries.extend(assembler.push(&line));
+    }
+    if assembler.has_pending() {
+        queries.push(assembler.pending().trim().to_string());
+    }
+    Ok(queries)
+}
+
+/// Map the CLI output-format flag (plus its csv options and resolved table width)
+/// onto the Core's render format for the serial import path.
+fn import_format(cli: &Cli, table_options: TableOptions) -> ImportFormat {
+    match cli.output_format {
+        OutputFormat::Tabular => ImportFormat::Tabular(table_options),
+        OutputFormat::Csv => ImportFormat::Csv(CsvOptions {
+            delimiter: cli.csv_delimiter as u8,
+            quote: b'"',
+            escape: cli.csv_escapechar.unwrap_or('\\') as u8,
+            double_quote: cli.csv_doublequote,
+        }),
+        OutputFormat::Jsonl => ImportFormat::Jsonl,
+        OutputFormat::Cypherl => ImportFormat::Cypherl,
+    }
 }
 
 /// Resolve and prepare the history file for an interactive session, honouring
@@ -218,22 +262,6 @@ impl LineSource for RustylineSource {
     }
 }
 
-/// Non-interactive input: one physical line per read, EOF at end of stream.
-struct PipeSource<R: BufRead> {
-    reader: R,
-}
-
-impl<R: BufRead> LineSource for PipeSource<R> {
-    fn read(&mut self, _continued: bool) -> io::Result<Line> {
-        let mut buf = String::new();
-        if self.reader.read_line(&mut buf)? == 0 {
-            return Ok(Line::Eof);
-        }
-        let trimmed = buf.trim_end_matches(['\n', '\r']);
-        Ok(Line::Text(trimmed.to_string()))
-    }
-}
-
 /// The production [`QueryRunner`]: runs a query through the Session and renders
 /// it as tabular, timing the round trip. Bounded memory — it buffers at most the
 /// row cap (one extra row is pulled to detect overflow, then dropped via
@@ -299,5 +327,88 @@ impl QueryRunner for SessionRunner<'_> {
                 .and_then(|record| record.into_fields().into_iter().next())
                 .unwrap_or(Value::Null))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn queries_of(input: &str) -> Vec<String> {
+        read_queries(Cursor::new(input)).expect("read")
+    }
+
+    #[test]
+    fn reads_piped_queries_in_input_order() {
+        assert_eq!(
+            queries_of("RETURN 1;\nRETURN 2;\n"),
+            vec!["RETURN 1".to_string(), "RETURN 2".to_string()]
+        );
+    }
+
+    #[test]
+    fn assembles_a_multiline_query_across_lines() {
+        assert_eq!(
+            queries_of("MATCH (n)\nRETURN n;\n"),
+            vec!["MATCH (n)\nRETURN n".to_string()]
+        );
+    }
+
+    #[test]
+    fn splits_several_queries_sharing_a_line() {
+        assert_eq!(
+            queries_of("RETURN 1; RETURN 2;\n"),
+            vec!["RETURN 1".to_string(), "RETURN 2".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_trailing_unterminated_query_is_still_run() {
+        // No final ';' — rather than drop it silently, run the trailing fragment.
+        assert_eq!(queries_of("RETURN 1"), vec!["RETURN 1".to_string()]);
+    }
+
+    #[test]
+    fn an_empty_stream_yields_no_queries() {
+        assert!(queries_of("").is_empty());
+        assert!(queries_of("\n  \n").is_empty());
+    }
+
+    fn cli_with(args: &[&str]) -> Cli {
+        Cli::try_parse_from(std::iter::once("mgconsole").chain(args.iter().copied()))
+            .expect("parse")
+    }
+
+    #[test]
+    fn output_flag_maps_to_the_render_format() {
+        assert!(matches!(
+            import_format(&cli_with(&["--output-format", "jsonl"]), TableOptions::default()),
+            ImportFormat::Jsonl
+        ));
+        assert!(matches!(
+            import_format(&cli_with(&["--output-format", "cypherl"]), TableOptions::default()),
+            ImportFormat::Cypherl
+        ));
+        assert!(matches!(
+            import_format(&cli_with(&[]), TableOptions::default()),
+            ImportFormat::Tabular(_)
+        ));
+    }
+
+    #[test]
+    fn csv_options_carry_the_csv_flags() {
+        let format = import_format(
+            &cli_with(&["--output-format", "csv", "--csv-delimiter", ";"]),
+            TableOptions::default(),
+        );
+        match format {
+            ImportFormat::Csv(opts) => {
+                assert_eq!(opts.delimiter, b';');
+                assert_eq!(opts.quote, b'"');
+                assert!(opts.double_quote);
+            }
+            _ => panic!("expected csv format"),
+        }
     }
 }

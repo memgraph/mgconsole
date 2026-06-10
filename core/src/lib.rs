@@ -9,6 +9,7 @@
 pub mod clause;
 pub mod error;
 pub mod format;
+pub mod import;
 pub mod parse;
 mod proto;
 pub mod render;
@@ -20,6 +21,7 @@ pub mod value;
 
 pub use clause::{scan_clauses, Clause};
 pub use error::Error;
+pub use import::{run_serial, ImportFailure, ImportReport, OutputFormat as ImportFormat};
 pub use parse::QueryAssembler;
 pub use result::{ExecutionInfo, Notification, QueryResult, Record, RecordStream, Summary};
 pub use tabular::{render_table, TableOptions, DEFAULT_ROW_CAP};
