@@ -75,7 +75,7 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
         (areas[0], areas[1], areas[2], areas[3]);
     state.tabbar_area = if show_tabs { tabbar_area } else { Rect::default() };
     if show_tabs {
-        draw_tabbar(frame, tabbar_area, state.active, state.buffer_count());
+        draw_tabbar(frame, tabbar_area, state.active, state.buffer_count(), state.running_buffer);
     }
 
     // Editor pane: a bordered block with the query editor rendered inside it.
@@ -150,11 +150,20 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
 pub const TAB_WIDTH: u16 = 6;
 
 /// Draw the Buffer tab bar (issue 18): one fixed-width numbered tab per Buffer,
-/// the active one reversed. Fixed widths keep click hit-testing trivial.
-fn draw_tabbar(frame: &mut Frame, area: Rect, active: usize, count: usize) {
+/// the active one reversed. Fixed widths keep click hit-testing trivial. The
+/// Buffer that owns the in-flight query (issue 03) is marked with a `•` so a
+/// query running in a background Buffer — and its completion — is not missed.
+fn draw_tabbar(frame: &mut Frame, area: Rect, active: usize, count: usize, running: Option<usize>) {
     let mut spans = Vec::with_capacity(count);
     for index in 0..count {
-        let label = format!("{:^width$}", index + 1, width = TAB_WIDTH as usize);
+        // A running background Buffer carries a leading dot; the label stays the
+        // fixed `TAB_WIDTH` so the click hit-test by integer division still holds.
+        let inner = if running == Some(index) {
+            format!("•{}", index + 1)
+        } else {
+            format!("{}", index + 1)
+        };
+        let label = format!("{inner:^width$}", width = TAB_WIDTH as usize);
         let mut style = Style::default();
         if index == active {
             style = style.add_modifier(Modifier::REVERSED);
@@ -918,6 +927,16 @@ mod tests {
         let multi = render(&mut state);
         assert!(multi.contains('1') && multi.contains('2'), "tab numbers drawn: {multi:?}");
         assert_eq!(state.tabbar_area.height, 1, "tab-bar rect cached for the mouse");
+    }
+
+    #[test]
+    fn the_tab_bar_marks_a_buffer_with_a_running_query() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.new_buffer(); // two buffers, so the tab bar is drawn; active is buffer 2
+        // A query is running in buffer 1 (a background buffer).
+        state.running_buffer = Some(0);
+        let rendered = render(&mut state);
+        assert!(rendered.contains('•'), "the running background buffer is marked: {rendered:?}");
     }
 
     #[test]

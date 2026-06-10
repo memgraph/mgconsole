@@ -160,6 +160,13 @@ pub struct WorkbenchState {
     /// The statement of the in-flight query, carried from submit to the result
     /// entry created when the query starts (for plan detection, slice 14).
     pub running_statement: Option<String>,
+    /// The Buffer that owns the in-flight query (issue 03), as an index into
+    /// [`buffers`](Self::buffers). A live query streams its Records, completion,
+    /// and failure into this Buffer even while another is active, so switching
+    /// Buffers mid-query is always allowed — only a second submit is refused. Set
+    /// when a submission's first statement begins; cleared when the Session falls
+    /// idle. `None` when no query is in flight.
+    pub running_buffer: Option<usize>,
     /// Persisted command history, oldest→newest, for recall (slice 17). Loaded on
     /// start and appended on each submit.
     pub history_entries: Vec<String>,
@@ -251,6 +258,7 @@ impl WorkbenchState {
             params: BTreeMap::new(),
             next_id: 0,
             running_statement: None,
+            running_buffer: None,
             history_entries: Vec::new(),
             recall_index: None,
             recall_saved: None,
@@ -283,10 +291,18 @@ impl WorkbenchState {
         self.history.get_mut(self.view)
     }
 
-    /// The in-flight query's result — always the last entry, since results are
-    /// pushed in order and only one query runs at a time (rows stream into it).
-    pub fn live_mut(&mut self) -> Option<&mut CurrentResult> {
-        self.history.last_mut()
+    /// The result history and view index of the Buffer that owns the in-flight
+    /// query (issue 03): the live top-level fields when that Buffer is active,
+    /// otherwise its parked [`Buffer`]. `None` when no query is in flight. Lets a
+    /// query's Records stream into their origin Buffer regardless of which Buffer
+    /// is shown, so the running query *belongs* to its Buffer (CONTEXT.md).
+    pub fn running_target(&mut self) -> Option<(&mut Vec<CurrentResult>, &mut usize)> {
+        let idx = self.running_buffer?;
+        if idx == self.active {
+            Some((&mut self.history, &mut self.view))
+        } else {
+            self.buffers.get_mut(idx).map(|b| (&mut b.history, &mut b.view))
+        }
     }
 
     /// The number of open Buffers (issue 18); always ≥1.
@@ -321,9 +337,17 @@ impl WorkbenchState {
     /// Open a fresh Buffer after the current one and make it active (issue 18).
     pub fn new_buffer(&mut self) {
         // Park the active Buffer, append an empty one, and check it out.
+        let prior_active = self.active;
         self.buffers[self.active] = self.take_active();
         self.buffers.insert(self.active + 1, Buffer::default());
         self.active += 1;
+        // A live query's origin Buffer (issue 03) keeps pointing at the same
+        // Buffer across the insertion: indices after the insertion point shift up.
+        if let Some(idx) = self.running_buffer {
+            if idx > prior_active {
+                self.running_buffer = Some(idx + 1);
+            }
+        }
         let incoming = std::mem::take(&mut self.buffers[self.active]);
         self.install_active(incoming);
     }

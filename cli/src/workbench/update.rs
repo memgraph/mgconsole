@@ -189,30 +189,37 @@ fn is_current(state: &WorkbenchState, id: u64) -> bool {
     matches!(state.run, RunState::Running { id: running } if running == id)
 }
 
-/// A query began: push a fresh result onto the history stack for its rows to
-/// stream into, and show it (auto-follow the running query).
+/// A query began: push a fresh result onto its *origin* Buffer's history stack
+/// (issue 03) for its rows to stream into, and show it there (auto-follow). The
+/// origin Buffer may not be the active one — the user may have switched away —
+/// so the result lands in the Buffer the query was submitted from, never the
+/// active Buffer's history.
 fn on_started(state: &mut WorkbenchState, id: u64, header: Vec<String>) {
     if !is_current(state, id) {
         return;
     }
     let statement = state.running_statement.clone().unwrap_or_default();
-    state.history.push(CurrentResult::new(statement, header));
-    state.view = state.history.len() - 1;
+    if let Some((history, view)) = state.running_target() {
+        history.push(CurrentResult::new(statement, header));
+        *view = history.len() - 1;
+    }
 }
 
-/// A record streamed in: append it to the live (last) result, up to the row-cap
-/// backstop (beyond which rows are dropped and the result marked truncated —
-/// a memory guard, not a usability limit).
+/// A record streamed in: append it to the origin Buffer's live (last) result, up
+/// to the row-cap backstop (beyond which rows are dropped and the result marked
+/// truncated — a memory guard, not a usability limit).
 fn on_record(state: &mut WorkbenchState, id: u64, record: Record) {
     if !is_current(state, id) {
         return;
     }
     let cap = state.config.row_cap;
-    if let Some(result) = state.live_mut() {
-        if result.rows.len() < cap {
-            result.rows.push(record);
-        } else {
-            result.truncated = true;
+    if let Some((history, _)) = state.running_target() {
+        if let Some(result) = history.last_mut() {
+            if result.rows.len() < cap {
+                result.rows.push(record);
+            } else {
+                result.truncated = true;
+            }
         }
     }
 }
@@ -229,22 +236,26 @@ fn on_completed(
     if !is_current(state, id) {
         return Vec::new();
     }
-    let rows = state.history.last().map_or(0, |result| result.rows.len());
     // Surface a notification count in the status line (full detail in the
-    // summary drawer, slice 18); the drawer reads the stored Summary.
+    // summary drawer, slice 18); the drawer reads the stored Summary. Computed
+    // before the summary is moved into the origin Buffer's result.
     let note = match summary.notifications.len() {
         0 => String::new(),
         1 => " · 1 notification".to_string(),
         n => format!(" · {n} notifications"),
     };
-    state.status.message = format!("{}{note}", format_summary(rows, elapsed));
-    if let Some(result) = state.live_mut() {
-        result.summary = Some(summary);
-        // An EXPLAIN/PROFILE result renders as an operator tree, not a table.
-        if is_plan_query(&result.statement) {
-            result.plan = Some(Plan::parse(&result.rows));
+    let mut rows = 0;
+    if let Some((history, _)) = state.running_target() {
+        if let Some(result) = history.last_mut() {
+            rows = result.rows.len();
+            result.summary = Some(summary);
+            // An EXPLAIN/PROFILE result renders as an operator tree, not a table.
+            if is_plan_query(&result.statement) {
+                result.plan = Some(Plan::parse(&result.rows));
+            }
         }
     }
+    state.status.message = format!("{}{note}", format_summary(rows, elapsed));
     advance(state)
 }
 
@@ -260,6 +271,7 @@ fn on_failed(state: &mut WorkbenchState, id: u64, error: &Error) -> Vec<Effect> 
         state.source_halt = false;
         state.pending.clear();
         state.run = RunState::Idle;
+        state.running_buffer = None;
         return Vec::new();
     }
     advance(state)
@@ -272,6 +284,8 @@ fn advance(state: &mut WorkbenchState) -> Vec<Effect> {
         start_query(state, next)
     } else {
         state.run = RunState::Idle;
+        // The whole submission's batch is done: release its origin Buffer (issue 03).
+        state.running_buffer = None;
         // The `:source` batch (issue 10) finished cleanly; leave stop-on-error mode.
         state.source_halt = false;
         Vec::new()
@@ -279,12 +293,16 @@ fn advance(state: &mut WorkbenchState) -> Vec<Effect> {
 }
 
 /// Begin running `query`: stamp it with a fresh id, mark the Session busy, and
-/// emit the run effect with the bound parameters.
+/// emit the run effect with the bound parameters. The first statement of a
+/// submission claims its origin Buffer (issue 03); the rest of the batch keeps it.
 fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
     let id = state.next_id;
     state.next_id += 1;
     state.run = RunState::Running { id };
     state.spinner = 0;
+    if state.running_buffer.is_none() {
+        state.running_buffer = Some(state.active);
+    }
     state.status.message = "running…".to_string();
     state.running_statement = Some(query.clone());
     // Remember the last query so `:watch` with no query can reuse it (issue 11).
@@ -302,12 +320,17 @@ fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
 /// ADR 0005). When idle, abandon the typed buffer (the REPL's interrupt).
 fn interrupt(state: &mut WorkbenchState) -> Vec<Effect> {
     if let RunState::Running { id } = state.run {
-        let rows = state.history.last().map_or(0, |result| result.rows.len());
-        if let Some(result) = state.live_mut() {
-            result.partial = true;
+        // Mark the origin Buffer's partial result, even if another Buffer is shown.
+        let mut rows = 0;
+        if let Some((history, _)) = state.running_target() {
+            if let Some(result) = history.last_mut() {
+                rows = result.rows.len();
+                result.partial = true;
+            }
         }
         state.pending.clear();
         state.run = RunState::Idle;
+        state.running_buffer = None;
         state.status.message = format!(
             "cancelled — {rows} row{} (partial)",
             if rows == 1 { "" } else { "s" }
@@ -421,12 +444,9 @@ fn update_mouse(state: &mut WorkbenchState, mouse: MouseEvent) -> Vec<Effect> {
 
 /// Switch to the Buffer whose tab a click landed on (issue 18). Tabs are
 /// fixed-width, so the index is `(click - bar.x) / TAB_WIDTH`; a click past the
-/// last tab is ignored. Refused while a query is live (as the gesture is).
+/// last tab is ignored. Allowed while a query is live (issue 03): the live query
+/// streams into its origin Buffer regardless of which is shown.
 fn click_tab(state: &mut WorkbenchState, col: u16) {
-    if matches!(state.run, RunState::Running { .. }) {
-        state.status.message = "session busy — cancel first".to_string();
-        return;
-    }
     let offset = col.saturating_sub(state.tabbar_area.x);
     let index = (offset / super::draw::TAB_WIDTH) as usize;
     if index < state.buffer_count() && index != state.active {
@@ -543,15 +563,12 @@ fn handle_gesture(state: &mut WorkbenchState, gesture: Gesture) -> Vec<Effect> {
             open_search(state);
             Vec::new()
         }
-        // Buffer (tab) navigation gestures (issue 18). Refused while a query is
-        // live, since the one live result streams into the active Buffer —
-        // switching mid-query would misroute its rows (relaxed in issue 03).
+        // Buffer (tab) navigation gestures (issue 18). Allowed while a query is
+        // live (issue 03): a live query belongs to its origin Buffer and streams
+        // there regardless of which Buffer is shown, so switching to read another
+        // line of inquiry never misroutes — only a second submit is refused.
         // Closing a Buffer is the `:close` command, not a gesture (CONTEXT.md).
         Gesture::NewBuffer | Gesture::NextBuffer | Gesture::PrevBuffer => {
-            if matches!(state.run, RunState::Running { .. }) {
-                state.status.message = "session busy — cancel first".to_string();
-                return Vec::new();
-            }
             match gesture {
                 Gesture::NewBuffer => {
                     state.new_buffer();
@@ -1138,6 +1155,9 @@ fn start_query_to_file(
     state.next_id += 1;
     state.run = RunState::Running { id };
     state.spinner = 0;
+    if state.running_buffer.is_none() {
+        state.running_buffer = Some(state.active);
+    }
     state.status.message = format!("running… → {} ({format})", path.display());
     state.running_statement = Some(query.clone());
     state.last_query = Some(query.clone());
@@ -3077,13 +3097,68 @@ mod tests {
     }
 
     #[test]
-    fn buffer_management_is_refused_while_a_query_is_live() {
+    fn a_second_submit_is_refused_while_a_query_is_live() {
         let mut s = wb();
         submit_query(&mut s, "RETURN 1;");
-        // A new-buffer gesture mid-query is refused (one live result, ADR 0006).
-        new_buffer(&mut s);
-        assert_eq!(s.buffer_count(), 1, "no buffer opened while busy");
+        // A second submit is still refused (one live result, ADR 0005)…
+        type_str(&mut s, "RETURN 2;");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(effects.is_empty(), "second submit emits no run effect");
         assert!(s.status.message.contains("busy"));
+    }
+
+    #[test]
+    fn buffer_navigation_is_allowed_while_a_query_is_live() {
+        let mut s = wb();
+        submit_query(&mut s, "RETURN 1;");
+        // …but opening / switching Buffers is allowed (issue 03): the live query
+        // belongs to its origin Buffer and streams there regardless of the view.
+        new_buffer(&mut s);
+        assert_eq!(s.buffer_count(), 2, "a new buffer opens while a query runs");
+        assert_eq!(s.active, 1, "the new buffer is active");
+        assert_eq!(s.running_buffer, Some(0), "the query still belongs to buffer 1");
+    }
+
+    #[test]
+    fn a_live_query_streams_into_its_origin_buffer_not_the_active_one() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "RETURN 1;");
+        // Switch to a fresh buffer before the query even starts.
+        new_buffer(&mut s);
+        assert_eq!(s.active, 1);
+        // The lifecycle events arrive while buffer 2 is active; they must land in
+        // buffer 1 (the origin), never the active buffer's history.
+        update(&mut s, Event::QueryStarted { id, header: vec!["n".to_string()] });
+        update(&mut s, Event::RecordArrived { id, record: one_row() });
+        update(
+            &mut s,
+            Event::QueryCompleted { id, summary: Summary::default(), elapsed: Duration::from_millis(1) },
+        );
+        assert!(s.history.is_empty(), "the active (background) buffer's history is untouched");
+        assert!(matches!(s.run, RunState::Idle), "the query completed");
+        assert!(s.running_buffer.is_none(), "the origin buffer is released on idle");
+        // Switching back to the origin buffer shows the streamed result.
+        prev_buffer(&mut s);
+        assert_eq!(s.active, 0);
+        assert_eq!(s.history.len(), 1, "buffer 1 holds the completed result");
+        assert_eq!(s.history[0].rows.len(), 1, "its row streamed in while it was a background buffer");
+    }
+
+    #[test]
+    fn a_tab_click_is_allowed_while_a_query_is_live() {
+        let mut s = wb();
+        new_buffer(&mut s); // two buffers; active is buffer 2
+        let id = submit_query(&mut s, "RETURN 1;");
+        assert_eq!(s.running_buffer, Some(1));
+        s.tabbar_area = Rect::new(0, 0, super::super::draw::TAB_WIDTH * 2, 1);
+        click(&mut s, 1, 0); // click buffer 1's tab while buffer 2's query runs
+        assert_eq!(s.active, 0, "switched to buffer 1 mid-query");
+        // The query's records still route to buffer 2.
+        update(&mut s, Event::QueryStarted { id, header: vec!["n".to_string()] });
+        update(&mut s, Event::RecordArrived { id, record: one_row() });
+        assert!(s.history.is_empty(), "buffer 1 (now active) is untouched by buffer 2's query");
+        next_buffer(&mut s);
+        assert_eq!(s.history.len(), 1, "buffer 2 received its result");
     }
 
     #[test]

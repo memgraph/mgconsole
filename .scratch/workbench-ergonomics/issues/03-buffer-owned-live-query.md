@@ -1,6 +1,6 @@
 # 03 — Buffer-owned live query: switch-to-view while running
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
