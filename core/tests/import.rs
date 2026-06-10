@@ -170,6 +170,47 @@ async fn vertices_first_ordering_imports_a_mixed_graph_correctly() {
     );
 }
 
+#[tokio::test]
+async fn retry_resolves_serialization_conflicts_in_transactional_mode() {
+    // Default (transactional) storage mode: concurrent read-modify-write on the
+    // same node provokes serialization conflicts. Retry-with-backoff must resolve
+    // them so the import still completes correctly — without it, conflicted
+    // queries would be lost and the final count would fall short.
+    let mg = common::start_memgraph().await;
+    let mut setup = common::connect(&mg).await;
+    setup
+        .run("CREATE (:Counter {n: 0})")
+        .await
+        .expect("seed counter")
+        .records()
+        .discard()
+        .await
+        .expect("commit seed");
+
+    // Many increments of the *same* property, run with maximum concurrency
+    // (batch-size 1 over several workers) to force conflicts.
+    let increments = 40;
+    let queries: Vec<String> = (0..increments)
+        .map(|_| "MATCH (c:Counter) SET c.n = c.n + 1".to_string())
+        .collect();
+
+    let workers = Workers::connect(&mg.host, mg.port, &Default::default(), 4)
+        .await
+        .expect("4 workers");
+    let report = run_parallel(workers, queries, 1).await;
+
+    assert!(
+        report.is_success(),
+        "retry resolved every conflict; no query was abandoned: {report:?}"
+    );
+    assert_eq!(report.executed, increments as usize);
+    // Every increment applied exactly once — none lost to an unretried conflict.
+    assert_eq!(
+        scalar(&mut setup, "MATCH (c:Counter) RETURN c.n").await,
+        increments
+    );
+}
+
 /// Run a query expected to return a single integer scalar.
 async fn scalar(session: &mut Session, query: &str) -> i64 {
     let mut result = session.run(query).await.expect("scalar query");

@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::Mutex;
 
@@ -273,7 +274,7 @@ async fn run_phase(sessions: Vec<Session>, batches: Vec<Batch>) -> (Vec<Session>
             // Pull one Batch at a time until the shared queue drains.
             while let Some(batch) = queue.lock().await.pop_front() {
                 for query in batch.queries {
-                    match run_write(&mut session, &query).await {
+                    match run_write_retrying(&mut session, &query).await {
                         Ok(()) => outcome.executed += 1,
                         Err(error) => outcome.failures.push(ImportFailure { query, error }),
                     }
@@ -339,6 +340,53 @@ async fn run_write(session: &mut Session, query: &str) -> Result<(), Error> {
     let mut result = session.run(query).await?;
     result.records().discard().await?;
     Ok(())
+}
+
+/// How many times a query is attempted before a serialization conflict is given
+/// up on, and the base of the exponential backoff between attempts.
+const MAX_ATTEMPTS: usize = 8;
+const BACKOFF_BASE: Duration = Duration::from_millis(10);
+const BACKOFF_CAP: Duration = Duration::from_millis(200);
+
+/// Run an import query, retrying on a **serialization conflict** with bounded,
+/// exponentially-backed-off attempts (slice 32).
+///
+/// The retry decision keys off the *specific* conflict leaf code via
+/// [`is_retryable_conflict`] — NOT the broad `Memgraph.TransientError.*` tier,
+/// which the ADR-0001 spike found wrapping a permanent validation error (slice
+/// 14). A non-conflict error returns immediately; a conflict that survives every
+/// attempt surfaces as the last error, so the Frontend reports it.
+///
+/// Each query runs as its own transaction (autocommit `RUN`), so the conflict's
+/// atomic unit is the query: a conflict aborts and commits nothing, making a bare
+/// re-run safe — re-running a whole Batch would instead duplicate the queries
+/// that already committed.
+async fn run_write_retrying(session: &mut Session, query: &str) -> Result<(), Error> {
+    let mut attempt = 1;
+    loop {
+        match run_write(session, query).await {
+            Ok(()) => return Ok(()),
+            Err(error) if is_retryable_conflict(&error) && attempt < MAX_ATTEMPTS => {
+                tokio::time::sleep(backoff(attempt)).await;
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Whether an error is a serialization conflict worth retrying. True only for the
+/// specific conflict leaf codes (slice 14's [`crate::error::QueryError::is_retryable`]),
+/// so a non-conflict error — even one carrying a `TransientError` tier code — is
+/// not retried.
+fn is_retryable_conflict(error: &Error) -> bool {
+    matches!(error, Error::Query(e) if e.is_retryable())
+}
+
+/// Exponential backoff for the `attempt`-th retry (1-based), capped.
+fn backoff(attempt: usize) -> Duration {
+    let shift = attempt.min(20) as u32 - 1;
+    BACKOFF_BASE.saturating_mul(1u32 << shift).min(BACKOFF_CAP)
 }
 
 #[cfg(test)]
@@ -426,6 +474,39 @@ mod tests {
             classify_phase("MATCH (a), (b) CREATE (a)-[:KNOWS]->(b)"),
             Phase::Edges
         );
+    }
+
+    use crate::error::QueryError;
+
+    fn query_error(code: &str) -> Error {
+        Error::Query(QueryError {
+            code: code.to_string(),
+            message: "boom".to_string(),
+        })
+    }
+
+    #[test]
+    fn only_the_specific_conflict_leaf_is_retryable() {
+        // The serialization-conflict leaf is retried...
+        assert!(is_retryable_conflict(&query_error(
+            "Memgraph.TransientError.MemgraphError.ConflictingTransactionsError"
+        )));
+        // ...but a permanent error under the SAME TransientError tier is NOT
+        // (slice 14: the tier does not imply retryable).
+        assert!(!is_retryable_conflict(&query_error(
+            "Memgraph.TransientError.MemgraphError.MemgraphError"
+        )));
+        // A non-query (transport) error is never a conflict retry.
+        assert!(!is_retryable_conflict(&Error::Connection("dead".into())));
+    }
+
+    #[test]
+    fn backoff_grows_then_caps() {
+        assert_eq!(backoff(1), BACKOFF_BASE);
+        assert_eq!(backoff(2), BACKOFF_BASE * 2);
+        assert_eq!(backoff(3), BACKOFF_BASE * 4);
+        // Far-out attempts saturate at the cap rather than overflowing.
+        assert_eq!(backoff(100), BACKOFF_CAP);
     }
 
     #[test]
