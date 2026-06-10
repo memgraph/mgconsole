@@ -5,6 +5,13 @@
 //! input. A `;` inside a string literal (`'…'`, `"…"`), a quoted identifier
 //! (`` `…` ``), or a comment (`// …`, `/* … */`) does not terminate. Pure — no
 //! database.
+//!
+//! The string/comment awareness comes from the Core [`lexer`](crate::lexer)
+//! (ADR 0008 deepening, slice 06): a terminator is a `;` `Punct` token, since a
+//! `;` inside a string or comment is part of that String/Comment token and never
+//! surfaces as `Punct`. One lexical state machine, not a second copy here.
+
+use crate::lexer::{lex, TokenKind};
 
 /// Accumulates input across feeds and emits complete queries as they terminate.
 #[derive(Debug, Default)]
@@ -37,88 +44,23 @@ impl QueryAssembler {
     }
 }
 
-#[derive(Clone, Copy)]
-enum State {
-    Normal,
-    Single,
-    Double,
-    Backtick,
-    LineComment,
-    BlockComment,
-}
-
-/// Scan a buffer into (complete queries, unterminated remainder). Empty queries
-/// (e.g. between `;;`) are skipped.
+/// Scan a buffer into (complete queries, unterminated remainder), splitting on
+/// each `;` `Punct` token from the Core lexer. A `;` inside a string or comment
+/// is part of a String/Comment token, not `Punct`, so it never terminates. Empty
+/// queries (e.g. between `;;`) are skipped.
 fn scan(buf: &str) -> (Vec<String>, String) {
-    use State::{Backtick, BlockComment, Double, LineComment, Normal, Single};
-
-    let chars: Vec<char> = buf.chars().collect();
     let mut complete = Vec::new();
-    let mut state = Normal;
-    let mut start = 0;
-    let mut i = 0;
-
-    while i < chars.len() {
-        let c = chars[i];
-        match state {
-            Normal => match c {
-                '\'' => state = Single,
-                '"' => state = Double,
-                '`' => state = Backtick,
-                '/' if chars.get(i + 1) == Some(&'/') => {
-                    state = LineComment;
-                    i += 1;
-                }
-                '/' if chars.get(i + 1) == Some(&'*') => {
-                    state = BlockComment;
-                    i += 1;
-                }
-                ';' => {
-                    let q: String = chars[start..i].iter().collect();
-                    let trimmed = q.trim();
-                    if !trimmed.is_empty() {
-                        complete.push(trimmed.to_string());
-                    }
-                    start = i + 1;
-                }
-                _ => {}
-            },
-            Single => match c {
-                '\\' => i += 1, // skip escaped char
-                '\'' => state = Normal,
-                _ => {}
-            },
-            Double => match c {
-                '\\' => i += 1,
-                '"' => state = Normal,
-                _ => {}
-            },
-            Backtick => {
-                if c == '`' {
-                    if chars.get(i + 1) == Some(&'`') {
-                        i += 1; // doubled backtick escapes a backtick
-                    } else {
-                        state = Normal;
-                    }
-                }
+    let mut start = 0; // byte index where the current query begins
+    for token in lex(buf) {
+        if token.kind == TokenKind::Punct && token.text(buf) == ";" {
+            let query = buf[start..token.span.start].trim();
+            if !query.is_empty() {
+                complete.push(query.to_string());
             }
-            LineComment => {
-                if c == '\n' {
-                    state = Normal;
-                }
-            }
-            BlockComment => {
-                if c == '*' && chars.get(i + 1) == Some(&'/') {
-                    state = Normal;
-                    i += 1;
-                }
-            }
+            start = token.span.end;
         }
-        i += 1;
     }
-
-    let remainder: String = chars[start..].iter().collect();
-    (complete, remainder)
+    (complete, buf[start..].to_string())
 }
 
 #[cfg(test)]

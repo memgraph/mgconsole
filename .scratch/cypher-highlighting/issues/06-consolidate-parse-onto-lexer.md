@@ -1,6 +1,6 @@
 # 06 — Consolidate `parse.rs` onto the Core lexer
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
