@@ -23,7 +23,7 @@ use rustyline::{Context, Editor, Helper, Hinter};
 use mgconsole::history::{self, HistoryFile};
 use mgconsole::repl::{self, Line, LineSource, QueryRunner, Rendered, ReplConfig};
 use mgconsole::syntax::{self, Completer};
-use mgconsole::{resolve_password, Cli, ImportMode, OutputFormat};
+use mgconsole::{no_color_active, resolve_password, Cli, ImportMode, OutputFormat};
 use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
     render_table, run_parallel_ordered, run_parser, run_serial, ConnectOptions, Credentials,
@@ -126,7 +126,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             row_cap: DEFAULT_ROW_CAP,
         };
         let history = open_history(&cli);
-        let mut source = RustylineSource::new(history, cli.term_colors)?;
+        // Resolve input colouring here, at the IO boundary: the REPL branch is
+        // already an interactive terminal, and NO_COLOR is read from the env.
+        let colorize = cli.color.resolve(
+            no_color_active(std::env::var("NO_COLOR").ok().as_deref()),
+            io::stdin().is_terminal(),
+        );
+        let mut source = RustylineSource::new(history, colorize)?;
         repl::run_loop(&mut source, &mut runner, &mut out, &mut err, &config)?;
     } else {
         let queries = read_queries(io::stdin().lock())?;
@@ -243,15 +249,15 @@ fn open_history(cli: &Cli) -> Option<HistoryFile> {
 #[derive(Helper, Hinter)]
 struct MgHelper {
     completer: Completer,
-    /// Whether to colour input; gated by `--term-colors` (mgconsole default off).
-    term_colors: bool,
+    /// Whether to colour input; resolved from `--color`/`NO_COLOR` (ADR 0009).
+    colorize: bool,
 }
 
 impl MgHelper {
-    fn new(term_colors: bool) -> Self {
+    fn new(colorize: bool) -> Self {
         Self {
             completer: Completer::with_static_vocabulary(),
-            term_colors,
+            colorize,
         }
     }
 }
@@ -282,7 +288,7 @@ impl RustylineCompleter for MgHelper {
 
 impl RustylineHighlighter for MgHelper {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
-        if self.term_colors {
+        if self.colorize {
             Cow::Owned(syntax::highlight(line))
         } else {
             Cow::Borrowed(line)
@@ -291,7 +297,7 @@ impl RustylineHighlighter for MgHelper {
 
     fn highlight_char(&self, line: &str, _pos: usize, _kind: CmdKind) -> bool {
         // Re-highlight on every keystroke while colouring is on.
-        self.term_colors && !line.is_empty()
+        self.colorize && !line.is_empty()
     }
 }
 
@@ -304,9 +310,9 @@ struct RustylineSource {
 }
 
 impl RustylineSource {
-    fn new(history: Option<HistoryFile>, term_colors: bool) -> rustyline::Result<Self> {
+    fn new(history: Option<HistoryFile>, colorize: bool) -> rustyline::Result<Self> {
         let mut editor = Editor::new()?;
-        editor.set_helper(Some(MgHelper::new(term_colors)));
+        editor.set_helper(Some(MgHelper::new(colorize)));
         if let Some(history) = &history {
             history.load(editor.history_mut());
         }

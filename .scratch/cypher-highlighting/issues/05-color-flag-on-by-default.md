@@ -1,6 +1,6 @@
 # 05 — `--color` flag, on by default
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

@@ -24,6 +24,39 @@ pub enum OutputFormat {
     Cypherl,
 }
 
+/// When to colour interactive input (ADR 0009). `auto` — the default — means on
+/// for an interactive terminal; `always`/`never` force the decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[value(rename_all = "lower")]
+pub enum ColorChoice {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl ColorChoice {
+    /// Resolve whether to colour, given whether `NO_COLOR` is in effect and
+    /// whether the session is an interactive terminal. Precedence (ADR 0009): an
+    /// explicit `--color` beats `NO_COLOR`, which beats the `auto` default — so
+    /// `always` ignores `NO_COLOR`, `never` always wins, and `auto` colours only
+    /// an interactive terminal with `NO_COLOR` unset.
+    pub fn resolve(self, no_color: bool, interactive: bool) -> bool {
+        match self {
+            ColorChoice::Always => true,
+            ColorChoice::Never => false,
+            ColorChoice::Auto => !no_color && interactive,
+        }
+    }
+}
+
+/// Whether the `NO_COLOR` convention is in effect for the given environment
+/// value: the variable is present and non-empty (an empty value reads as unset,
+/// the common practical interpretation).
+pub fn no_color_active(no_color_var: Option<&str>) -> bool {
+    no_color_var.is_some_and(|v| !v.is_empty())
+}
+
 /// The discipline by which a batch of queries from a file is run (CONTEXT.md
 /// "Import mode").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -72,9 +105,10 @@ pub struct Cli {
     #[arg(long)]
     pub fit_to_screen: bool,
 
-    /// Syntax-highlight Cypher input using terminal colors.
-    #[arg(long)]
-    pub term_colors: bool,
+    /// When to syntax-highlight Cypher input: auto (on for an interactive
+    /// terminal), always, or never. Honours the `NO_COLOR` convention.
+    #[arg(long, value_enum, default_value_t = ColorChoice::Auto)]
+    pub color: ColorChoice,
 
     /// Field delimiter for csv output (a single character).
     #[arg(long, default_value_t = ',')]
@@ -175,7 +209,7 @@ mod tests {
         assert!(cli.use_ssl);
         assert_eq!(cli.output_format, OutputFormat::Tabular);
         assert!(!cli.fit_to_screen);
-        assert!(!cli.term_colors);
+        assert_eq!(cli.color, ColorChoice::Auto);
         assert_eq!(cli.csv_delimiter, ',');
         assert_eq!(cli.csv_escapechar, None);
         assert!(cli.csv_doublequote);
@@ -190,9 +224,43 @@ mod tests {
     }
 
     #[test]
-    fn term_colors_is_off_by_default_and_opt_in() {
-        assert!(!parse(&[]).expect("bare").term_colors);
-        assert!(parse(&["--term-colors"]).expect("flag").term_colors);
+    fn color_defaults_to_auto_and_accepts_each_choice() {
+        // ADR 0009: colour is on by default (auto), no flag needed — the inverse
+        // of mgconsole's old opt-in `--term-colors`.
+        assert_eq!(parse(&[]).expect("bare").color, ColorChoice::Auto);
+        assert_eq!(
+            parse(&["--color", "always"]).expect("always").color,
+            ColorChoice::Always
+        );
+        assert_eq!(
+            parse(&["--color", "never"]).expect("never").color,
+            ColorChoice::Never
+        );
+        assert_eq!(
+            parse(&["--color", "auto"]).expect("auto").color,
+            ColorChoice::Auto
+        );
+        // The old boolean flag is gone.
+        assert!(parse(&["--term-colors"]).is_err());
+    }
+
+    #[test]
+    fn color_resolution_follows_the_precedence_rules() {
+        // auto: on for an interactive terminal with NO_COLOR unset...
+        assert!(ColorChoice::Auto.resolve(false, true));
+        // ...off when NO_COLOR is set, or when not interactive.
+        assert!(!ColorChoice::Auto.resolve(true, true));
+        assert!(!ColorChoice::Auto.resolve(false, false));
+        // always beats NO_COLOR; never always wins.
+        assert!(ColorChoice::Always.resolve(true, false));
+        assert!(!ColorChoice::Never.resolve(false, true));
+    }
+
+    #[test]
+    fn no_color_is_active_only_when_present_and_non_empty() {
+        assert!(!no_color_active(None));
+        assert!(!no_color_active(Some("")));
+        assert!(no_color_active(Some("1")));
     }
 
     #[test]
