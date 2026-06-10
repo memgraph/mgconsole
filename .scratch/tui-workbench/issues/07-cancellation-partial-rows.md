@@ -1,6 +1,6 @@
 # 07 — Cancellation (Ctrl-C → RESET) + partial-rows-labelled
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -17,14 +17,17 @@ running/elapsed indicator while in flight.
 
 ## Acceptance criteria
 
-- [ ] Ctrl-C during a query cancels it and the Session survives, ready for the
-      next query (RESET recovery, ADR 0005).
-- [ ] Rows streamed before the cancel stay on screen, scrollable; the result is
-      clearly labelled partial with its count.
-- [ ] A running indicator (spinner / elapsed) is shown while a query is in
-      flight and clears on completion or cancel.
-- [ ] The cancel-event handling (state transition + partial label) is covered at
-      the reducer seam.
+- [x] Ctrl-C during a query cancels it and the Session survives, ready for the
+      next query (RESET recovery, ADR 0005). (`interrupt` emits `Effect::Cancel`;
+      the edge aborts the task — dropping the stream — so the next run RESETs.)
+- [x] Rows streamed before the cancel stay on screen, scrollable; the result is
+      clearly labelled partial with its count. (`CurrentResult::partial`; the pane
+      title and status both show "partial" and the count; rows are kept.)
+- [x] A running indicator (spinner / elapsed) is shown while a query is in
+      flight and clears on completion or cancel. (braille spinner advanced by a
+      120ms `Tick`, shown only while `Running`.)
+- [x] The cancel-event handling (state transition + partial label) is covered at
+      the reducer seam. (cancel/partial, batch-drop, idle-abandon, spinner tests.)
 
 ## Blocked by
 

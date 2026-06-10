@@ -26,6 +26,9 @@ pub struct WorkbenchState {
     /// The result currently on screen (rows stream into it); `None` before the
     /// first query. Slice 10 turns this into a history stack.
     pub result: Option<CurrentResult>,
+    /// A spinner frame counter, advanced by ticks while a query is in flight, so
+    /// the draw can show a running indicator (slice 07).
+    pub spinner: usize,
     /// The results-table viewport height (data rows) from the last draw, cached so
     /// the reducer can page and keep the selection visible without re-deriving the
     /// layout. The draw is the only writer.
@@ -52,6 +55,7 @@ impl WorkbenchState {
             run: RunState::Idle,
             pending: VecDeque::new(),
             result: None,
+            spinner: 0,
             viewport_rows: 0,
             params: BTreeMap::new(),
             next_id: 0,
@@ -88,6 +92,9 @@ pub struct CurrentResult {
     /// Set when the row-cap backstop was hit and further rows were dropped (a
     /// memory guard, not a usability limit — the cap is high and configurable).
     pub truncated: bool,
+    /// Set when the query was cancelled mid-stream (slice 07): the rows present
+    /// are a partial answer, kept on screen and labelled as such.
+    pub partial: bool,
     /// The trailing summary, available once the query completes (slice 18).
     pub summary: Option<Summary>,
 }
@@ -181,6 +188,11 @@ impl EditorState {
     /// The whole buffer as one string, physical lines joined by `\n`.
     pub fn buffer(&self) -> String {
         self.textarea.lines().join("\n")
+    }
+
+    /// Discard the buffer back to empty (Ctrl-C abandons typing when idle).
+    pub fn clear(&mut self) {
+        self.textarea = TextArea::default();
     }
 
     /// The physical lines, for the draw edge to render with per-token

@@ -13,7 +13,10 @@ use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use ratatui::Frame;
 
 use super::highlight;
-use super::state::{CurrentResult, Focus, WorkbenchState};
+use super::state::{CurrentResult, Focus, RunState, WorkbenchState};
+
+/// Braille spinner frames for the running-query indicator (slice 07).
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 /// Border colour for a focused pane vs. an unfocused one.
 fn border_style(focused: bool) -> Style {
@@ -54,10 +57,11 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     let results_focused = matches!(state.focus, Focus::Results);
     let title = match state.result.as_ref() {
         Some(result) => format!(
-            "Results ({} row{}{})",
+            "Results ({} row{}{}{})",
             result.rows.len(),
             if result.rows.len() == 1 { "" } else { "s" },
-            if result.truncated { ", truncated" } else { "" }
+            if result.truncated { ", truncated" } else { "" },
+            if result.partial { ", partial" } else { "" }
         ),
         None => "Results".to_string(),
     };
@@ -147,13 +151,20 @@ fn draw_result(frame: &mut Frame, area: Rect, result: &CurrentResult, focused: b
 /// keybind hints, including the universal newline key (issue 01 AC).
 fn status_text(state: &WorkbenchState) -> String {
     let hints = format!(
-        "Enter: run · {}: newline · Tab: focus · Esc/Ctrl-D: quit",
+        "Enter: run · {}: newline · Tab: focus · Ctrl-C: cancel · Esc/Ctrl-D: quit",
         state.config.newline_hint
     );
-    if state.status.message.is_empty() {
+    // While a query is in flight, prefix a spinner to the running message.
+    let message = if matches!(state.run, RunState::Running { .. }) {
+        let frame = SPINNER[state.spinner % SPINNER.len()];
+        format!("{frame} {}", state.status.message)
+    } else {
+        state.status.message.clone()
+    };
+    if message.is_empty() {
         hints
     } else {
-        format!("{}  │  {hints}", state.status.message)
+        format!("{message}  │  {hints}")
     }
 }
 

@@ -42,6 +42,13 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
             elapsed,
         } => on_completed(state, id, summary, elapsed),
         Event::QueryFailed { id, error } => on_failed(state, id, &error),
+        Event::Tick => {
+            // Advance the running-query spinner; idle ticks change nothing.
+            if matches!(state.run, RunState::Running { .. }) {
+                state.spinner = state.spinner.wrapping_add(1);
+            }
+            Vec::new()
+        }
     }
 }
 
@@ -122,6 +129,7 @@ fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
     let id = state.next_id;
     state.next_id += 1;
     state.run = RunState::Running { id };
+    state.spinner = 0;
     state.status.message = "running…".to_string();
     vec![Effect::RunQuery {
         id,
@@ -130,10 +138,38 @@ fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
     }]
 }
 
+/// Ctrl-C. While a query runs, cancel it: keep the rows already streamed on
+/// screen but label the result partial, drop the rest of the batch, fall idle,
+/// and emit [`Effect::Cancel`] (the edge aborts the task and RESETs the Session,
+/// ADR 0005). When idle, abandon the typed buffer (the REPL's interrupt).
+fn interrupt(state: &mut WorkbenchState) -> Vec<Effect> {
+    if let RunState::Running { id } = state.run {
+        let rows = state.result.as_ref().map_or(0, |result| result.rows.len());
+        if let Some(result) = state.result.as_mut() {
+            result.partial = true;
+        }
+        state.pending.clear();
+        state.run = RunState::Idle;
+        state.status.message = format!(
+            "cancelled — {rows} row{} (partial)",
+            if rows == 1 { "" } else { "s" }
+        );
+        vec![Effect::Cancel { id }]
+    } else {
+        state.editor.clear();
+        Vec::new()
+    }
+}
+
 fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     // Quit gestures work from any pane (ADR 0010 AC: Esc / Ctrl-D leave).
     if key.code == KeyCode::Esc || (key.ctrl && key.code == KeyCode::Char('d')) {
         return vec![Effect::Quit];
+    }
+    // Ctrl-C from any pane: cancel an in-flight query (keep the session), or
+    // abandon the typed buffer when idle (mirrors the REPL's interrupt).
+    if key.ctrl && key.code == KeyCode::Char('c') {
+        return interrupt(state);
     }
     match state.focus {
         Focus::Editor => editor_key(state, key),
@@ -628,6 +664,55 @@ mod tests {
         let result = s.result.as_ref().unwrap();
         assert_eq!(result.rows.len(), 2, "held rows capped at the backstop");
         assert!(result.truncated, "truncation flagged");
+    }
+
+    // --- cancellation (slice 07) --------------------------------------------
+
+    #[test]
+    fn ctrl_c_cancels_a_running_query_and_keeps_partial_rows() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "MATCH (n) RETURN n;");
+        update(&mut s, Event::QueryStarted { id, header: vec!["n".to_string()] });
+        update(&mut s, Event::RecordArrived { id, record: one_row() });
+        update(&mut s, Event::RecordArrived { id, record: one_row() });
+        let effects = update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('c'))));
+        assert_eq!(effects, vec![Effect::Cancel { id }], "the edge is told to cancel");
+        assert!(matches!(s.run, RunState::Idle), "session ready for the next query");
+        let result = s.result.as_ref().unwrap();
+        assert_eq!(result.rows.len(), 2, "streamed rows stay on screen");
+        assert!(result.partial, "result labelled partial");
+        assert!(s.status.message.contains("partial"), "status: {}", s.status.message);
+        assert!(s.status.message.contains("2 rows"), "status names the count");
+    }
+
+    #[test]
+    fn ctrl_c_drops_the_rest_of_a_multi_statement_batch() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "RETURN 1; RETURN 2;");
+        assert_eq!(s.pending.len(), 1);
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('c'))));
+        assert!(s.pending.is_empty(), "the queued statement is dropped");
+        let _ = id;
+    }
+
+    #[test]
+    fn ctrl_c_when_idle_abandons_the_typed_buffer() {
+        let mut s = wb();
+        type_str(&mut s, "MATCH (n)");
+        let effects = update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('c'))));
+        assert!(effects.is_empty(), "nothing to cancel");
+        assert_eq!(s.editor.buffer(), "", "the buffer is cleared");
+    }
+
+    #[test]
+    fn the_spinner_advances_only_while_a_query_runs() {
+        let mut s = wb();
+        update(&mut s, Event::Tick);
+        assert_eq!(s.spinner, 0, "idle ticks do not advance the spinner");
+        submit_query(&mut s, "RETURN 1;");
+        update(&mut s, Event::Tick);
+        update(&mut s, Event::Tick);
+        assert_eq!(s.spinner, 2, "running ticks advance the spinner");
     }
 
     #[test]

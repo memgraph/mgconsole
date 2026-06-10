@@ -51,13 +51,17 @@ pub async fn run(session: Session, config: WorkbenchConfig, color: bool) -> io::
     let session = Arc::new(Mutex::new(session));
     let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
     let mut input = EventStream::new();
+    // Drives the running-query spinner; idle ticks are cheap (the buffer diff is
+    // unchanged, so nothing is flushed to the terminal).
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(120));
     // The single in-flight query task (one-live-result, ADR 0005).
     let mut running: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
         terminal.draw(|frame| draw::draw(frame, &mut state))?;
 
-        // Multiplex terminal input and query-lifecycle events; never block.
+        // Multiplex terminal input, query-lifecycle events, and the timer tick;
+        // never block.
         let event = tokio::select! {
             maybe_input = input.next() => match maybe_input {
                 Some(Ok(raw)) => match to_event(&raw) {
@@ -68,6 +72,7 @@ pub async fn run(session: Session, config: WorkbenchConfig, color: bool) -> io::
                 None => break, // input stream closed
             },
             Some(lifecycle) = rx.recv() => lifecycle,
+            _ = ticker.tick() => Event::Tick,
         };
 
         for effect in update(&mut state, event) {
@@ -87,6 +92,14 @@ pub async fn run(session: Session, config: WorkbenchConfig, color: bool) -> io::
                     let session = Arc::clone(&session);
                     let tx = tx.clone();
                     running = Some(tokio::spawn(run_query(session, tx, id, query, params)));
+                }
+                Effect::Cancel { .. } => {
+                    // Abort the in-flight task: dropping its QueryResult releases
+                    // the Session lock and abandons the stream, so the next query's
+                    // run RESETs and recovers the Session (ADR 0005).
+                    if let Some(task) = running.take() {
+                        task.abort();
+                    }
                 }
             }
         }

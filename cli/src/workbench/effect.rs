@@ -23,6 +23,9 @@ pub enum Effect {
         query: String,
         params: BTreeMap<String, Value>,
     },
+    /// Cancel the in-flight query `id`: abort its task and recover the Session
+    /// via Bolt `RESET` (ADR 0005). Rows already streamed stay on screen.
+    Cancel { id: u64 },
     /// Leave the workbench and restore the terminal.
     Quit,
 }

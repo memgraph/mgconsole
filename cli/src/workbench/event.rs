@@ -93,6 +93,8 @@ pub enum Event {
     Key(Key),
     /// The terminal was resized.
     Resize(u16, u16),
+    /// A periodic timer tick, advancing the running-query spinner (slice 07).
+    Tick,
     /// A query began; its column header is known.
     QueryStarted { id: u64, header: Vec<String> },
     /// One record streamed in.
