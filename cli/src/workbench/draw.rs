@@ -8,9 +8,11 @@
 use mgconsole_core::render;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 use ratatui::Frame;
 
+use super::highlight;
 use super::state::{CurrentResult, Focus, WorkbenchState};
 
 /// Border colour for a focused pane vs. an unfocused one.
@@ -36,6 +38,8 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     let (editor_area, results_area, status_area) = (areas[0], areas[1], areas[2]);
 
     // Editor pane: a bordered block with the query editor rendered inside it.
+    // The lines are rendered with per-token syntax highlighting (slice 05), and
+    // the terminal cursor is placed at the editor cursor when the pane is focused.
     let editor_focused = matches!(state.focus, Focus::Editor);
     let editor_block = Block::default()
         .borders(Borders::ALL)
@@ -43,7 +47,7 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
         .title("Query");
     let editor_inner = editor_block.inner(editor_area);
     frame.render_widget(editor_block, editor_area);
-    frame.render_widget(state.editor.textarea(), editor_inner);
+    draw_editor(frame, editor_inner, state, editor_focused);
 
     // Results pane: a native table with a pinned header and a lazily-rendered
     // visible window, or just a summary line for a result with no columns.
@@ -71,6 +75,34 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
 
     // Status bar: the transient message, then the keybind hints.
     frame.render_widget(Paragraph::new(status_text(state)), status_area);
+}
+
+/// Render the editor into `area`: each visible line highlighted by token
+/// category (slice 05), the visible window following the cursor so a long query
+/// stays editable. When focused, the terminal cursor is placed at the editor
+/// cursor. (tui-textarea has no per-token styling, so the workbench renders the
+/// lines itself and uses the widget only as the edit/cursor model.)
+fn draw_editor(frame: &mut Frame, area: Rect, state: &WorkbenchState, focused: bool) {
+    let height = area.height.max(1) as usize;
+    let (cursor_row, cursor_col) = state.editor.cursor();
+    // Keep the cursor line visible (pin to the bottom when scrolling past it).
+    let scroll = if cursor_row >= height {
+        cursor_row + 1 - height
+    } else {
+        0
+    };
+    let lines = state.editor.lines();
+    let end = (scroll + height).min(lines.len());
+    let visible: Vec<Line> = lines[scroll.min(lines.len())..end]
+        .iter()
+        .map(|line| highlight::highlight_line(line, state.color))
+        .collect();
+    frame.render_widget(Paragraph::new(visible), area);
+    if focused {
+        let x = area.x + (cursor_col as u16).min(area.width.saturating_sub(1));
+        let y = area.y + (cursor_row - scroll) as u16;
+        frame.set_cursor_position((x, y));
+    }
 }
 
 /// Render a streamed result into `area`: a table with a pinned header and only

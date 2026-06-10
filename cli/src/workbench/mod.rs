@@ -11,6 +11,7 @@
 pub mod draw;
 pub mod effect;
 pub mod event;
+pub mod highlight;
 pub mod state;
 pub mod terminal;
 pub mod update;

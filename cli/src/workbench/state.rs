@@ -183,9 +183,17 @@ impl EditorState {
         self.textarea.lines().join("\n")
     }
 
-    /// The underlying widget, for the draw edge to render.
-    pub fn textarea(&self) -> &TextArea<'static> {
-        &self.textarea
+    /// The physical lines, for the draw edge to render with per-token
+    /// highlighting (tui-textarea has no per-token styling, so the workbench
+    /// renders the lines itself and uses the widget only as the edit model).
+    pub fn lines(&self) -> &[String] {
+        self.textarea.lines()
+    }
+
+    /// The cursor position as `(row, column)` in characters, for the draw to
+    /// place the terminal cursor.
+    pub fn cursor(&self) -> (usize, usize) {
+        self.textarea.cursor()
     }
 }
 
