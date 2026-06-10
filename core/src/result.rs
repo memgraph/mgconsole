@@ -301,18 +301,13 @@ pub struct Notification {
 
 impl Notification {
     fn from_value(value: &bolt_proto::Value) -> Option<Self> {
-        let bolt_proto::Value::Map(m) = value else {
-            return None;
-        };
-        let s = |k: &str| match m.get(k) {
-            Some(bolt_proto::Value::String(v)) => v.clone(),
-            _ => String::new(),
-        };
+        let meta = proto::Meta::from_value(value)?;
+        // Each field defaults to an empty string when the key is absent.
         Some(Notification {
-            code: s("code"),
-            title: s("title"),
-            description: s("description"),
-            severity: s("severity"),
+            code: meta.get(proto::CODE).unwrap_or_default(),
+            title: meta.get(proto::TITLE).unwrap_or_default(),
+            description: meta.get(proto::DESCRIPTION).unwrap_or_default(),
+            severity: meta.get(proto::SEVERITY).unwrap_or_default(),
         })
     }
 }
