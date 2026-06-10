@@ -202,7 +202,7 @@ impl Session {
         let reply = client
             .run(query, params, None)
             .await
-            .map_err(|e| Error::Connection(e.to_string()))?;
+            .map_err(Error::connection)?;
         match reply {
             Message::Success(s) => {
                 Ok((proto::fields(s.metadata()), Summary::from_run(s.metadata())))
@@ -211,10 +211,7 @@ impl Session {
                 let error = proto::query_error(f.metadata());
                 // Bolt parks the connection in FAILED state after a FAILURE; RESET
                 // clears it so the next query runs.
-                client
-                    .reset()
-                    .await
-                    .map_err(|e| Error::Connection(e.to_string()))?;
+                client.reset().await.map_err(Error::connection)?;
                 Err(Error::Query(error))
             }
             other => Err(Error::Protocol(format!("unexpected RUN reply: {other:?}"))),
@@ -243,10 +240,7 @@ impl Session {
     /// Send Bolt `RESET`, clearing any pending result or FAILED state.
     async fn reset(&self) -> Result<(), Error> {
         let mut client = self.conn.lock().await;
-        client
-            .reset()
-            .await
-            .map_err(|e| Error::Connection(e.to_string()))?;
+        client.reset().await.map_err(Error::connection)?;
         Ok(())
     }
 
@@ -286,7 +280,7 @@ async fn establish(endpoint: &Endpoint, options: &ConnectOptions) -> Result<Shar
     let stream = transport::connect_stream(endpoint, options.use_tls).await?;
     let mut client = Client::new(BufStream::new(stream).compat(), &[V4_4, V4_3, V4_2, V4_1])
         .await
-        .map_err(|e| Error::Connection(e.to_string()))?;
+        .map_err(Error::connection)?;
 
     let mut entries: Vec<(&str, &str)> = vec![("user_agent", USER_AGENT)];
     match &options.credentials {
@@ -301,7 +295,7 @@ async fn establish(endpoint: &Endpoint, options: &ConnectOptions) -> Result<Shar
     let hello = client
         .hello(Metadata::from_iter(entries))
         .await
-        .map_err(|e| Error::Protocol(e.to_string()))?;
+        .map_err(Error::protocol)?;
     match hello {
         Message::Success(_) => Ok(Arc::new(Mutex::new(client))),
         Message::Failure(f) => Err(Error::Auth(proto::failure_message(f.metadata()))),

@@ -69,6 +69,19 @@ pub enum Error {
     Output(String),
 }
 
+impl Error {
+    /// Wrap a transport/driver failure as a fatal [`Error::Connection`]. Carries
+    /// the stringify-and-wrap so call sites read `.map_err(Error::connection)`.
+    pub(crate) fn connection(e: impl std::fmt::Display) -> Self {
+        Error::Connection(e.to_string())
+    }
+
+    /// Wrap a misunderstood Bolt exchange as [`Error::Protocol`].
+    pub(crate) fn protocol(e: impl std::fmt::Display) -> Self {
+        Error::Protocol(e.to_string())
+    }
+}
+
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error::Output(e.to_string())

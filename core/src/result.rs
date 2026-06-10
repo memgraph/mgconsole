@@ -204,7 +204,7 @@ impl Lazy {
             client
                 .pull(Some(Metadata::from_iter(vec![("n", self.batch_size)])))
                 .await
-                .map_err(|e| Error::Connection(e.to_string()))?
+                .map_err(Error::connection)?
         };
         match end {
             Message::Success(s) => {
@@ -239,7 +239,7 @@ impl Lazy {
             client
                 .discard(Some(Metadata::from_iter(vec![("n", -1_i64)])))
                 .await
-                .map_err(|e| Error::Connection(e.to_string()))?
+                .map_err(Error::connection)?
         };
         self.more = false;
         // DISCARD's SUCCESS carries the same summary the final PULL would have.
