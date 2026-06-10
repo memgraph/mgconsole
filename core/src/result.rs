@@ -7,7 +7,7 @@
 //! stream pull lazily for bounded memory, without changing this signature.
 //! Slice 13 fills the `Summary`.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use bolt_client::Metadata;
 use bolt_proto::Message;
@@ -47,6 +47,9 @@ impl Record {
 /// never holds more than one batch in memory regardless of result size.
 pub struct RecordStream {
     inner: Inner,
+    /// Filled from the RUN reply, then completed from the trailing `SUCCESS`
+    /// once the stream drains (or is discarded). Readable via [`QueryResult`].
+    summary: Summary,
 }
 
 enum Inner {
@@ -70,10 +73,11 @@ impl RecordStream {
     pub(crate) fn from_buffered(records: Vec<Record>) -> Self {
         Self {
             inner: Inner::Buffered(records.into()),
+            summary: Summary::default(),
         }
     }
 
-    pub(crate) fn lazy(conn: SharedConn, batch_size: i64) -> Self {
+    pub(crate) fn lazy(conn: SharedConn, batch_size: i64, summary: Summary) -> Self {
         Self {
             inner: Inner::Lazy(Lazy {
                 conn,
@@ -81,14 +85,21 @@ impl RecordStream {
                 more: true,
                 batch_size,
             }),
+            summary,
         }
+    }
+
+    /// The trailing summary. Complete only once the stream has drained or been
+    /// discarded; before then it holds just the RUN-time metadata.
+    pub(crate) fn summary(&self) -> &Summary {
+        &self.summary
     }
 
     /// The next Record, or `None` when the stream is exhausted.
     pub async fn next(&mut self) -> Result<Option<Record>, Error> {
         match &mut self.inner {
             Inner::Buffered(b) => Ok(b.pop_front()),
-            Inner::Lazy(l) => l.next().await,
+            Inner::Lazy(l) => l.next(&mut self.summary).await,
         }
     }
 
@@ -100,7 +111,7 @@ impl RecordStream {
                 b.clear();
                 Ok(())
             }
-            Inner::Lazy(l) => l.discard().await,
+            Inner::Lazy(l) => l.discard(&mut self.summary).await,
         }
     }
 
@@ -132,20 +143,21 @@ impl RecordStream {
 }
 
 impl Lazy {
-    async fn next(&mut self) -> Result<Option<Record>, Error> {
+    async fn next(&mut self, summary: &mut Summary) -> Result<Option<Record>, Error> {
         if let Some(r) = self.batch.pop_front() {
             return Ok(Some(r));
         }
         if !self.more {
             return Ok(None);
         }
-        self.pull_batch().await?;
+        self.pull_batch(summary).await?;
         Ok(self.batch.pop_front())
     }
 
     /// Pull up to `batch_size` records, translating them into Core Records and
-    /// updating `more` from the trailing `SUCCESS`.
-    async fn pull_batch(&mut self) -> Result<(), Error> {
+    /// updating `more` from the trailing `SUCCESS`. The final `SUCCESS` (the one
+    /// with no more records) carries the summary, so absorb it then.
+    async fn pull_batch(&mut self, summary: &mut Summary) -> Result<(), Error> {
         let (records, end) = {
             let mut client = self.conn.lock().await;
             client
@@ -154,7 +166,12 @@ impl Lazy {
                 .map_err(|e| Error::Connection(e.to_string()))?
         };
         match end {
-            Message::Success(s) => self.more = proto::has_more(s.metadata()),
+            Message::Success(s) => {
+                self.more = proto::has_more(s.metadata());
+                if !self.more {
+                    summary.absorb_terminal(s.metadata());
+                }
+            }
             Message::Failure(f) => {
                 self.more = false;
                 return Err(Error::Query(proto::failure_message(f.metadata())));
@@ -171,17 +188,25 @@ impl Lazy {
         Ok(())
     }
 
-    async fn discard(&mut self) -> Result<(), Error> {
+    async fn discard(&mut self, summary: &mut Summary) -> Result<(), Error> {
         self.batch.clear();
         if !self.more {
             return Ok(());
         }
-        let mut client = self.conn.lock().await;
-        client
-            .discard(Some(Metadata::from_iter(vec![("n", -1_i64)])))
-            .await
-            .map_err(|e| Error::Connection(e.to_string()))?;
+        let end = {
+            let mut client = self.conn.lock().await;
+            client
+                .discard(Some(Metadata::from_iter(vec![("n", -1_i64)])))
+                .await
+                .map_err(|e| Error::Connection(e.to_string()))?
+        };
         self.more = false;
+        // DISCARD's SUCCESS carries the same summary the final PULL would have.
+        match end {
+            Message::Success(s) => summary.absorb_terminal(s.metadata()),
+            Message::Failure(f) => return Err(Error::Query(proto::failure_message(f.metadata()))),
+            other => return Err(Error::Protocol(format!("unexpected DISCARD reply: {other:?}"))),
+        }
         Ok(())
     }
 }
@@ -220,25 +245,128 @@ mod tests {
     }
 }
 
-/// Metadata the server attaches after the records (timing, notifications,
-/// stats). Empty in slice 02; populated in slice 13.
+/// One advisory Notification Memgraph attaches to a result (CONTEXT.md).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notification {
+    pub code: String,
+    pub title: String,
+    pub description: String,
+    pub severity: String,
+}
+
+impl Notification {
+    fn from_value(value: &bolt_proto::Value) -> Option<Self> {
+        let bolt_proto::Value::Map(m) = value else {
+            return None;
+        };
+        let s = |k: &str| match m.get(k) {
+            Some(bolt_proto::Value::String(v)) => v.clone(),
+            _ => String::new(),
+        };
+        Some(Notification {
+            code: s("code"),
+            title: s("title"),
+            description: s("description"),
+            severity: s("severity"),
+        })
+    }
+}
+
+/// Metadata the server attaches after the records: Notifications, execution
+/// stats, and the residual timing/execution-info keys (cost, parse, plan,
+/// execute) the server returns. Each field is empty when the server sends none,
+/// so absence is just an empty collection — never an error.
 #[derive(Debug, Default, Clone)]
-pub struct Summary {}
+pub struct Summary {
+    /// Advisory notifications attached to the result.
+    pub notifications: Vec<Notification>,
+    /// Update statistics (e.g. `nodes-created`) for a write query.
+    pub stats: BTreeMap<String, Value>,
+    /// Remaining trailing metadata, keyed as the server sends it — timing and
+    /// verbose execution info live here, since their keys are server-specific.
+    pub metadata: BTreeMap<String, Value>,
+}
+
+impl Summary {
+    /// Build the initial summary from the RUN reply's metadata (timings such as
+    /// `t_first` arrive here, before any records).
+    pub(crate) fn from_run(meta: &HashMap<String, bolt_proto::Value>) -> Self {
+        Summary {
+            metadata: lift_metadata(meta),
+            ..Summary::default()
+        }
+    }
+
+    /// The verbose execution info (cost/parse/plan/execute) Memgraph reports in
+    /// the trailing metadata, lifted into typed fields. Each is `None` when the
+    /// server did not report it.
+    pub fn execution_info(&self) -> ExecutionInfo {
+        let number = |k: &str| self.metadata.get(k).and_then(as_f64);
+        ExecutionInfo {
+            cost_estimate: number("cost_estimate"),
+            parsing_time: number("parsing_time"),
+            planning_time: number("planning_time"),
+            plan_execution_time: number("plan_execution_time"),
+        }
+    }
+
+    /// Merge in the trailing `SUCCESS` metadata once the records are drained.
+    fn absorb_terminal(&mut self, meta: &HashMap<String, bolt_proto::Value>) {
+        if let Some(bolt_proto::Value::List(items)) = meta.get("notifications") {
+            self.notifications = items.iter().filter_map(Notification::from_value).collect();
+        }
+        if let Some(bolt_proto::Value::Map(stats)) = meta.get("stats") {
+            self.stats = stats
+                .iter()
+                .map(|(k, v)| (k.clone(), Value::from(v.clone())))
+                .collect();
+        }
+        self.metadata.extend(lift_metadata(meta));
+    }
+}
+
+/// Verbose execution info Memgraph reports per query: estimated cost and the
+/// parse/plan/execute timings (CONTEXT.md: "verbose execution info").
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ExecutionInfo {
+    pub cost_estimate: Option<f64>,
+    pub parsing_time: Option<f64>,
+    pub planning_time: Option<f64>,
+    pub plan_execution_time: Option<f64>,
+}
+
+/// Read a numeric metadata value as `f64`, accepting either a float or integer.
+fn as_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Float(f) => Some(*f),
+        Value::Integer(i) => Some(*i as f64),
+        _ => None,
+    }
+}
+
+/// Project Bolt metadata into the residual `metadata` map, dropping keys that
+/// are control flags or are lifted into typed fields elsewhere.
+fn lift_metadata(meta: &HashMap<String, bolt_proto::Value>) -> BTreeMap<String, Value> {
+    meta.iter()
+        .filter(|(k, _)| {
+            !matches!(
+                k.as_str(),
+                "has_more" | "notifications" | "stats" | "fields"
+            )
+        })
+        .map(|(k, v)| (k.clone(), Value::from(v.clone())))
+        .collect()
+}
 
 /// The whole answer to one query.
 pub struct QueryResult {
     header: Vec<String>,
     records: RecordStream,
-    summary: Summary,
 }
 
 impl QueryResult {
-    pub(crate) fn new(header: Vec<String>, records: RecordStream, summary: Summary) -> Self {
-        Self {
-            header,
-            records,
-            summary,
-        }
+    pub(crate) fn new(header: Vec<String>, records: RecordStream) -> Self {
+        Self { header, records }
     }
 
     /// The column names.
@@ -251,8 +379,9 @@ impl QueryResult {
         &mut self.records
     }
 
-    /// The trailing summary (readable after the records are drained).
+    /// The trailing summary. Complete once the records are drained or discarded;
+    /// before then it carries only the RUN-time metadata.
     pub fn summary(&self) -> &Summary {
-        &self.summary
+        self.records.summary()
     }
 }

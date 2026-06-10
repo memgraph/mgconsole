@@ -53,6 +53,69 @@ async fn streams_a_large_result_incrementally() {
 }
 
 #[tokio::test]
+async fn write_query_exposes_update_stats() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    let mut result = session
+        .run("CREATE (:Person {name: 'x', age: 1})")
+        .await
+        .expect("create runs");
+    result.records().discard().await.expect("drain to summary");
+
+    let stats = &result.summary().stats;
+    assert_eq!(stats.get("nodes-created"), Some(&Value::Integer(1)));
+    assert_eq!(stats.get("labels-added"), Some(&Value::Integer(1)));
+    // The update-stats map is present and keyed as Memgraph reports it.
+    assert!(stats.contains_key("properties-set"));
+}
+
+#[tokio::test]
+async fn query_exposes_notifications() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    // A label scan with no index draws a plan-hint notification from Memgraph.
+    let mut result = session
+        .run("MATCH (n:Nonexistent) RETURN n")
+        .await
+        .expect("query runs");
+    result.records().discard().await.expect("drain to summary");
+
+    let notifications = &result.summary().notifications;
+    assert!(!notifications.is_empty(), "expected a notification");
+    let first = &notifications[0];
+    assert!(!first.code.is_empty(), "notification has a code");
+    assert!(!first.title.is_empty(), "notification has a title");
+    assert_eq!(first.severity, "INFO");
+}
+
+#[tokio::test]
+async fn summary_exposes_execution_info_and_clean_absences() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    let mut result = session.run("RETURN 1 AS n").await.expect("query runs");
+    // Summary is readable after the records drain; no error when there are no
+    // stats or notifications to report.
+    result.records().discard().await.expect("drain to summary");
+    let summary = result.summary();
+
+    assert!(summary.stats.is_empty(), "a read has no update stats");
+    assert!(
+        summary.notifications.is_empty(),
+        "a trivial read has no notifications"
+    );
+
+    // Verbose execution info is reported per query.
+    let info = summary.execution_info();
+    assert!(info.parsing_time.is_some(), "parse time reported");
+    assert!(info.planning_time.is_some(), "plan time reported");
+    assert!(info.plan_execution_time.is_some(), "execute time reported");
+    assert!(info.cost_estimate.is_some(), "cost estimate reported");
+}
+
+#[tokio::test]
 async fn binds_named_parameters_of_every_kind() {
     let mut lease = common::lease().await;
     let session = &mut lease.session;

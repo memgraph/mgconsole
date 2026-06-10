@@ -108,21 +108,21 @@ impl Session {
         params: &BTreeMap<String, Value>,
     ) -> Result<QueryResult, Error> {
         let bolt_params = encode_params(params)?;
-        let header = {
+        let (header, summary) = {
             let mut client = self.conn.lock().await;
             match client
                 .run(query, bolt_params, None)
                 .await
                 .map_err(|e| Error::Connection(e.to_string()))?
             {
-                Message::Success(s) => proto::fields(s.metadata()),
+                Message::Success(s) => (proto::fields(s.metadata()), Summary::from_run(s.metadata())),
                 Message::Failure(f) => return Err(Error::Query(proto::failure_message(f.metadata()))),
                 other => return Err(Error::Protocol(format!("unexpected RUN reply: {other:?}"))),
             }
         };
 
-        let records = RecordStream::lazy(self.conn.clone(), DEFAULT_BATCH_SIZE);
-        Ok(QueryResult::new(header, records, Summary::default()))
+        let records = RecordStream::lazy(self.conn.clone(), DEFAULT_BATCH_SIZE, summary);
+        Ok(QueryResult::new(header, records))
     }
 }
 
