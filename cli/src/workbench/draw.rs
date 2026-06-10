@@ -9,8 +9,9 @@ use mgconsole_core::render;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
 use ratatui::Frame;
+use mgconsole_core::Value;
 
 use super::highlight;
 use super::state::{CurrentResult, Focus, RunState, WorkbenchState};
@@ -79,6 +80,47 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
 
     // Status bar: the transient message, then the keybind hints.
     frame.render_widget(Paragraph::new(status_text(state)), status_area);
+
+    // Cell-detail overlay (slice 08), drawn last so it sits above the panes.
+    if let Some(value) = state.detail.as_ref() {
+        draw_detail(frame, value, state.detail_scroll);
+    }
+}
+
+/// Draw the cell-detail overlay: a centred box showing the full Value rendered by
+/// the Core's per-Value renderer, wrapped and scrollable so a node/path/map/list
+/// is readable in full (slice 08).
+fn draw_detail(frame: &mut Frame, value: &Value, scroll: u16) {
+    let area = centered_rect(frame.area(), 70, 60);
+    frame.render_widget(Clear, area); // clear what's beneath the overlay
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title("Cell detail (↑/↓ scroll · Esc/Enter close)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(render::tabular(value))
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0)),
+        inner,
+    );
+}
+
+/// A rectangle centred in `area`, sized to `pct_x` × `pct_y` percent of it.
+fn centered_rect(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
+    let rows = Layout::vertical([
+        Constraint::Percentage((100 - pct_y) / 2),
+        Constraint::Percentage(pct_y),
+        Constraint::Percentage((100 - pct_y) / 2),
+    ])
+    .split(area);
+    Layout::horizontal([
+        Constraint::Percentage((100 - pct_x) / 2),
+        Constraint::Percentage(pct_x),
+        Constraint::Percentage((100 - pct_x) / 2),
+    ])
+    .split(rows[1])[1]
 }
 
 /// Render the editor into `area`: each visible line highlighted by token

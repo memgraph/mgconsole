@@ -162,6 +162,11 @@ fn interrupt(state: &mut WorkbenchState) -> Vec<Effect> {
 }
 
 fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
+    // The cell-detail overlay (slice 08) captures keys while open — including
+    // Esc, so it dismisses the overlay rather than quitting the workbench.
+    if state.detail.is_some() {
+        return detail_key(state, key);
+    }
     // Quit gestures work from any pane (ADR 0010 AC: Esc / Ctrl-D leave).
     if key.code == KeyCode::Esc || (key.ctrl && key.code == KeyCode::Char('d')) {
         return vec![Effect::Quit];
@@ -243,6 +248,11 @@ fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
         state.focus = Focus::Editor;
         return Vec::new();
     }
+    // Enter expands the selected cell into the detail overlay (slice 08).
+    if key.code == KeyCode::Enter {
+        open_detail(state);
+        return Vec::new();
+    }
     let page = state.viewport_rows.max(1);
     if let Some(result) = state.result.as_mut() {
         let last_row = result.rows.len().saturating_sub(1);
@@ -264,6 +274,39 @@ fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
         } else if result.selected_row >= result.scroll + page {
             result.scroll = result.selected_row + 1 - page;
         }
+    }
+    Vec::new()
+}
+
+/// Open the cell-detail overlay on the selected cell's Value (slice 08), if a
+/// row and column are present. The Value is cloned so the overlay owns it and
+/// the table's selection is untouched.
+fn open_detail(state: &mut WorkbenchState) {
+    let value = state.result.as_ref().and_then(|result| {
+        result
+            .rows
+            .get(result.selected_row)
+            .and_then(|row| row.fields().get(result.selected_col))
+            .cloned()
+    });
+    if let Some(value) = value {
+        state.detail = Some(value);
+        state.detail_scroll = 0;
+    }
+}
+
+/// Keys while the cell-detail overlay is open: scroll it, or dismiss it back to
+/// the table (with the table selection intact, since it was never changed).
+fn detail_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Up | KeyCode::PageUp => {
+            state.detail_scroll = state.detail_scroll.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::PageDown => {
+            state.detail_scroll = state.detail_scroll.saturating_add(1);
+        }
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => state.detail = None,
+        _ => {}
     }
     Vec::new()
 }
@@ -713,6 +756,56 @@ mod tests {
         update(&mut s, Event::Tick);
         update(&mut s, Event::Tick);
         assert_eq!(s.spinner, 2, "running ticks advance the spinner");
+    }
+
+    // --- cell-detail overlay (slice 08) -------------------------------------
+
+    /// A workbench whose results pane holds one selectable cell.
+    fn with_one_cell(value: Value) -> WorkbenchState {
+        let mut s = wb();
+        s.focus = Focus::Results;
+        s.result = Some(CurrentResult {
+            header: vec!["v".to_string()],
+            rows: vec![Record::new(vec![value])],
+            ..CurrentResult::default()
+        });
+        s
+    }
+
+    #[test]
+    fn enter_expands_the_selected_cell_into_the_detail_overlay() {
+        let mut s = with_one_cell(Value::String("Ada".into()));
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert_eq!(s.detail, Some(Value::String("Ada".into())), "overlay holds the value");
+    }
+
+    #[test]
+    fn esc_dismisses_the_overlay_and_keeps_the_table_selection() {
+        let mut s = with_one_cell(Value::Integer(7));
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter))); // open
+        s.result.as_mut().unwrap().selected_row = 0;
+        update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
+        assert!(s.detail.is_none(), "overlay closed");
+        assert_eq!(s.result.as_ref().unwrap().selected_row, 0, "selection intact");
+    }
+
+    #[test]
+    fn esc_while_the_overlay_is_open_does_not_quit() {
+        let mut s = with_one_cell(Value::Integer(7));
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
+        assert!(effects.is_empty(), "Esc closes the overlay, it does not quit");
+    }
+
+    #[test]
+    fn the_overlay_scrolls_with_the_arrow_keys() {
+        let mut s = with_one_cell(Value::Integer(7));
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
+        update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
+        assert_eq!(s.detail_scroll, 2);
+        update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
+        assert_eq!(s.detail_scroll, 1);
     }
 
     #[test]

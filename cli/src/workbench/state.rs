@@ -29,6 +29,11 @@ pub struct WorkbenchState {
     /// A spinner frame counter, advanced by ticks while a query is in flight, so
     /// the draw can show a running indicator (slice 07).
     pub spinner: usize,
+    /// When `Some`, the cell-detail overlay is open showing this Value in full
+    /// (slice 08); `None` is the table view.
+    pub detail: Option<Value>,
+    /// Vertical scroll of the detail overlay, for a Value taller than the box.
+    pub detail_scroll: u16,
     /// The results-table viewport height (data rows) from the last draw, cached so
     /// the reducer can page and keep the selection visible without re-deriving the
     /// layout. The draw is the only writer.
@@ -56,6 +61,8 @@ impl WorkbenchState {
             pending: VecDeque::new(),
             result: None,
             spinner: 0,
+            detail: None,
+            detail_scroll: 0,
             viewport_rows: 0,
             params: BTreeMap::new(),
             next_id: 0,
