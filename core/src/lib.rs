@@ -7,6 +7,7 @@
 //! trailing [`Summary`] (ADR 0004).
 
 pub mod error;
+pub mod parse;
 pub mod render;
 pub mod result;
 pub mod session;
@@ -14,6 +15,7 @@ pub mod tabular;
 pub mod value;
 
 pub use error::Error;
+pub use parse::QueryAssembler;
 pub use result::{QueryResult, Record, RecordStream, Summary};
 pub use tabular::{render_table, TableOptions, DEFAULT_ROW_CAP};
 pub use session::Session;

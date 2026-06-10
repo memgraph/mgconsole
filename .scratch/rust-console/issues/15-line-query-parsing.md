@@ -1,6 +1,6 @@
 # 15 — Line/query parsing: multiline + multi-query-per-line + carryover
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -17,11 +17,11 @@ Pure function, no database, heavily unit-tested.
 
 ## Acceptance criteria
 
-- [ ] A query spanning multiple lines is assembled and completes on its terminating semicolon
-- [ ] Multiple queries on one line are split into separate queries
-- [ ] A trailing unfinished fragment is carried over to the next input
-- [ ] Semicolons and terminators inside string literals / comments do not split or terminate
-- [ ] Comprehensive pure unit tests cover these cases
+- [x] A query spanning multiple lines is assembled and completes on its terminating semicolon
+- [x] Multiple queries on one line are split into separate queries
+- [x] A trailing unfinished fragment is carried over to the next input
+- [x] Semicolons and terminators inside string literals / comments do not split or terminate
+- [x] Comprehensive pure unit tests cover these cases
 
 ## Blocked by
 
