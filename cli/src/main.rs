@@ -8,12 +8,14 @@
 //! are reused unchanged; the loop itself is covered by unit tests in `repl`.
 
 use std::io::{self, BufRead, IsTerminal};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::Parser;
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Completer, Editor, Helper, Highlighter, Hinter};
 
+use mgconsole::history::{self, HistoryFile};
 use mgconsole::repl::{self, Line, LineSource, QueryRunner, Rendered, ReplConfig};
 use mgconsole::{resolve_password, Cli};
 use mgconsole_core::{
@@ -85,7 +87,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A terminal gets the full line editor; a pipe gets a plain reader so
     // scripted input (and slice 25's import) runs without a TTY.
     if io::stdin().is_terminal() {
-        let mut source = RustylineSource::new()?;
+        let history = open_history(&cli);
+        let mut source = RustylineSource::new(history)?;
         repl::run_loop(&mut source, &mut runner, &mut out, &mut err, &config)?;
     } else {
         let stdin = io::stdin();
@@ -96,6 +99,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Resolve and prepare the history file for an interactive session, honouring
+/// the `--history`/`--no-history` flags and the `MGCONSOLE_HISTORY_PATH` env
+/// override (slice 17). A history directory that cannot be created is reported
+/// and history is disabled, so the REPL still runs.
+fn open_history(cli: &Cli) -> Option<HistoryFile> {
+    let env = std::env::var(history::HISTORY_ENV).ok();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let path =
+        history::resolve_history_file(&cli.history, env.as_deref(), cli.no_history, home.as_deref())?;
+    match history::prepare_history_dir(&path) {
+        Ok(()) => Some(HistoryFile::new(path)),
+        Err(message) => {
+            eprintln!("warning: {message}; continuing without history");
+            None
+        }
+    }
 }
 
 /// rustyline helper whose only custom behaviour is multiline validation: keep
@@ -116,16 +137,21 @@ impl Validator for MgHelper {
 }
 
 /// Interactive input via rustyline, with its `Validator` assembling multiline
-/// queries inside a single `readline` call.
+/// queries inside a single `readline` call. When a [`HistoryFile`] is present,
+/// prior entries are loaded on start and each entered line is persisted.
 struct RustylineSource {
     editor: Editor<MgHelper, rustyline::history::DefaultHistory>,
+    history: Option<HistoryFile>,
 }
 
 impl RustylineSource {
-    fn new() -> rustyline::Result<Self> {
+    fn new(history: Option<HistoryFile>) -> rustyline::Result<Self> {
         let mut editor = Editor::new()?;
         editor.set_helper(Some(MgHelper));
-        Ok(Self { editor })
+        if let Some(history) = &history {
+            history.load(editor.history_mut());
+        }
+        Ok(Self { editor, history })
     }
 }
 
@@ -134,8 +160,9 @@ impl LineSource for RustylineSource {
         let prompt = if continued { "      -> " } else { "memgraph> " };
         match self.editor.readline(prompt) {
             Ok(line) => {
-                // Best-effort in-memory history; persistence is slice 17.
-                let _ = self.editor.add_history_entry(line.as_str());
+                if let Some(history) = &self.history {
+                    history.record(self.editor.history_mut(), &line);
+                }
                 Ok(Line::Text(line))
             }
             Err(rustyline::error::ReadlineError::Interrupted) => Ok(Line::Interrupted),

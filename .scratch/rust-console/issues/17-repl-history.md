@@ -15,11 +15,11 @@ environment override, default directory). Reuse reedline's history support.
 
 ## Acceptance criteria
 
-- [ ] Queries are saved to a history file and recalled in a later session
-- [ ] The history location is configurable via flag
-- [ ] An environment override takes precedence over the default location
-- [ ] no-history disables reading and writing history
-- [ ] A missing/!creatable history directory is handled with a clear message
+- [x] Queries are saved to a history file and recalled in a later session
+- [x] The history location is configurable via flag
+- [x] An environment override takes precedence over the default location
+- [x] no-history disables reading and writing history
+- [x] A missing/!creatable history directory is handled with a clear message
 
 ## Blocked by
 
