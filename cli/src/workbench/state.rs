@@ -160,6 +160,12 @@ pub struct WorkbenchState {
     /// The statement of the in-flight query, carried from submit to the result
     /// entry created when the query starts (for plan detection, slice 14).
     pub running_statement: Option<String>,
+    /// Whether the in-flight query has had its `QueryStarted` (so a Result-history
+    /// entry already exists for it). Lets a failure that arrives *before* any
+    /// Record still produce exactly one entry: set the error on the started entry
+    /// if there is one, else push a fresh failure entry (issue 05). Reset per
+    /// statement in `start_query`, set in `on_started`.
+    pub running_started: bool,
     /// The Buffer that owns the in-flight query (issue 03), as an index into
     /// [`buffers`](Self::buffers). A live query streams its Records, completion,
     /// and failure into this Buffer even while another is active, so switching
@@ -263,6 +269,7 @@ impl WorkbenchState {
             params: BTreeMap::new(),
             next_id: 0,
             running_statement: None,
+            running_started: false,
             running_buffer: None,
             history_entries: Vec::new(),
             recall_index: None,
@@ -449,6 +456,11 @@ pub struct CurrentResult {
     pub partial: bool,
     /// The trailing summary, available once the query completes (slice 18).
     pub summary: Option<Summary>,
+    /// The error this query failed with, if it failed (issue 05): the outcome in
+    /// place of Records, so a failed submission is a navigable Result-history
+    /// entry carrying its originating [`statement`](Self::statement) and error,
+    /// not a status message that scrolls away. `None` for a successful query.
+    pub error: Option<String>,
 }
 
 impl CurrentResult {

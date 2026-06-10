@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use mgconsole_core::{Error, QueryAssembler, Record, Summary};
+use mgconsole_core::{Error, QueryAssembler, Record, Summary, Value};
 
 use crate::repl::{format_summary, meta_command, MetaCommand};
 use crate::syntax::Completer;
@@ -198,6 +198,7 @@ fn on_started(state: &mut WorkbenchState, id: u64, header: Vec<String>) {
     if !is_current(state, id) {
         return;
     }
+    state.running_started = true;
     let statement = state.running_statement.clone().unwrap_or_default();
     if let Some((history, view)) = state.running_target() {
         history.push(CurrentResult::new(statement, header));
@@ -260,12 +261,35 @@ fn on_completed(
 }
 
 /// The query failed: surface the error without losing the Session (ADR 0005),
-/// then continue with the next pending statement (as the REPL does mid-batch).
+/// record it as a navigable Result-history entry (issue 05), then continue with
+/// the next pending statement (as the REPL does mid-batch).
+///
+/// A failure makes its submission exactly one entry pairing the query with the
+/// error: if the query had already started (so an entry exists, possibly with
+/// streamed rows), the error lands on that entry; if it failed before any Record
+/// — the common case, e.g. a syntax error — a fresh failure entry is pushed
+/// carrying the originating query and the error, so it does not vanish as a
+/// transient status.
 fn on_failed(state: &mut WorkbenchState, id: u64, error: &Error) -> Vec<Effect> {
     if !is_current(state, id) {
         return Vec::new();
     }
-    state.status.message = format!("error: {error}");
+    let error_text = error.to_string();
+    let statement = state.running_statement.clone().unwrap_or_default();
+    let started = state.running_started;
+    if let Some((history, view)) = state.running_target() {
+        if started {
+            if let Some(result) = history.last_mut() {
+                result.error = Some(error_text.clone());
+            }
+        } else {
+            let mut result = CurrentResult::new(statement, Vec::new());
+            result.error = Some(error_text.clone());
+            history.push(result);
+            *view = history.len() - 1;
+        }
+    }
+    state.status.message = format!("error: {error_text}");
     // A `:source` batch stops on the first error (issue 10): drop the rest.
     if state.source_halt {
         state.source_halt = false;
@@ -300,6 +324,7 @@ fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
     state.next_id += 1;
     state.run = RunState::Running { id };
     state.spinner = 0;
+    state.running_started = false;
     if state.running_buffer.is_none() {
         state.running_buffer = Some(state.active);
     }
@@ -1009,6 +1034,17 @@ fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// row and column are present. The Value is cloned so the overlay owns it and
 /// the table's selection is untouched.
 fn open_detail(state: &mut WorkbenchState) {
+    // On a failed entry there are no cells; cell-expand shows the originating
+    // query in full instead (issue 05), so a truncated header snippet is never
+    // the only view of what ran.
+    if let Some(result) = state.shown() {
+        if result.error.is_some() {
+            let statement = result.statement.clone();
+            state.detail = Some(Value::String(statement));
+            state.detail_scroll = 0;
+            return;
+        }
+    }
     let value = state.shown().and_then(|result| {
         result
             .rows
@@ -1217,6 +1253,7 @@ fn start_query_to_file(
     state.next_id += 1;
     state.run = RunState::Running { id };
     state.spinner = 0;
+    state.running_started = false;
     if state.running_buffer.is_none() {
         state.running_buffer = Some(state.active);
     }
@@ -1949,6 +1986,81 @@ mod tests {
         // The next query runs (the session was not lost).
         let next = submit_query(&mut s, "RETURN 1;");
         assert_eq!(next, 1);
+    }
+
+    // --- Correlated Result history (issue 05) ---------------------------------
+
+    fn boom() -> Error {
+        Error::Query(QueryError {
+            code: "Memgraph.ClientError.MemgraphError.SyntaxError".to_string(),
+            message: "bad cypher".to_string(),
+        })
+    }
+
+    #[test]
+    fn a_failure_before_any_record_becomes_one_navigable_entry() {
+        let mut s = wb();
+        // A syntax error fails before QueryStarted: only QueryFailed arrives.
+        let id = submit_query(&mut s, "BAD;");
+        update(&mut s, Event::QueryFailed { id, error: boom() });
+        assert_eq!(s.history.len(), 1, "exactly one history entry for the submission");
+        let entry = &s.history[0];
+        // The assembler strips the trailing `;`, so the stored statement is "BAD".
+        assert_eq!(entry.statement, "BAD", "carries its originating query");
+        assert!(entry.error.as_deref().unwrap_or("").contains("bad cypher"), "carries the error");
+        assert!(entry.rows.is_empty(), "no records — the error is in their place");
+        assert_eq!(s.view, 0, "the failure entry is shown");
+    }
+
+    #[test]
+    fn a_failure_after_streaming_sets_the_error_on_the_started_entry() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "MATCH (n) RETURN n;");
+        // The query starts and streams a row, then fails mid-stream.
+        update(&mut s, Event::QueryStarted { id, header: vec!["n".to_string()] });
+        update(&mut s, Event::RecordArrived { id, record: one_row() });
+        update(&mut s, Event::QueryFailed { id, error: boom() });
+        assert_eq!(s.history.len(), 1, "still exactly one entry (no duplicate)");
+        let entry = &s.history[0];
+        assert_eq!(entry.rows.len(), 1, "the streamed row is kept");
+        assert!(entry.error.is_some(), "the error is recorded on that entry");
+    }
+
+    #[test]
+    fn each_submission_correlates_its_own_query_across_a_failing_batch() {
+        let mut s = wb();
+        // Two statements: the first succeeds, the second fails before starting.
+        let id0 = submit_query(&mut s, "RETURN 1;\nBAD;");
+        update(&mut s, Event::QueryStarted { id: id0, header: vec!["n".to_string()] });
+        let effects = update(
+            &mut s,
+            Event::QueryCompleted { id: id0, summary: Summary::default(), elapsed: Duration::from_millis(1) },
+        );
+        // Completing the first advances to the second.
+        let id1 = match effects.first() {
+            Some(Effect::RunQuery { id, .. }) => *id,
+            other => panic!("expected the next statement to run, got {other:?}"),
+        };
+        update(&mut s, Event::QueryFailed { id: id1, error: boom() });
+        assert_eq!(s.history.len(), 2, "one entry per statement");
+        assert_eq!(s.history[0].statement, "RETURN 1");
+        assert!(s.history[0].error.is_none(), "the first succeeded");
+        assert_eq!(s.history[1].statement, "BAD");
+        assert!(s.history[1].error.is_some(), "the second failed");
+    }
+
+    #[test]
+    fn cell_expand_on_a_failed_entry_shows_the_full_query() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "MATCH (n) WHERE n.x = 1 RETURN n;");
+        update(&mut s, Event::QueryFailed { id, error: boom() });
+        // Enter on the failed entry (results pane focused) expands the query in full.
+        s.focus = Focus::Results;
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        match &s.detail {
+            Some(Value::String(q)) => assert!(q.contains("MATCH (n) WHERE n.x = 1"), "full query: {q}"),
+            other => panic!("expected the full query in the detail overlay, got {other:?}"),
+        }
     }
 
     // --- results table navigation (slice 03) --------------------------------

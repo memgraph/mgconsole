@@ -1,6 +1,6 @@
 # 05 — Correlated Result history: failures are navigable entries
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

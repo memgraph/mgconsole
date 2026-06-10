@@ -96,6 +96,9 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     // visible window, or just a summary line for a result with no columns.
     let results_focused = matches!(state.focus, Focus::Results);
     let title = match state.shown() {
+        Some(result) if result.error.is_some() => {
+            format!("Results [{}/{}] (error)", state.view + 1, state.history.len())
+        }
         Some(result) if result.plan.is_some() => {
             format!("Results [{}/{}] (plan)", state.view + 1, state.history.len())
         }
@@ -109,6 +112,15 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
             if result.partial { ", partial" } else { "" }
         ),
         None => "Results".to_string(),
+    };
+    // Append the originating query snippet for the shown entry (issue 05): the
+    // pane header shows which query produced the displayed outcome, at every
+    // history position; cell-expand shows it in full.
+    let title = match state.shown() {
+        Some(result) if !result.statement.trim().is_empty() => {
+            format!("{title} · {}", query_snippet(&result.statement, 40))
+        }
+        _ => title,
     };
     let results_block = Block::default()
         .borders(Borders::ALL)
@@ -526,6 +538,41 @@ fn draw_editor(frame: &mut Frame, area: Rect, state: &WorkbenchState, focused: b
     (x, y)
 }
 
+/// Render a failed result (issue 05): the originating query in full, then the
+/// error in its place of Records, so navigating to a failure shows what ran and
+/// why it failed rather than a blank table.
+fn draw_error(frame: &mut Frame, area: Rect, statement: &str, error: &str) {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(Span::styled("Query", bold)),
+        Line::from(statement.to_string()),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Error",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )),
+    ];
+    for line in error.lines() {
+        lines.push(Line::from(line.to_string()));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+}
+
+/// A one-line, truncated snippet of a query for the results-pane header (issue
+/// 05): runs of whitespace (and newlines) collapsed to single spaces, then cut to
+/// `max` characters with a trailing `…`. Lets every history position show which
+/// query produced the displayed outcome.
+fn query_snippet(statement: &str, max: usize) -> String {
+    let collapsed = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= max {
+        collapsed
+    } else {
+        let mut snippet: String = collapsed.chars().take(max.saturating_sub(1)).collect();
+        snippet.push('…');
+        snippet
+    }
+}
+
 /// A readable minimum width for a result column, leaving room for a few
 /// characters and the `…` truncation marker even on the narrowest column.
 const MIN_COL_WIDTH: u16 = 5;
@@ -587,6 +634,13 @@ fn draw_result(
     focused: bool,
     search: Option<&SearchState>,
 ) {
+    // A failed submission renders its originating query and the error in place of
+    // a table (issue 05), so a failure is reviewable rather than a status that
+    // scrolled away. The full query is shown here (and via cell-expand).
+    if let Some(error) = &result.error {
+        draw_error(frame, area, &result.statement, error);
+        return;
+    }
     // An EXPLAIN/PROFILE result renders as an operator tree, not a table.
     if let Some(plan) = &result.plan {
         draw_plan(frame, area, plan, focused);
@@ -927,6 +981,31 @@ mod tests {
         let multi = render(&mut state);
         assert!(multi.contains('1') && multi.contains('2'), "tab numbers drawn: {multi:?}");
         assert_eq!(state.tabbar_area.height, 1, "tab-bar rect cached for the mouse");
+    }
+
+    #[test]
+    fn a_failed_entry_renders_its_query_and_error_with_the_header_snippet() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.history.push(CurrentResult {
+            statement: "MATCH (n) RETRUN n".to_string(),
+            error: Some("Memgraph: syntax error near RETRUN".to_string()),
+            ..CurrentResult::default()
+        });
+        // A taller backend so the result pane has room for the query + error body.
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend");
+        terminal.draw(|frame| draw(frame, &mut state)).expect("draw succeeds");
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        // The pane header shows the originating query snippet and marks the error;
+        // the body shows the query and the error rather than a blank table.
+        assert!(rendered.contains("error"), "the header marks the failed entry: {rendered:?}");
+        assert!(rendered.contains("RETRUN"), "the originating query is shown");
+        assert!(rendered.contains("syntax error"), "the error is rendered in the result area");
     }
 
     #[test]
