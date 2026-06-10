@@ -18,16 +18,26 @@ the definition here wins until deliberately changed.
   meta-command into one shared vocabulary, so a given command behaves
   consistently across interactive Frontends; each Frontend may then present its
   effect in its own way. The cohesion spine for features that drive the console.
+  (A few `:`-commands act on a Workbench-only concept and so are Workbench
+  commands instead, below.)
 - **Workbench gesture** — a TUI-only interaction (a key chord or mouse action)
-  that has no typed `:`-command form and no meaning in the line REPL, e.g.
-  opening a new buffer tab or searching within a displayed result. The
-  Workbench-only counterpart to a Meta-command.
+  with no meaning in the line REPL, e.g. switching Buffer tabs or searching
+  within a displayed result. The chord/mouse counterpart to a Meta-command. A
+  Workbench concept may carry both: navigation by gesture, lifecycle by command.
+- **Workbench command** — a typed `:`-command that drives a Workbench-only
+  concept and so has no meaning in the line REPL (which reports it unknown),
+  e.g. `:close` on a Buffer. The typed counterpart to a Workbench gesture, used
+  where a deliberate, named invocation is wanted over a chord — notably for a
+  destructive action. _Contrast_: Meta-command (cross-frontend).
 - **Buffer** — one tab in the Workbench: an independent line of inquiry owning
   its own editor text and its own result and result history. All Buffers share
   the single Session, so they share the connection, profile, Read-only mode,
   open Transaction, `:param` store, Schema, and Settings — and only one query is
-  ever live across all of them at once (a second submit is refused, not queued).
-  Buffers are ephemeral and not persisted across runs.
+  ever live across all of them at once (a second _submit_ is refused, not
+  queued; ADR 0005). A live query belongs to the Buffer it was submitted from:
+  its Records stream into that Buffer even while another is shown, so switching
+  Buffers to read another line of inquiry is always allowed — only a second
+  submit is refused. Buffers are ephemeral and not persisted across runs.
 
 ## Query text
 
@@ -71,7 +81,14 @@ the definition here wins until deliberately changed.
   than held all at once. _Avoid_: result stream, records stream.
 - **Query result** — the whole answer to one query: its header (column names),
   its Record stream, and the trailing summary (timing, notifications, stats) that
-  the server sends only after the last Record. _Avoid_: result set, response.
+  the server sends only after the last Record. Always paired with the query that
+  produced it, so the two can be reviewed together. _Avoid_: result set, response.
+- **Result history** — the per-Buffer stack of past submissions, one entry each,
+  navigated in place. Every entry pairs the originating query with its outcome: a
+  Query result with its Notifications, or — when the query failed — the error in
+  place of Records. Navigating the stack always shows an outcome together with the
+  query and Notifications that belong to it, so a failure is reviewable, not a
+  status message that has scrolled away. _Avoid_: result log, output history.
 - **Query parameter** — a named value supplied alongside a query and referenced
   inside it, so the query text and its data stay separate.
 - **Notification** — advisory information Memgraph attaches to a result (e.g. a
@@ -79,6 +96,18 @@ the definition here wins until deliberately changed.
 - **Enum** — a Memgraph Value naming one member of a user-declared enumerated
   type, written `Type::Member` (e.g. `Status::Active`). The console treats it as
   a first-class Value, not as the map Memgraph happens to transmit it as.
+- **Display mode** — how a _buffered_ Query result is laid out as text:
+  `tabular` (a box table), `vertical` (one `column: value` line per field, for
+  rows too wide to tabulate), or `auto` (tabular until a row won't fit, then
+  vertical). A Setting (`:set display`) that governs the REPL and the
+  non-interactive renders only — the Workbench shows results in a live,
+  navigable table and expands a wide Value on demand, so it never consults the
+  display mode. _Avoid_: output format (the serialization below), layout.
+- **Output format** — the serialization a Query result is written in for
+  non-interactive output, redirection, and export: `csv`, `jsonl`, `cypherl`, or
+  `table`. One shared vocabulary behind the batch `--output-format`, the `:o`
+  redirect, and the Workbench export. Distinct from Display mode: `table` here is
+  a file rendering, not the interactive layout choice. _Avoid_: display mode.
 
 ## Schema
 

@@ -517,6 +517,56 @@ fn draw_editor(frame: &mut Frame, area: Rect, state: &WorkbenchState, focused: b
     (x, y)
 }
 
+/// A readable minimum width for a result column, leaving room for a few
+/// characters and the `…` truncation marker even on the narrowest column.
+const MIN_COL_WIDTH: u16 = 5;
+
+/// Size each result column to the widest visible cell (header included), clamped
+/// to `[MIN_COL_WIDTH, ~½ the pane]`; the last column flexes to fill whatever
+/// width is left, so the table always spans `available` (the inner pane width).
+/// Inter-column spacing (one cell between columns, ratatui's default) is counted
+/// so the widths plus gaps add up to `available`. Reads only `visible_cells` (the
+/// drawn window), so a very large result stays responsive — no full scan.
+fn column_widths(header: &[String], visible_cells: &[Vec<String>], available: u16) -> Vec<u16> {
+    let n = header.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let max_col = (available / 2).max(MIN_COL_WIDTH);
+    let mut widths: Vec<u16> = (0..n)
+        .map(|col| {
+            let content = visible_cells.iter().fold(header[col].chars().count(), |m, row| {
+                m.max(row.get(col).map_or(0, |c| c.chars().count()))
+            });
+            (content as u16).clamp(MIN_COL_WIDTH, max_col)
+        })
+        .collect();
+    // The last column flexes to fill the remainder after the fixed columns and
+    // the one-cell gaps between them, never dropping below the minimum.
+    let spacing = (n - 1) as u16;
+    let fixed: u16 = widths[..n - 1].iter().sum();
+    widths[n - 1] = available
+        .saturating_sub(fixed.saturating_add(spacing))
+        .max(MIN_COL_WIDTH);
+    widths
+}
+
+/// Truncate `text` to `width` columns, marking a cut with a trailing `…` so a
+/// clipped Value reads as clipped (the full Value is reachable via cell-expand
+/// and yank). Measured in characters, matching the rest of the draw.
+fn truncate_cell(text: &str, width: u16) -> String {
+    let width = width as usize;
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut out: String = text.chars().take(width - 1).collect();
+    out.push('…');
+    out
+}
+
 /// Render a streamed result into `area`: a table with a pinned header and only
 /// the visible window of rows drawn (so a huge result is cheap), the selected
 /// cell highlighted. A result with no columns shows nothing here (its summary is
@@ -560,12 +610,27 @@ fn draw_result(
         (start..end).collect()
     };
 
-    let rows = visible.iter().map(|&absolute| {
-        let record = &result.rows[absolute];
-        let cells = record.fields().iter().enumerate().map(|(col, value)| {
-            let text = render::tabular(value);
+    // Render the visible cells once: the same rendered text both sizes the
+    // columns (to content) and is drawn (truncated to its column), so a huge
+    // result is never fully scanned per frame.
+    let visible_cells: Vec<Vec<String>> = visible
+        .iter()
+        .map(|&absolute| {
+            result.rows[absolute]
+                .fields()
+                .iter()
+                .map(render::tabular)
+                .collect()
+        })
+        .collect();
+    let col_widths = column_widths(&result.header, &visible_cells, area.width);
+
+    let rows = visible.iter().zip(&visible_cells).map(|(&absolute, cells)| {
+        let row_cells = cells.iter().enumerate().map(|(col, text)| {
+            let width = col_widths.get(col).copied().unwrap_or(MIN_COL_WIDTH);
             let mut style = Style::default();
-            // Bold any cell containing the search needle (issue 16).
+            // Bold any cell containing the search needle (issue 16); matched on the
+            // full text, so a match in a truncated tail still highlights the cell.
             if let Some(needle) = &needle {
                 if text.to_lowercase().contains(needle) {
                     style = style.add_modifier(Modifier::BOLD);
@@ -575,20 +640,16 @@ fn draw_result(
             if focused && absolute == result.selected_row && col == result.selected_col {
                 style = style.add_modifier(Modifier::REVERSED);
             }
-            Cell::from(text).style(style)
+            Cell::from(truncate_cell(text, width)).style(style)
         });
-        Row::new(cells)
+        Row::new(row_cells)
     });
 
-    let widths: Vec<Constraint> = (0..result.header.len())
-        .map(|_| Constraint::Ratio(1, result.header.len() as u32))
-        .collect();
-    let header = Row::new(
-        result
-            .header
-            .iter()
-            .map(|name| Cell::from(name.clone()).style(Style::default().add_modifier(Modifier::BOLD))),
-    );
+    let widths: Vec<Constraint> = col_widths.iter().map(|&w| Constraint::Length(w)).collect();
+    let header = Row::new(result.header.iter().enumerate().map(|(col, name)| {
+        let width = col_widths.get(col).copied().unwrap_or(MIN_COL_WIDTH);
+        Cell::from(truncate_cell(name, width)).style(Style::default().add_modifier(Modifier::BOLD))
+    }));
     let table = Table::new(rows, widths).header(header);
     frame.render_widget(table, area);
 }
@@ -857,6 +918,46 @@ mod tests {
         let multi = render(&mut state);
         assert!(multi.contains('1') && multi.contains('2'), "tab numbers drawn: {multi:?}");
         assert_eq!(state.tabbar_area.height, 1, "tab-bar rect cached for the mouse");
+    }
+
+    #[test]
+    fn columns_size_to_content_with_the_last_flexing_to_fill() {
+        // A wide column, a narrow column, and a last column. The wide one is
+        // clamped to ~half the pane; the narrow one stays narrow; the last takes
+        // whatever is left, so the widths span the available room.
+        let header = vec!["wide".to_string(), "n".to_string(), "tail".to_string()];
+        let cells = vec![vec![
+            "x".repeat(200), // far wider than the pane
+            "1".to_string(), // narrow
+            "z".to_string(),
+        ]];
+        let available = 80;
+        let widths = column_widths(&header, &cells, available);
+        assert_eq!(widths.len(), 3);
+        assert!(widths[0] > widths[1], "the wide column is wider than the narrow one");
+        assert!(widths[0] <= available / 2, "a non-last column is capped at ~half the pane");
+        assert_eq!(widths[1], MIN_COL_WIDTH, "the narrow column sits at the minimum");
+        // The widths plus the inter-column gaps span the available width (the last
+        // column flexes to fill the remainder).
+        let spacing = (header.len() - 1) as u16;
+        assert_eq!(widths.iter().sum::<u16>() + spacing, available, "widths fill the pane");
+    }
+
+    #[test]
+    fn a_cell_wider_than_its_column_is_truncated_with_an_ellipsis() {
+        use mgconsole_core::{Record, Value};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.history.push(CurrentResult {
+            header: vec!["blob".to_string(), "id".to_string()],
+            rows: vec![Record::new(vec![
+                // A long Value in a non-last column, so it is clamped and truncated.
+                Value::String("0123456789".repeat(20)),
+                Value::Integer(7),
+            ])],
+            ..CurrentResult::default()
+        });
+        let rendered = render(&mut state);
+        assert!(rendered.contains('…'), "an over-wide cell shows the truncation marker: {rendered:?}");
     }
 
     #[test]

@@ -11,11 +11,15 @@
 
 use mgconsole_core::DisplayMode;
 
-/// The resolved console settings, shared by every Frontend so `:set display`
-/// means the same thing in the REPL and the Workbench.
+/// The resolved console settings, the one `:set` store every Frontend reads.
+/// Each Frontend honours the settings its render model has a use for: `display`
+/// governs the buffered render (REPL + non-interactive), while the Workbench
+/// shows a live navigable table and ignores it (CONTEXT.md "Display mode");
+/// `theme` is the Workbench's and the REPL stores it without repainting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
-    /// How a buffered result is laid out (`tabular`/`vertical`/`auto`).
+    /// The buffered-render layout (`tabular`/`vertical`/`auto`); consulted by the
+    /// REPL and the non-interactive path, not the Workbench's live table.
     pub display: DisplayMode,
     /// The active Workbench theme name (issue 14): the built-in base palette
     /// `:set theme` switches between (`default`/`mono`). The REPL stores it for
