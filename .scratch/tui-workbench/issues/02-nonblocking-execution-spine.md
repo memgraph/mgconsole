@@ -1,6 +1,6 @@
 # 02 — Non-blocking query execution spine
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -24,16 +24,22 @@ busy — cancel first" status, honouring the one-live-result guard.
 
 ## Acceptance criteria
 
-- [ ] Enter submits the editor buffer; a multi-statement buffer is split and run
+- [x] Enter submits the editor buffer; a multi-statement buffer is split and run
       in order on the one Session; a buffer with no `;` runs as a single query.
-- [ ] A query runs as a cancellable task; lifecycle events flow to the reducer
+      (`submit` + `split_statements` via the Core `QueryAssembler`; reducer tests.)
+- [x] A query runs as a cancellable task; lifecycle events flow to the reducer
       and the UI stays responsive (no frozen render loop) while it runs.
-- [ ] The result's row count and elapsed time appear in the status line.
-- [ ] A query error is reported without losing the session; the next query runs.
-- [ ] Submitting a second query while one is in flight is rejected with a
-      "session busy" status (one-live-result guard).
-- [ ] The submit/lifecycle handling is covered at the reducer seam with a faked
+      (`run_query` spawned task streams events over a channel; the loop
+      `tokio::select!`s terminal input against the channel and never blocks.)
+- [x] The result's row count and elapsed time appear in the status line.
+      (`on_completed` reuses the REPL's `format_summary`; test asserts the line.)
+- [x] A query error is reported without losing the session; the next query runs.
+      (`on_failed` surfaces the error, stays idle, next submit runs; test.)
+- [x] Submitting a second query while one is in flight is rejected with a
+      "session busy" status (one-live-result guard). (`submit` busy guard; test.)
+- [x] The submit/lifecycle handling is covered at the reducer seam with a faked
       execution edge (no terminal, no database), like `run_loop`'s `QueryRunner`.
+      (`workbench::update` tests feed hand-built lifecycle events.)
 
 ## Blocked by
 

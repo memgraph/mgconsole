@@ -5,7 +5,11 @@
 //! adapter at the IO edge ([`super::run`]) translates a `crossterm::KeyEvent`
 //! into a `Key` so the reducer never depends on crossterm and can be driven by
 //! hand-built keys in tests with no terminal. Query-lifecycle events (a record
-//! arrived, a query completed) join this enum in slice 02.
+//! arrived, a query completed) carry the `id` of the query they belong to.
+
+use std::time::Duration;
+
+use mgconsole_core::{Error, Record, Summary};
 
 /// A key the reducer can act on, modifier flags alongside a [`KeyCode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,10 +79,31 @@ pub enum KeyCode {
     Other,
 }
 
-/// One input event into the reducer. Resize is observed so a future layout can
-/// react; the draw already re-reads the terminal size each frame.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One event into the reducer: a terminal-input event, or a query-lifecycle
+/// event delivered by the async execution edge ([`super::run`]) over the channel
+/// (slice 02). Each lifecycle event carries the `id` of the query it belongs to,
+/// so the reducer can drop stragglers from a superseded query.
+///
+/// Not `Clone`/`Eq`: lifecycle events carry owned, move-only payloads (a
+/// [`Record`], a [`Summary`], an [`Error`]). The reducer consumes each event by
+/// value, the way `run_loop` consumes a `Line`.
+#[derive(Debug)]
 pub enum Event {
+    /// A terminal key press.
     Key(Key),
+    /// The terminal was resized.
     Resize(u16, u16),
+    /// A query began; its column header is known.
+    QueryStarted { id: u64, header: Vec<String> },
+    /// One record streamed in.
+    RecordArrived { id: u64, record: Record },
+    /// The query drained cleanly; `elapsed` is the wall-clock round-trip and
+    /// `summary` the trailing notifications/stats (surfaced fully in slice 18).
+    QueryCompleted {
+        id: u64,
+        summary: Summary,
+        elapsed: Duration,
+    },
+    /// The query failed; the Session survives (ADR 0005) and the next runs.
+    QueryFailed { id: u64, error: Error },
 }

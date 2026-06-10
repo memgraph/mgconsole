@@ -171,7 +171,11 @@ fn run_interactive(
         Frontend::Workbench => {
             #[cfg(feature = "tui")]
             {
-                workbench::run(session, runtime, workbench::WorkbenchConfig::default(), colorize)?;
+                runtime.block_on(workbench::run(
+                    session,
+                    workbench::WorkbenchConfig::default(),
+                    colorize,
+                ))?;
             }
             #[cfg(not(feature = "tui"))]
             unreachable!("the resolver cannot pick the workbench without the tui feature");

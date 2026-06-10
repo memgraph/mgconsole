@@ -6,6 +6,9 @@
 //! state holds no terminal and no Session — it is driven by [`super::update`]
 //! and rendered by [`super::draw`], the analogue of the REPL's loop/IO split.
 
+use std::collections::{BTreeMap, VecDeque};
+
+use mgconsole_core::{Record, Summary, Value};
 use tui_textarea::{Input, Key as TaKey, TextArea};
 
 use super::event::{Key, KeyCode};
@@ -16,6 +19,17 @@ pub struct WorkbenchState {
     pub editor: EditorState,
     /// Which pane has keyboard focus.
     pub focus: Focus,
+    /// Whether a query is in flight (the one-live-result guard, ADR 0005).
+    pub run: RunState,
+    /// Statements from one multi-statement submit still to run, in order.
+    pub pending: VecDeque<String>,
+    /// The result currently on screen (rows stream into it); `None` before the
+    /// first query. Slice 03 makes it a navigable table; slice 10 a history stack.
+    pub result: Option<CurrentResult>,
+    /// The `:param` store bound to every query (populated in slice 16).
+    pub params: BTreeMap<String, Value>,
+    /// Monotonic id stamped on each query, so its lifecycle events match.
+    pub next_id: u64,
     /// The transient status message (errors, hints; running/elapsed in slice 07).
     pub status: StatusLine,
     /// Whether colour is on (resolved `--color`/`NO_COLOR`); slice 05 uses it for
@@ -31,11 +45,35 @@ impl WorkbenchState {
         Self {
             editor: EditorState::new(),
             focus: Focus::Editor,
+            run: RunState::Idle,
+            pending: VecDeque::new(),
+            result: None,
+            params: BTreeMap::new(),
+            next_id: 0,
             status: StatusLine::default(),
             color,
             config,
         }
     }
+}
+
+/// Whether a query is in flight. While `Running`, a second submit is refused
+/// (one-live-result, ADR 0005). The `id` matches the running query's lifecycle
+/// events; events for any other id are stragglers and ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunState {
+    Idle,
+    Running { id: u64 },
+}
+
+/// The result on screen: a column header and the rows streamed so far. Slice 03
+/// renders this as a navigable table; for now the draw shows a minimal view.
+#[derive(Debug, Default, Clone)]
+pub struct CurrentResult {
+    pub header: Vec<String>,
+    pub rows: Vec<Record>,
+    /// The trailing summary, available once the query completes (slice 18).
+    pub summary: Option<Summary>,
 }
 
 /// Which pane the keyboard drives. The results pane fills in from slice 03;
@@ -108,16 +146,6 @@ impl EditorState {
     /// The whole buffer as one string, physical lines joined by `\n`.
     pub fn buffer(&self) -> String {
         self.textarea.lines().join("\n")
-    }
-
-    /// Whether the buffer is empty (no text on any line).
-    pub fn is_empty(&self) -> bool {
-        self.textarea.is_empty()
-    }
-
-    /// Clear the buffer back to empty (after a submit).
-    pub fn clear(&mut self) {
-        self.textarea = TextArea::default();
     }
 
     /// The underlying widget, for the draw edge to render.

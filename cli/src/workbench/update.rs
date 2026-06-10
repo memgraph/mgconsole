@@ -7,11 +7,15 @@
 //! quit; query execution and its lifecycle events arrive in slice 02. Driven in
 //! tests by hand-built [`Event`]s, with no terminal and no database.
 
-use crate::repl::{meta_command, MetaCommand};
+use std::time::Duration;
+
+use mgconsole_core::{Error, QueryAssembler, Record, Summary};
+
+use crate::repl::{format_summary, meta_command, MetaCommand};
 
 use super::effect::Effect;
 use super::event::{Event, Key, KeyCode};
-use super::state::{Focus, WorkbenchState};
+use super::state::{CurrentResult, Focus, RunState, WorkbenchState};
 
 /// Apply one event to the state, returning the effects to perform.
 // Events are consumed by value: slice 02's lifecycle events carry owned data
@@ -24,7 +28,104 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
         // state change today; the event exists for layouts that will.
         Event::Resize(_, _) => Vec::new(),
         Event::Key(key) => update_key(state, key),
+        Event::QueryStarted { id, header } => {
+            on_started(state, id, header);
+            Vec::new()
+        }
+        Event::RecordArrived { id, record } => {
+            on_record(state, id, record);
+            Vec::new()
+        }
+        Event::QueryCompleted {
+            id,
+            summary,
+            elapsed,
+        } => on_completed(state, id, summary, elapsed),
+        Event::QueryFailed { id, error } => on_failed(state, id, &error),
     }
+}
+
+/// Whether `id` is the query currently in flight (so its events are live, not
+/// stragglers from a superseded query — the one-live-result guard, ADR 0005).
+fn is_current(state: &WorkbenchState, id: u64) -> bool {
+    matches!(state.run, RunState::Running { id: running } if running == id)
+}
+
+/// A query began: start a fresh result for its rows to stream into.
+fn on_started(state: &mut WorkbenchState, id: u64, header: Vec<String>) {
+    if !is_current(state, id) {
+        return;
+    }
+    state.result = Some(CurrentResult {
+        header,
+        rows: Vec::new(),
+        summary: None,
+    });
+}
+
+/// A record streamed in: append it to the live result.
+fn on_record(state: &mut WorkbenchState, id: u64, record: Record) {
+    if !is_current(state, id) {
+        return;
+    }
+    if let Some(result) = state.result.as_mut() {
+        result.rows.push(record);
+    }
+}
+
+/// The query drained: show its row count and elapsed time (reusing the REPL's
+/// summary line), keep its trailing summary, then run the next pending statement
+/// or fall idle.
+fn on_completed(
+    state: &mut WorkbenchState,
+    id: u64,
+    summary: Summary,
+    elapsed: Duration,
+) -> Vec<Effect> {
+    if !is_current(state, id) {
+        return Vec::new();
+    }
+    let rows = state.result.as_ref().map_or(0, |result| result.rows.len());
+    state.status.message = format_summary(rows, elapsed);
+    if let Some(result) = state.result.as_mut() {
+        result.summary = Some(summary);
+    }
+    advance(state)
+}
+
+/// The query failed: surface the error without losing the Session (ADR 0005),
+/// then continue with the next pending statement (as the REPL does mid-batch).
+fn on_failed(state: &mut WorkbenchState, id: u64, error: &Error) -> Vec<Effect> {
+    if !is_current(state, id) {
+        return Vec::new();
+    }
+    state.status.message = format!("error: {error}");
+    advance(state)
+}
+
+/// Run the next pending statement of a multi-statement submit, or fall idle when
+/// the batch is done.
+fn advance(state: &mut WorkbenchState) -> Vec<Effect> {
+    if let Some(next) = state.pending.pop_front() {
+        start_query(state, next)
+    } else {
+        state.run = RunState::Idle;
+        Vec::new()
+    }
+}
+
+/// Begin running `query`: stamp it with a fresh id, mark the Session busy, and
+/// emit the run effect with the bound parameters.
+fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
+    let id = state.next_id;
+    state.next_id += 1;
+    state.run = RunState::Running { id };
+    state.status.message = "running…".to_string();
+    vec![Effect::RunQuery {
+        id,
+        query,
+        params: state.params.clone(),
+    }]
 }
 
 fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
@@ -91,28 +192,73 @@ fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     Vec::new()
 }
 
-/// Handle a submit (plain Enter). A `:quit`/`:exit` buffer leaves the workbench,
-/// reusing the REPL's meta-command parser. Otherwise the submit is acknowledged
-/// non-destructively — the buffer is kept — because query execution arrives in
-/// slice 02; this slice only wires the gesture.
+/// Handle a submit (plain Enter): split the buffer into statements and run the
+/// first, queuing the rest to run sequentially on the one Session. A `:quit`/
+/// `:exit` buffer leaves the workbench (reusing the REPL's meta parser), even
+/// while a query runs. Submitting while a query is in flight is refused with a
+/// "session busy" status (one-live-result, ADR 0005). The editor keeps its text
+/// so the query can be edited and re-run.
 fn submit(state: &mut WorkbenchState) -> Vec<Effect> {
     let buffer = state.editor.buffer();
     if matches!(meta_command(buffer.trim()), Some(MetaCommand::Quit)) {
         return vec![Effect::Quit];
     }
-    if !state.editor.is_empty() {
-        state.status.message = "query ready — execution arrives in slice 02".to_string();
+    if matches!(state.run, RunState::Running { .. }) {
+        state.status.message = "session busy — cancel first".to_string();
+        return Vec::new();
     }
-    Vec::new()
+    let mut statements = split_statements(&buffer).into_iter();
+    let Some(first) = statements.next() else {
+        return Vec::new(); // a blank buffer submits nothing
+    };
+    state.pending = statements.collect();
+    start_query(state, first)
+}
+
+/// Split the editor buffer into complete statements using the Core's
+/// [`QueryAssembler`] (the same `;`-aware splitting the REPL/import paths use).
+/// A trailing statement with no `;` is run as a single query, decoupling submit
+/// from the REPL's `;`-completeness rule (PRD).
+fn split_statements(buffer: &str) -> Vec<String> {
+    let mut assembler = QueryAssembler::new();
+    // The trailing newline lets a line comment close before the buffer ends.
+    let mut statements = assembler.push(&format!("{buffer}\n"));
+    if assembler.has_pending() {
+        let pending = assembler.pending().trim();
+        if !pending.is_empty() {
+            statements.push(pending.to_string());
+        }
+    }
+    statements
+        .into_iter()
+        .filter(|statement| !statement.trim().is_empty())
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::workbench::state::WorkbenchConfig;
+    use std::collections::BTreeMap;
+    use mgconsole_core::error::QueryError;
+    use mgconsole_core::Value;
 
     fn wb() -> WorkbenchState {
         WorkbenchState::new(WorkbenchConfig::default(), true)
+    }
+
+    /// Submit `query` and return the id the reducer stamped on it.
+    fn submit_query(state: &mut WorkbenchState, query: &str) -> u64 {
+        type_str(state, query);
+        let effects = update(state, Event::Key(Key::plain(KeyCode::Enter)));
+        match effects.first() {
+            Some(Effect::RunQuery { id, .. }) => *id,
+            other => panic!("expected a RunQuery effect, got {other:?}"),
+        }
+    }
+
+    fn one_row() -> Record {
+        Record::new(vec![Value::Integer(1)])
     }
 
     /// Type a string into the editor, one character event at a time.
@@ -168,15 +314,44 @@ mod tests {
     }
 
     #[test]
-    fn plain_enter_submits_non_destructively_in_slice_01() {
-        // Execution arrives in slice 02; the gesture is wired but keeps the
-        // buffer rather than discarding the user's typing.
+    fn plain_enter_runs_the_buffer_as_a_query() {
         let mut s = wb();
         type_str(&mut s, "RETURN 1;");
         let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
-        assert!(effects.is_empty(), "no quit on an ordinary submit");
-        assert_eq!(s.editor.buffer(), "RETURN 1;", "the buffer is preserved");
-        assert!(!s.status.message.is_empty(), "the submit is acknowledged");
+        assert_eq!(
+            effects,
+            vec![Effect::RunQuery {
+                id: 0,
+                query: "RETURN 1".to_string(),
+                params: BTreeMap::new(),
+            }]
+        );
+        assert!(matches!(s.run, RunState::Running { id: 0 }));
+        assert_eq!(s.editor.buffer(), "RETURN 1;", "the buffer is kept for re-run");
+    }
+
+    #[test]
+    fn a_buffer_with_no_semicolon_runs_as_a_single_query() {
+        let mut s = wb();
+        type_str(&mut s, "RETURN 1");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert_eq!(
+            effects,
+            vec![Effect::RunQuery {
+                id: 0,
+                query: "RETURN 1".to_string(),
+                params: BTreeMap::new(),
+            }]
+        );
+        assert!(s.pending.is_empty());
+    }
+
+    #[test]
+    fn a_blank_buffer_submits_nothing() {
+        let mut s = wb();
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(effects.is_empty());
+        assert!(matches!(s.run, RunState::Idle));
     }
 
     #[test]
@@ -223,5 +398,110 @@ mod tests {
             update(&mut s, Event::Key(Key::plain(KeyCode::Esc))),
             vec![Effect::Quit]
         );
+    }
+
+    // --- execution spine (slice 02): lifecycle driven by hand-fed events -----
+
+    #[test]
+    fn streamed_records_append_and_the_summary_line_reports_count_and_time() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "MATCH (n) RETURN n;");
+        update(
+            &mut s,
+            Event::QueryStarted {
+                id,
+                header: vec!["n".to_string()],
+            },
+        );
+        for _ in 0..3 {
+            update(&mut s, Event::RecordArrived { id, record: one_row() });
+        }
+        let effects = update(
+            &mut s,
+            Event::QueryCompleted {
+                id,
+                summary: Summary::default(),
+                elapsed: Duration::from_millis(5),
+            },
+        );
+        assert!(effects.is_empty(), "no further query to run");
+        assert!(matches!(s.run, RunState::Idle), "idle once drained");
+        let result = s.result.as_ref().expect("a result");
+        assert_eq!(result.rows.len(), 3, "all three rows appended");
+        assert_eq!(s.status.message, "3 rows in set (0.005 sec)");
+    }
+
+    #[test]
+    fn a_multi_statement_submit_runs_sequentially_on_one_session() {
+        let mut s = wb();
+        let id0 = submit_query(&mut s, "RETURN 1; RETURN 2;");
+        assert_eq!(s.pending.len(), 1, "the second statement is queued");
+        // Completing the first runs the second on the one Session.
+        let effects = update(
+            &mut s,
+            Event::QueryCompleted {
+                id: id0,
+                summary: Summary::default(),
+                elapsed: Duration::from_millis(1),
+            },
+        );
+        assert_eq!(
+            effects,
+            vec![Effect::RunQuery {
+                id: 1,
+                query: "RETURN 2".to_string(),
+                params: BTreeMap::new(),
+            }]
+        );
+        assert!(s.pending.is_empty());
+    }
+
+    #[test]
+    fn a_second_query_while_one_runs_is_refused_as_session_busy() {
+        let mut s = wb();
+        submit_query(&mut s, "MATCH (n) RETURN n;"); // now Running
+        // Type and submit again while in flight.
+        type_str(&mut s, "RETURN 2;");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(effects.is_empty(), "the second query does not start");
+        assert!(s.status.message.contains("busy"), "status: {}", s.status.message);
+    }
+
+    #[test]
+    fn a_query_error_is_surfaced_and_the_session_survives() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "BAD;");
+        let boom = Error::Query(QueryError {
+            code: "Memgraph.ClientError.MemgraphError.SyntaxError".to_string(),
+            message: "bad cypher".to_string(),
+        });
+        update(&mut s, Event::QueryFailed { id, error: boom });
+        assert!(s.status.message.contains("bad cypher"), "error surfaced");
+        assert!(matches!(s.run, RunState::Idle), "session ready again");
+        // The next query runs (the session was not lost).
+        let next = submit_query(&mut s, "RETURN 1;");
+        assert_eq!(next, 1);
+    }
+
+    #[test]
+    fn lifecycle_events_from_a_superseded_query_are_ignored() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "RETURN 1;");
+        update(
+            &mut s,
+            Event::QueryStarted {
+                id,
+                header: vec!["x".to_string()],
+            },
+        );
+        // A straggler record from a different (older) query id must not append.
+        update(
+            &mut s,
+            Event::RecordArrived {
+                id: id + 99,
+                record: one_row(),
+            },
+        );
+        assert_eq!(s.result.as_ref().expect("result").rows.len(), 0);
     }
 }
