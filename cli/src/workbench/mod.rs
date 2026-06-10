@@ -116,6 +116,11 @@ pub async fn run(session: Session, config: WorkbenchConfig, color: bool) -> io::
                     // in-flight query rather than competing with it (ADR 0005).
                     tokio::spawn(fetch_schema(Arc::clone(&session), tx.clone()));
                 }
+                Effect::EvaluateParam { name, expr, params } => {
+                    let session = Arc::clone(&session);
+                    let tx = tx.clone();
+                    tokio::spawn(evaluate_param(session, tx, name, expr, params));
+                }
                 Effect::Export {
                     format,
                     path,
@@ -213,6 +218,37 @@ async fn fetch_schema(session: Arc<Mutex<Session>>, tx: mpsc::UnboundedSender<Ev
 async fn collect(session: &mut Session, query: &str) -> Result<Vec<Record>, Error> {
     let mut result = session.run(query).await?;
     result.records().collect().await
+}
+
+/// Evaluate a `:param` expression server-side by running `RETURN <expr>` with the
+/// current params in scope, and deliver the single resulting Value (slice 16,
+/// mirroring the REPL's evaluation). A bad expression becomes `Err` — the Session
+/// survives it (ADR 0005).
+async fn evaluate_param(
+    session: Arc<Mutex<Session>>,
+    tx: mpsc::UnboundedSender<Event>,
+    name: String,
+    expr: String,
+    params: BTreeMap<String, Value>,
+) {
+    let value = {
+        let mut session = session.lock().await;
+        match session
+            .run_with_params(&format!("RETURN {expr}"), &params)
+            .await
+        {
+            Ok(mut result) => match result.records().collect().await {
+                Ok(rows) => Ok(rows
+                    .into_iter()
+                    .next()
+                    .and_then(|row| row.into_fields().into_iter().next())
+                    .unwrap_or(Value::Null)),
+                Err(error) => Err(error.to_string()),
+            },
+            Err(error) => Err(error.to_string()),
+        }
+    };
+    let _ = tx.send(Event::ParamEvaluated { name, value });
 }
 
 /// Write the on-screen result to `path` in `format`, reusing the Core's streaming

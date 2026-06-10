@@ -5,6 +5,8 @@
 //! of the REPL's rustyline `Helper`. Behaviour lives in the reducer; this is
 //! kept thin and covered by a `TestBackend` smoke render rather than by detail.
 
+use std::collections::BTreeMap;
+
 use mgconsole_core::render;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -40,13 +42,17 @@ fn border_style(focused: bool) -> Style {
 pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     // When a side drawer is open it takes a fixed column on the right; the rest
     // is the main editor/results/status stack.
-    let main_area = if matches!(state.drawer, Some(DrawerKind::Schema)) {
-        let columns =
-            Layout::horizontal([Constraint::Min(0), Constraint::Length(32)]).split(frame.area());
-        draw_sidebar(frame, columns[1], state.schema.as_ref());
-        columns[0]
-    } else {
-        frame.area()
+    let main_area = match state.drawer {
+        Some(kind) => {
+            let columns = Layout::horizontal([Constraint::Min(0), Constraint::Length(32)])
+                .split(frame.area());
+            match kind {
+                DrawerKind::Schema => draw_sidebar(frame, columns[1], state.schema.as_ref()),
+                DrawerKind::Params => draw_params(frame, columns[1], &state.params),
+            }
+            columns[0]
+        }
+        None => frame.area(),
     };
 
     let areas = Layout::vertical([
@@ -184,6 +190,20 @@ fn draw_sidebar(frame: &mut Frame, area: Rect, schema: Option<&Schema>) {
         section(&mut lines, "Property keys", &schema.property_keys);
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+/// Draw the parameters drawer (slice 16): the current `:param` set, one
+/// `$name = value` per line, reusing the REPL's listing.
+fn draw_params(frame: &mut Frame, area: Rect, params: &BTreeMap<String, Value>) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Parameters (Ctrl-P close)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(crate::repl::format_params(params)).wrap(Wrap { trim: false }),
+        inner,
+    );
 }
 
 /// Append a titled section of names to the sidebar lines.

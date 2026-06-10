@@ -59,6 +59,13 @@ pub enum Effect {
     Cancel { id: u64 },
     /// Fetch the database Schema (on connect and on manual refresh, slice 12).
     FetchSchema,
+    /// Evaluate a `:param` expression server-side with the current params in
+    /// scope, then store the result as `$name` (slice 16).
+    EvaluateParam {
+        name: String,
+        expr: String,
+        params: BTreeMap<String, Value>,
+    },
     /// Write the on-screen result to `path` in `format`, reusing the Core's
     /// streaming writers (slice 09). Carries the loaded rows (including a partial
     /// result after a cancel), so the export reflects exactly what is shown.

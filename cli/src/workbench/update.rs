@@ -59,6 +59,17 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
             set_schema(state, schema);
             Vec::new()
         }
+        Event::ParamEvaluated { name, value } => {
+            match value {
+                Ok(value) => {
+                    state.params.insert(name.clone(), value);
+                    state.status.message = format!("set ${name}");
+                }
+                // The Session survives a bad expression (ADR 0005); just report it.
+                Err(message) => state.status.message = format!("error: {message}"),
+            }
+            Vec::new()
+        }
         Event::Tick => {
             // Advance the running-query spinner; idle ticks change nothing.
             if matches!(state.run, RunState::Running { .. }) {
@@ -220,6 +231,15 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     // Schema was fetched (the feature is off — nothing to browse).
     if key.ctrl && key.code == KeyCode::Char('b') {
         toggle_schema_sidebar(state);
+        return Vec::new();
+    }
+    // Ctrl-P toggles the parameters drawer (slice 16).
+    if key.ctrl && key.code == KeyCode::Char('p') {
+        state.drawer = if state.drawer == Some(DrawerKind::Params) {
+            None
+        } else {
+            Some(DrawerKind::Params)
+        };
         return Vec::new();
     }
     match state.focus {
@@ -559,8 +579,10 @@ fn detail_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// so the query can be edited and re-run.
 fn submit(state: &mut WorkbenchState) -> Vec<Effect> {
     let buffer = state.editor.buffer();
-    if matches!(meta_command(buffer.trim()), Some(MetaCommand::Quit)) {
-        return vec![Effect::Quit];
+    // A `:`-meta command is handled here (reusing the REPL's parser), not run as
+    // a query (slice 16 brings the `:param` family into the workbench).
+    if let Some(meta) = meta_command(buffer.trim()) {
+        return handle_meta(state, meta);
     }
     if matches!(state.run, RunState::Running { .. }) {
         state.status.message = "session busy — cancel first".to_string();
@@ -572,6 +594,53 @@ fn submit(state: &mut WorkbenchState) -> Vec<Effect> {
     };
     state.pending = statements.collect();
     start_query(state, first)
+}
+
+/// Handle a submitted `:`-meta command, reusing the REPL's `MetaCommand`. The
+/// `:param` family (slice 16) reuses the REPL's store and server-side evaluation;
+/// the editor is cleared since a command is consumed (unlike a query, which is
+/// kept for re-run).
+fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
+    match meta {
+        MetaCommand::Quit => vec![Effect::Quit],
+        MetaCommand::SetParam { name, expr } => {
+            // Evaluation runs a query; refuse while one is in flight (ADR 0005).
+            if matches!(state.run, RunState::Running { .. }) {
+                state.status.message = "session busy — cancel first".to_string();
+                return Vec::new();
+            }
+            state.editor.clear();
+            vec![Effect::EvaluateParam {
+                name,
+                expr,
+                params: state.params.clone(),
+            }]
+        }
+        MetaCommand::ListParams => {
+            state.drawer = Some(DrawerKind::Params);
+            state.editor.clear();
+            Vec::new()
+        }
+        MetaCommand::ClearParams => {
+            state.params.clear();
+            state.status.message = "parameters cleared".to_string();
+            state.editor.clear();
+            Vec::new()
+        }
+        MetaCommand::Invalid(message) => {
+            state.status.message = format!("error: {message}");
+            Vec::new()
+        }
+        MetaCommand::Unknown(command) => {
+            state.status.message = format!("unknown command '{command}'");
+            Vec::new()
+        }
+        // The help/docs text lands in slice 19; acknowledge for now.
+        MetaCommand::Help | MetaCommand::Docs => {
+            state.status.message = "help/docs arrive in slice 19".to_string();
+            Vec::new()
+        }
+    }
 }
 
 /// Split the editor buffer into complete statements using the Core's
@@ -1358,6 +1427,81 @@ mod tests {
         press(&mut s, KeyCode::Up);
         press(&mut s, KeyCode::Enter);
         assert!(s.shown().unwrap().plan.as_ref().unwrap().lines[0].collapsed);
+    }
+
+    // --- workbench parameters (slice 16) ------------------------------------
+
+    #[test]
+    fn set_param_evaluates_server_side_with_current_params_in_scope() {
+        let mut s = wb();
+        s.params.insert("x".to_string(), Value::Integer(1));
+        type_str(&mut s, ":param y $x + 1");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert_eq!(
+            effects,
+            vec![Effect::EvaluateParam {
+                name: "y".to_string(),
+                expr: "$x + 1".to_string(),
+                params: BTreeMap::from([("x".to_string(), Value::Integer(1))]),
+            }]
+        );
+        assert_eq!(s.editor.buffer(), "", "the command is consumed");
+    }
+
+    #[test]
+    fn an_evaluated_param_is_stored_and_bound_to_the_next_query() {
+        let mut s = wb();
+        update(
+            &mut s,
+            Event::ParamEvaluated { name: "age".to_string(), value: Ok(Value::Integer(42)) },
+        );
+        assert_eq!(s.params.get("age"), Some(&Value::Integer(42)));
+        // The stored param is bound to the next query (slice 02 binding).
+        type_str(&mut s, "RETURN $age;");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        match &effects[0] {
+            Effect::RunQuery { params, .. } => {
+                assert_eq!(params.get("age"), Some(&Value::Integer(42)));
+            }
+            other => panic!("expected RunQuery, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_bad_param_expression_is_reported_without_losing_the_session() {
+        let mut s = wb();
+        update(
+            &mut s,
+            Event::ParamEvaluated { name: "x".to_string(), value: Err("syntax error".to_string()) },
+        );
+        assert!(s.status.message.contains("syntax error"));
+        assert!(s.params.is_empty(), "nothing stored on failure");
+        // The next query still runs.
+        let id = submit_query(&mut s, "RETURN 1;");
+        assert_eq!(id, 0);
+    }
+
+    #[test]
+    fn params_commands_list_and_clear_the_store() {
+        let mut s = wb();
+        s.params.insert("n".to_string(), Value::Integer(7));
+        // `:params` opens the parameters drawer.
+        type_str(&mut s, ":params");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert_eq!(s.drawer, Some(DrawerKind::Params));
+        // `:params clear` empties the store.
+        type_str(&mut s, ":params clear");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(s.params.is_empty());
+    }
+
+    #[test]
+    fn ctrl_p_toggles_the_parameters_drawer() {
+        let mut s = wb();
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('p'))));
+        assert_eq!(s.drawer, Some(DrawerKind::Params));
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('p'))));
+        assert_eq!(s.drawer, None);
     }
 
     #[test]

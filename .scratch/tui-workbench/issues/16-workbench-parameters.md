@@ -1,6 +1,6 @@
 # 16 — Parameters in the workbench
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -17,13 +17,19 @@ current parameters (`$name = value`).
 
 ## Acceptance criteria
 
-- [ ] `:param` / `:params` / `:params clear` behave as in the REPL, reusing the
+- [x] `:param` / `:params` / `:params clear` behave as in the REPL, reusing the
       existing store and server-side evaluation, and bind to every query run.
-- [ ] A toggleable drawer lists the current parameters, ordered, with string
-      values quoted (as the REPL lists them).
-- [ ] A bad `:param` expression is reported without losing the session.
-- [ ] The parameter commands and binding are covered at the reducer seam (the
-      `:param`-parsing helpers are already unit-tested and reused).
+      (`handle_meta` reuses `meta_command`; `Effect::EvaluateParam` runs
+      `RETURN <expr>`; `ParamEvaluated` stores into `state.params`, which
+      `start_query` binds to every `RunQuery`.)
+- [x] A toggleable drawer lists the current parameters, ordered, with string
+      values quoted (as the REPL lists them). (Ctrl-P / `:params` open the drawer;
+      `draw_params` reuses `repl::format_params`.)
+- [x] A bad `:param` expression is reported without losing the session.
+      (`ParamEvaluated(Err)` → status error; nothing stored; next query runs.)
+- [x] The parameter commands and binding are covered at the reducer seam (the
+      `:param`-parsing helpers are already unit-tested and reused). (set/evaluate,
+      bind-to-next, bad-expression, list/clear, and Ctrl-P toggle tests.)
 
 ## Blocked by
 

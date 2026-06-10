@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use mgconsole_core::{Error, Record, Summary};
+use mgconsole_core::{Error, Record, Summary, Value};
 
 use super::schema::Schema;
 
@@ -117,4 +117,10 @@ pub enum Event {
     /// `None` when it is off/unavailable (degrade silently to static-only,
     /// slice 12).
     SchemaLoaded(Option<Schema>),
+    /// A `:param` expression was evaluated server-side (slice 16): `Ok(value)` to
+    /// store as `$name`, or `Err(message)` to report without losing the session.
+    ParamEvaluated {
+        name: String,
+        value: Result<Value, String>,
+    },
 }

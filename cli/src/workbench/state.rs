@@ -214,6 +214,7 @@ pub enum Focus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawerKind {
     Schema,
+    Params,
 }
 
 /// The one-line status message. Distinct from the keybind hint, which the draw
