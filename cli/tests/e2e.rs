@@ -53,14 +53,11 @@ async fn start_memgraph() -> Memgraph {
     }
 }
 
-/// Run the built `mgconsole` binary against `mg`, piping `stdin` in over a
-/// non-TTY pipe (so the non-interactive import path runs).
-fn run_cli(mg: &Memgraph, extra_args: &[&str], stdin: &str) -> std::process::Output {
-    let port = mg.port.to_string();
-    let mut args = vec!["--host", &mg.host, "--port", &port, "--use-ssl", "false"];
-    args.extend_from_slice(extra_args);
+/// Run the built `mgconsole` binary with `args`, piping `stdin` in over a non-TTY
+/// pipe (so the non-interactive path runs).
+fn run_binary(args: &[&str], stdin: &str) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_mgconsole"))
-        .args(&args)
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -73,6 +70,14 @@ fn run_cli(mg: &Memgraph, extra_args: &[&str], stdin: &str) -> std::process::Out
         .write_all(stdin.as_bytes())
         .expect("write stdin"); // dropping the handle here closes stdin (EOF)
     child.wait_with_output().expect("await mgconsole")
+}
+
+/// Run the binary against `mg` over plaintext Bolt.
+fn run_cli(mg: &Memgraph, extra_args: &[&str], stdin: &str) -> std::process::Output {
+    let port = mg.port.to_string();
+    let mut args = vec!["--host", &mg.host, "--port", &port, "--use-ssl", "false"];
+    args.extend_from_slice(extra_args);
+    run_binary(&args, stdin)
 }
 
 #[tokio::test]
@@ -99,4 +104,35 @@ async fn pipes_a_cypherl_stream_and_reflects_the_exit_code() {
         !broken.status.success(),
         "a failing query must exit non-zero"
     );
+}
+
+#[test]
+fn parser_mode_reports_without_touching_the_database() {
+    // Point at an address nothing listens on: parser mode must succeed anyway,
+    // proving it never connects (no DB execution, no side effects).
+    let out = run_binary(
+        &[
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "1", // unused — a connection attempt here would fail
+            "--import-mode",
+            "parser",
+            "--parser-stats",
+        ],
+        "CREATE (:Person {name: 'Ada'});\nMATCH (n) RETURN n;\n",
+    );
+    assert!(
+        out.status.success(),
+        "parser mode needs no database; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("1: Create"), "per-query report: {stdout}");
+    assert!(stdout.contains("2: Match"), "per-query report: {stdout}");
+    assert!(
+        stdout.contains("Parsed 2 queries; nothing executed."),
+        "summary: {stdout}"
+    );
+    assert!(stdout.contains("Create: 1"), "statistics: {stdout}");
 }

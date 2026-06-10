@@ -21,7 +21,10 @@ pub mod value;
 
 pub use clause::{scan_clauses, Clause};
 pub use error::Error;
-pub use import::{run_serial, ImportFailure, ImportReport, OutputFormat as ImportFormat};
+pub use import::{
+    run_parser, run_serial, ImportFailure, ImportReport, OutputFormat as ImportFormat, ParsedQuery,
+    ParserReport,
+};
 pub use parse::QueryAssembler;
 pub use result::{ExecutionInfo, Notification, QueryResult, Record, RecordStream, Summary};
 pub use tabular::{render_table, TableOptions, DEFAULT_ROW_CAP};

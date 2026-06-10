@@ -12,9 +12,10 @@
 //! within bounded memory regardless of result size; the tabular format buffers
 //! its rows, the deliberate exception (slice 08).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 
+use crate::clause::{scan_clauses, Clause};
 use crate::error::Error;
 use crate::format::{self, CsvOptions, CsvWriter, CypherlWriter, JsonlWriter};
 use crate::session::Session;
@@ -86,6 +87,44 @@ where
     report
 }
 
+/// One query inspected by parser mode: the query text and the ordering-relevant
+/// clauses the scanner found in it (slice 27).
+#[derive(Debug, Clone)]
+pub struct ParsedQuery {
+    pub query: String,
+    pub clauses: BTreeSet<Clause>,
+}
+
+/// The outcome of a parser-mode run: every query inspected (no execution) plus
+/// aggregate statistics — how many queries contained each clause.
+#[derive(Debug, Default)]
+pub struct ParserReport {
+    pub queries: Vec<ParsedQuery>,
+    pub clause_counts: BTreeMap<Clause, usize>,
+}
+
+impl ParserReport {
+    /// How many queries were inspected.
+    pub fn query_count(&self) -> usize {
+        self.queries.len()
+    }
+}
+
+/// Inspect a query stream with the clause scanner and report on it, executing
+/// nothing (parser Import mode). Pure — it never touches a Session, so an import
+/// file can be validated before a database is even reachable.
+pub fn run_parser<I: IntoIterator<Item = String>>(queries: I) -> ParserReport {
+    let mut report = ParserReport::default();
+    for query in queries {
+        let clauses = scan_clauses(&query);
+        for &clause in &clauses {
+            *report.clause_counts.entry(clause).or_insert(0) += 1;
+        }
+        report.queries.push(ParsedQuery { query, clauses });
+    }
+    report
+}
+
 /// Run one query and render its result to the sink. A result with no columns is
 /// a write and produces no output in any format; it is drained so the connection
 /// is ready for the next query (ADR 0005).
@@ -127,4 +166,47 @@ async fn execute_and_render<W: Write>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn queries(qs: &[&str]) -> Vec<String> {
+        qs.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parser_reports_clauses_per_query() {
+        let report = run_parser(queries(&[
+            "CREATE (:Person {name: 'Ada'})",
+            "MATCH (n) DETACH DELETE n",
+        ]));
+        assert_eq!(report.query_count(), 2);
+        assert_eq!(report.queries[0].clauses, BTreeSet::from([Clause::Create]));
+        assert_eq!(
+            report.queries[1].clauses,
+            BTreeSet::from([Clause::Match, Clause::DetachDelete])
+        );
+    }
+
+    #[test]
+    fn parser_aggregates_clause_counts_across_queries() {
+        let report = run_parser(queries(&[
+            "CREATE (a)",
+            "CREATE (b)",
+            "MATCH (n) RETURN n",
+        ]));
+        assert_eq!(report.clause_counts.get(&Clause::Create), Some(&2));
+        assert_eq!(report.clause_counts.get(&Clause::Match), Some(&1));
+        assert_eq!(report.clause_counts.get(&Clause::Merge), None);
+    }
+
+    #[test]
+    fn parser_handles_a_query_with_no_ordering_clauses() {
+        let report = run_parser(queries(&["RETURN 1"]));
+        assert_eq!(report.query_count(), 1);
+        assert!(report.queries[0].clauses.is_empty());
+        assert!(report.clause_counts.is_empty());
+    }
 }

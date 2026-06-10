@@ -22,11 +22,11 @@ use rustyline::{Context, Editor, Helper, Hinter};
 use mgconsole::history::{self, HistoryFile};
 use mgconsole::repl::{self, Line, LineSource, QueryRunner, Rendered, ReplConfig};
 use mgconsole::syntax::{self, Completer};
-use mgconsole::{resolve_password, Cli, OutputFormat};
+use mgconsole::{resolve_password, Cli, ImportMode, OutputFormat};
 use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
-    render_table, run_serial, ConnectOptions, Credentials, Error, ImportFormat, QueryAssembler,
-    ReconnectNotice, Session, TableOptions, Value, DEFAULT_ROW_CAP,
+    render_table, run_parser, run_serial, ConnectOptions, Credentials, Error, ImportFormat,
+    ParserReport, QueryAssembler, ReconnectNotice, Session, TableOptions, Value, DEFAULT_ROW_CAP,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,6 +34,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(message) = cli.validate() {
         eprintln!("error: {message}");
         std::process::exit(2);
+    }
+
+    // Parser mode validates a piped import file with the clause scanner and never
+    // touches the database (PRD: validate before touching Memgraph), so handle it
+    // before resolving auth or connecting. It is meaningful only non-interactively.
+    if !io::stdin().is_terminal() && cli.import_mode == ImportMode::Parser {
+        let queries = read_queries(io::stdin().lock())?;
+        let report = run_parser(queries);
+        print!("{}", format_parser_report(&report, cli.parser_stats));
+        return Ok(());
     }
 
     // Resolve auth before touching the network: a username with no password gets
@@ -132,6 +142,37 @@ fn read_queries(mut reader: impl BufRead) -> io::Result<Vec<String>> {
         queries.push(assembler.pending().trim().to_string());
     }
     Ok(queries)
+}
+
+/// Render a parser-mode report. Always lists each query's detected clauses (the
+/// scanner's per-query report); with `stats` on, appends an aggregate clause
+/// breakdown (the `--parser-stats` flag). Clause names use their enum spelling.
+fn format_parser_report(report: &ParserReport, stats: bool) -> String {
+    let mut out = String::new();
+    for (i, parsed) in report.queries.iter().enumerate() {
+        let clauses = if parsed.clauses.is_empty() {
+            "(no ordering clauses)".to_string()
+        } else {
+            parsed
+                .clauses
+                .iter()
+                .map(|c| format!("{c:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        out.push_str(&format!("{}: {clauses}\n", i + 1));
+    }
+    out.push_str(&format!(
+        "Parsed {} queries; nothing executed.\n",
+        report.query_count()
+    ));
+    if stats {
+        out.push_str("Clause statistics:\n");
+        for (clause, count) in &report.clause_counts {
+            out.push_str(&format!("  {clause:?}: {count}\n"));
+        }
+    }
+    out
 }
 
 /// Map the CLI output-format flag (plus its csv options and resolved table width)
@@ -410,5 +451,30 @@ mod tests {
             }
             _ => panic!("expected csv format"),
         }
+    }
+
+    #[test]
+    fn parser_report_lists_clauses_and_a_no_execution_summary() {
+        let report = run_parser(vec![
+            "CREATE (n)".to_string(),
+            "RETURN 1".to_string(),
+        ]);
+        let text = format_parser_report(&report, false);
+        assert!(text.contains("1: Create"), "per-query clauses: {text}");
+        assert!(text.contains("2: (no ordering clauses)"), "empty case: {text}");
+        assert!(text.contains("Parsed 2 queries; nothing executed."), "{text}");
+        // Without the flag, no statistics block.
+        assert!(!text.contains("Clause statistics"), "{text}");
+    }
+
+    #[test]
+    fn parser_report_appends_statistics_when_requested() {
+        let report = run_parser(vec![
+            "CREATE (a)".to_string(),
+            "CREATE (b)".to_string(),
+        ]);
+        let text = format_parser_report(&report, true);
+        assert!(text.contains("Clause statistics:"), "{text}");
+        assert!(text.contains("Create: 2"), "aggregate count: {text}");
     }
 }
