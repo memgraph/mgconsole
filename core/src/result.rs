@@ -9,8 +9,16 @@
 
 use std::collections::VecDeque;
 
+use bolt_client::Metadata;
+use bolt_proto::Message;
+
 use crate::error::Error;
+use crate::proto;
+use crate::session::SharedConn;
 use crate::value::Value;
+
+/// Default number of records pulled per batch on the lazy path.
+pub(crate) const DEFAULT_BATCH_SIZE: i64 = 1000;
 
 /// One row of a result: an ordered set of Values, one per column.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,27 +43,70 @@ impl Record {
 /// The Records of one query, consumed one at a time.
 ///
 /// Owned by the Core — it does not expose `futures::Stream` in the public API
-/// (ADR 0004). `next` and `collect` are `async` so the slice-21 lazy-pull
-/// implementation is a drop-in.
+/// (ADR 0004). The lazy variant pulls from the connection in batches, so it
+/// never holds more than one batch in memory regardless of result size.
 pub struct RecordStream {
-    buffered: VecDeque<Record>,
+    inner: Inner,
+}
+
+enum Inner {
+    /// A fully in-memory result. Lets the cap/collect logic be unit-tested
+    /// without a live connection; the production path is always `Lazy`.
+    #[allow(dead_code)]
+    Buffered(VecDeque<Record>),
+    /// Records pulled lazily from a shared connection.
+    Lazy(Lazy),
+}
+
+struct Lazy {
+    conn: SharedConn,
+    batch: VecDeque<Record>,
+    more: bool,
+    batch_size: i64,
 }
 
 impl RecordStream {
+    #[allow(dead_code)] // used by unit tests; production constructs `lazy`
     pub(crate) fn from_buffered(records: Vec<Record>) -> Self {
         Self {
-            buffered: records.into(),
+            inner: Inner::Buffered(records.into()),
+        }
+    }
+
+    pub(crate) fn lazy(conn: SharedConn, batch_size: i64) -> Self {
+        Self {
+            inner: Inner::Lazy(Lazy {
+                conn,
+                batch: VecDeque::new(),
+                more: true,
+                batch_size,
+            }),
         }
     }
 
     /// The next Record, or `None` when the stream is exhausted.
     pub async fn next(&mut self) -> Result<Option<Record>, Error> {
-        Ok(self.buffered.pop_front())
+        match &mut self.inner {
+            Inner::Buffered(b) => Ok(b.pop_front()),
+            Inner::Lazy(l) => l.next().await,
+        }
+    }
+
+    /// Discard any records not yet consumed, leaving the connection ready for
+    /// the next query. A no-op once the stream is exhausted.
+    pub async fn discard(&mut self) -> Result<(), Error> {
+        match &mut self.inner {
+            Inner::Buffered(b) => {
+                b.clear();
+                Ok(())
+            }
+            Inner::Lazy(l) => l.discard().await,
+        }
     }
 
     /// Drain the remaining Records into a Vec (used by the buffered/tabular path).
     pub async fn collect(&mut self) -> Result<Vec<Record>, Error> {
-        let mut out = Vec::with_capacity(self.buffered.len());
+        let mut out = Vec::new();
         while let Some(r) = self.next().await? {
             out.push(r);
         }
@@ -77,6 +128,61 @@ impl RecordStream {
         }
         let overflowed = self.next().await?.is_some();
         Ok((rows, overflowed))
+    }
+}
+
+impl Lazy {
+    async fn next(&mut self) -> Result<Option<Record>, Error> {
+        if let Some(r) = self.batch.pop_front() {
+            return Ok(Some(r));
+        }
+        if !self.more {
+            return Ok(None);
+        }
+        self.pull_batch().await?;
+        Ok(self.batch.pop_front())
+    }
+
+    /// Pull up to `batch_size` records, translating them into Core Records and
+    /// updating `more` from the trailing `SUCCESS`.
+    async fn pull_batch(&mut self) -> Result<(), Error> {
+        let (records, end) = {
+            let mut client = self.conn.lock().await;
+            client
+                .pull(Some(Metadata::from_iter(vec![("n", self.batch_size)])))
+                .await
+                .map_err(|e| Error::Connection(e.to_string()))?
+        };
+        match end {
+            Message::Success(s) => self.more = proto::has_more(s.metadata()),
+            Message::Failure(f) => {
+                self.more = false;
+                return Err(Error::Query(proto::failure_message(f.metadata())));
+            }
+            other => {
+                self.more = false;
+                return Err(Error::Protocol(format!("unexpected PULL reply: {other:?}")));
+            }
+        }
+        self.batch = records
+            .into_iter()
+            .map(|r| Record::new(r.fields().iter().cloned().map(Value::from).collect()))
+            .collect();
+        Ok(())
+    }
+
+    async fn discard(&mut self) -> Result<(), Error> {
+        self.batch.clear();
+        if !self.more {
+            return Ok(());
+        }
+        let mut client = self.conn.lock().await;
+        client
+            .discard(Some(Metadata::from_iter(vec![("n", -1_i64)])))
+            .await
+            .map_err(|e| Error::Connection(e.to_string()))?;
+        self.more = false;
+        Ok(())
     }
 }
 

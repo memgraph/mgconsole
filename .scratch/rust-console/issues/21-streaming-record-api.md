@@ -1,6 +1,6 @@
 # 21 — Streaming record API in core
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -17,11 +17,11 @@ returning many rows.
 
 ## Acceptance criteria
 
-- [ ] The Session exposes Records as a consumable stream
-- [ ] A consumer can render Records incrementally without holding them all
-- [ ] A buffered consumer can still collect the full result (for tabular)
-- [ ] Memory stays bounded while streaming a large result (asserted, e.g. via a large generated result)
-- [ ] Integration test streams a many-row result from a container
+- [x] The Session exposes Records as a consumable stream
+- [x] A consumer can render Records incrementally without holding them all
+- [x] A buffered consumer can still collect the full result (for tabular)
+- [x] Memory stays bounded while streaming a large result (asserted, e.g. via a large generated result)
+- [x] Integration test streams a many-row result from a container
 
 ## Blocked by
 

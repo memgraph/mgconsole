@@ -9,6 +9,7 @@
 pub mod clause;
 pub mod error;
 pub mod parse;
+mod proto;
 pub mod render;
 pub mod result;
 pub mod session;

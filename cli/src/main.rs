@@ -32,6 +32,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut result = session.run(query).await?;
         let header = result.header().to_vec();
         let (records, overflowed) = result.records().collect_capped(DEFAULT_ROW_CAP).await?;
+        // Drop any rows beyond the cap so the connection is ready for reuse.
+        result.records().discard().await?;
         let rows: Vec<Vec<Value>> = records.into_iter().map(|r| r.into_fields()).collect();
 
         println!("{}", render_table(&header, &rows, &TableOptions::default()));

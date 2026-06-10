@@ -1,29 +1,32 @@
 //! The Session: a single live conversation with one Memgraph server.
 //!
 //! The Bolt stack is async; the Session exposes `async` methods and a Frontend
-//! calls `block_on` at the boundary (ADR 0002). Slice 02 connects by host/port
-//! and runs one query, returning a [`QueryResult`]. Auth (slice 10), TLS
-//! (slice 11), parameters (slice 12), the summary (slice 13), and the error
-//! taxonomy + reconnect (slice 14) extend this.
+//! calls `block_on` at the boundary (ADR 0002). A query returns a
+//! [`QueryResult`] whose records stream lazily, pulled from the connection in
+//! batches so memory stays bounded on large results (ADR 0004, slice 21). The
+//! connection is shared with the live [`RecordStream`] via `Arc<Mutex<…>>`;
+//! a result must be drained or discarded before the next query.
 
-use std::collections::HashMap;
+use std::sync::Arc;
 
 use bolt_client::{Client, Metadata};
 use bolt_proto::{version::*, Message};
 use tokio::io::BufStream;
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt};
 
 use crate::error::Error;
-use crate::result::{QueryResult, Record, RecordStream, Summary};
-use crate::value::Value;
+use crate::proto;
+use crate::result::{QueryResult, RecordStream, Summary, DEFAULT_BATCH_SIZE};
 
-type Conn = Client<Compat<BufStream<TcpStream>>>;
+pub(crate) type Conn = Client<Compat<BufStream<TcpStream>>>;
+pub(crate) type SharedConn = Arc<Mutex<Conn>>;
 
 const USER_AGENT: &str = concat!("mgconsole/", env!("CARGO_PKG_VERSION"));
 
 pub struct Session {
-    client: Conn,
+    conn: SharedConn,
 }
 
 impl Session {
@@ -44,64 +47,30 @@ impl Session {
             .await
             .map_err(|e| Error::Protocol(e.to_string()))?;
         match hello {
-            Message::Success(_) => Ok(Self { client }),
+            Message::Success(_) => Ok(Self {
+                conn: Arc::new(Mutex::new(client)),
+            }),
             other => Err(Error::Protocol(format!("HELLO refused: {other:?}"))),
         }
     }
 
-    /// Run a query and return its result: header, record stream, and summary.
+    /// Run a query and return its result. The records stream lazily; the
+    /// previous result must be fully consumed or discarded first.
     pub async fn run(&mut self, query: &str) -> Result<QueryResult, Error> {
-        let run_reply = self
-            .client
-            .run(query, None, None)
-            .await
-            .map_err(|e| Error::Connection(e.to_string()))?;
-        let header = match run_reply {
-            Message::Success(s) => extract_fields(s.metadata()),
-            Message::Failure(f) => return Err(Error::Query(failure_message(f.metadata()))),
-            other => return Err(Error::Protocol(format!("unexpected RUN reply: {other:?}"))),
+        let header = {
+            let mut client = self.conn.lock().await;
+            match client
+                .run(query, None, None)
+                .await
+                .map_err(|e| Error::Connection(e.to_string()))?
+            {
+                Message::Success(s) => proto::fields(s.metadata()),
+                Message::Failure(f) => return Err(Error::Query(proto::failure_message(f.metadata()))),
+                other => return Err(Error::Protocol(format!("unexpected RUN reply: {other:?}"))),
+            }
         };
 
-        let (records, end) = self
-            .client
-            .pull(Some(Metadata::from_iter(vec![("n", -1_i64)])))
-            .await
-            .map_err(|e| Error::Connection(e.to_string()))?;
-        match end {
-            Message::Success(_) => {}
-            Message::Failure(f) => return Err(Error::Query(failure_message(f.metadata()))),
-            other => return Err(Error::Protocol(format!("unexpected PULL reply: {other:?}"))),
-        }
-
-        let core_records = records
-            .into_iter()
-            .map(|r| Record::new(r.fields().iter().cloned().map(Value::from).collect()))
-            .collect();
-
-        Ok(QueryResult::new(
-            header,
-            RecordStream::from_buffered(core_records),
-            Summary::default(),
-        ))
-    }
-}
-
-fn extract_fields(meta: &HashMap<String, bolt_proto::Value>) -> Vec<String> {
-    match meta.get("fields") {
-        Some(bolt_proto::Value::List(items)) => items
-            .iter()
-            .map(|v| match v {
-                bolt_proto::Value::String(s) => s.clone(),
-                other => format!("{other:?}"),
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn failure_message(meta: &HashMap<String, bolt_proto::Value>) -> String {
-    match meta.get("message") {
-        Some(bolt_proto::Value::String(s)) => s.clone(),
-        _ => "unknown query error".to_string(),
+        let records = RecordStream::lazy(self.conn.clone(), DEFAULT_BATCH_SIZE);
+        Ok(QueryResult::new(header, records, Summary::default()))
     }
 }
