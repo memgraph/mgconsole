@@ -8,6 +8,8 @@
 
 use clap::{Parser, ValueEnum};
 
+pub mod repl;
+
 /// Output format for a Query result (CONTEXT.md: tabular buffers; csv/jsonl/
 /// cypherl stream). `jsonl` is the addition over today's mgconsole flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
