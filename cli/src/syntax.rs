@@ -8,6 +8,8 @@
 //! source (labels, properties) becomes one more entry in that list, with no
 //! change to the cursor handling or the rustyline adapter.
 
+use mgconsole_core::{lex, Token, TokenKind};
+
 use crate::keywords::{AWESOME_FUNCTIONS, CYPHER_KEYWORDS, MEMGRAPH_KEYWORDS};
 
 /// Characters that separate one word from the next, matching `mgconsole`'s
@@ -116,46 +118,46 @@ pub fn classify(word: &str) -> WordKind {
 }
 
 const YELLOW: &str = "\x1b[33m";
-const BRIGHT_RED: &str = "\x1b[91m";
+const CYAN: &str = "\x1b[36m";
 const RESET: &str = "\x1b[0m";
 
-/// Re-emit `line` with keywords coloured yellow and functions bright red (the
-/// `mgconsole` scheme), leaving word-boundary characters untouched. Plain words
-/// pass through uncoloured.
+/// Re-emit `line` with Cypher syntax coloured for the interactive REPL, driven
+/// by the Core lexer's token stream (ADR 0008: the Core yields lexical
+/// structure; the Frontend maps it to colour). Keywords colour yellow and
+/// functions cyan, classified case-insensitively against the keyword/function
+/// tables; a keyword or function name appearing inside a string or comment is a
+/// String/Comment token — not a Word — so it is left uncoloured (the
+/// false-positive fix). Every other token passes through untouched; later
+/// slices widen the palette. Pure: `&str` in, text out, no terminal.
 pub fn highlight(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
-    let mut word = String::new();
-
-    let flush = |word: &mut String, out: &mut String| {
-        if word.is_empty() {
-            return;
-        }
-        match classify(word) {
-            WordKind::Keyword => {
-                out.push_str(YELLOW);
-                out.push_str(word);
+    for token in lex(line) {
+        let text = token.text(line);
+        match colour_for(&token, text) {
+            Some(colour) => {
+                out.push_str(colour);
+                out.push_str(text);
                 out.push_str(RESET);
             }
-            WordKind::Function => {
-                out.push_str(BRIGHT_RED);
-                out.push_str(word);
-                out.push_str(RESET);
-            }
-            WordKind::Plain => out.push_str(word),
-        }
-        word.clear();
-    };
-
-    for ch in line.chars() {
-        if WORD_BOUNDARIES.contains(&ch) {
-            flush(&mut word, &mut out);
-            out.push(ch);
-        } else {
-            word.push(ch);
+            None => out.push_str(text),
         }
     }
-    flush(&mut word, &mut out);
     out
+}
+
+/// The ANSI colour a token is painted, or `None` to leave it terminal-default.
+/// Only Word tokens are classified here (keyword/function); the literal and
+/// comment kinds gain their colours in later slices, so this stays the single
+/// place the palette grows.
+fn colour_for(token: &Token, text: &str) -> Option<&'static str> {
+    match token.kind {
+        TokenKind::Word => match classify(text) {
+            WordKind::Keyword => Some(YELLOW),
+            WordKind::Function => Some(CYAN),
+            WordKind::Plain => None,
+        },
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -244,7 +246,7 @@ mod tests {
     }
 
     #[test]
-    fn highlight_colours_keywords_and_functions_only() {
+    fn highlight_colours_keywords_yellow_and_functions_cyan() {
         let out = highlight("MATCH (n) RETURN abs(n.x)");
         assert!(
             out.contains("\x1b[33mMATCH\x1b[0m"),
@@ -254,10 +256,9 @@ mod tests {
             out.contains("\x1b[33mRETURN\x1b[0m"),
             "keyword yellow: {out:?}"
         );
-        assert!(
-            out.contains("\x1b[91mabs\x1b[0m"),
-            "function bright-red: {out:?}"
-        );
+        // Functions are cyan now, not bright-red (slice 02 palette change).
+        assert!(out.contains("\x1b[36mabs\x1b[0m"), "function cyan: {out:?}");
+        assert!(!out.contains("\x1b[91m"), "no bright-red anywhere: {out:?}");
         // Boundaries and plain words survive untouched.
         assert!(out.contains("(n)"));
     }
@@ -265,5 +266,27 @@ mod tests {
     #[test]
     fn highlight_leaves_a_plain_line_unchanged() {
         assert_eq!(highlight("just some words 123"), "just some words 123");
+    }
+
+    #[test]
+    fn a_keyword_inside_a_string_is_not_coloured() {
+        // 'MATCH' here is a String token, not a Word — the false positive the
+        // lexer cutover fixes.
+        let out = highlight("RETURN 'MATCH'");
+        assert!(out.contains("\x1b[33mRETURN\x1b[0m"), "the real keyword: {out:?}");
+        assert!(out.contains("'MATCH'"), "string survives intact: {out:?}");
+        assert!(
+            !out.contains("\x1b[33mMATCH"),
+            "the in-string keyword is not coloured: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_function_name_inside_a_comment_is_not_coloured() {
+        let out = highlight("RETURN 1 // call abs here");
+        assert!(
+            !out.contains("\x1b[36m"),
+            "nothing inside the comment is coloured cyan: {out:?}"
+        );
     }
 }

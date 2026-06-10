@@ -1,6 +1,6 @@
 # 02 — Highlighter cutover: keyword + function on the lexer
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
