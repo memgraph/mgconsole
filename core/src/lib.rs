@@ -23,5 +23,5 @@ pub use error::Error;
 pub use parse::QueryAssembler;
 pub use result::{ExecutionInfo, Notification, QueryResult, Record, RecordStream, Summary};
 pub use tabular::{render_table, TableOptions, DEFAULT_ROW_CAP};
-pub use session::{ConnectOptions, Credentials, Session};
+pub use session::{ConnectOptions, Credentials, ReconnectNotice, Session};
 pub use value::Value;

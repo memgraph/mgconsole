@@ -57,6 +57,20 @@ pub struct ConnectOptions {
     pub use_tls: bool,
 }
 
+/// One reconnect attempt the Session is about to make after a fatal connection
+/// error. Surfaced to a Frontend registered via [`Session::on_reconnect`] so it
+/// can tell the user the link dropped and is being re-established (slice 16).
+#[derive(Debug, Clone, Copy)]
+pub struct ReconnectNotice {
+    /// 1-based attempt number.
+    pub attempt: usize,
+    /// Total attempts the Session makes before surfacing a terminal error.
+    pub max: usize,
+}
+
+/// A Frontend hook invoked once before each reconnect attempt.
+type ReconnectObserver = Arc<dyn Fn(ReconnectNotice) + Send + Sync>;
+
 pub struct Session {
     conn: SharedConn,
     host: String,
@@ -65,6 +79,9 @@ pub struct Session {
     options: ConnectOptions,
     /// Liveness token of the last result issued, for the one-live-result guard.
     last: Option<Arc<ResultGuard>>,
+    /// Optional Frontend hook notified before each reconnect attempt (ADR 0002:
+    /// the Core stays Frontend-agnostic; surfacing is the Frontend's choice).
+    on_reconnect: Option<ReconnectObserver>,
 }
 
 impl Session {
@@ -92,7 +109,15 @@ impl Session {
             port,
             options: options.clone(),
             last: None,
+            on_reconnect: None,
         })
+    }
+
+    /// Register a hook called once before each reconnect attempt, so a Frontend
+    /// can surface that the connection dropped and is being re-established. The
+    /// Core itself prints nothing (ADR 0002).
+    pub fn on_reconnect(&mut self, observer: impl Fn(ReconnectNotice) + Send + Sync + 'static) {
+        self.on_reconnect = Some(Arc::new(observer));
     }
 
     /// Run a query with no parameters. See [`Session::run_with_params`].
@@ -195,6 +220,12 @@ impl Session {
     async fn reconnect(&mut self) -> Result<(), Error> {
         let mut last_err = String::from("no attempt made");
         for attempt in 0..RECONNECT_ATTEMPTS {
+            if let Some(observer) = &self.on_reconnect {
+                observer(ReconnectNotice {
+                    attempt: attempt + 1,
+                    max: RECONNECT_ATTEMPTS,
+                });
+            }
             if attempt > 0 {
                 tokio::time::sleep(RECONNECT_BACKOFF).await;
             }

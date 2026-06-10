@@ -3,6 +3,8 @@
 mod common;
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use mgconsole_core::{ConnectOptions, Credentials, Error, Session, Value};
 
@@ -343,6 +345,14 @@ async fn reconnects_after_a_dropped_connection() {
         .await
         .expect("connect via proxy");
 
+    // A Frontend hook records each reconnect attempt the Session announces.
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let seen = attempts.clone();
+    session.on_reconnect(move |notice| {
+        assert!(notice.attempt >= 1 && notice.attempt <= notice.max);
+        seen.fetch_add(1, Ordering::SeqCst);
+    });
+
     let mut first = session.run("RETURN 1 AS n").await.expect("first query");
     first.records().discard().await.expect("drain");
 
@@ -357,6 +367,12 @@ async fn reconnects_after_a_dropped_connection() {
         .expect("reconnect and run");
     let record = second.records().next().await.expect("ok").expect("one row");
     assert_eq!(record.fields(), &[Value::Integer(2)]);
+
+    // The reconnect was surfaced to the Frontend (at least the first attempt).
+    assert!(
+        attempts.load(Ordering::SeqCst) >= 1,
+        "the reconnect observer should have been notified"
+    );
 }
 
 #[tokio::test]
