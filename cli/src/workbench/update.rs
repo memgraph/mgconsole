@@ -14,6 +14,7 @@ use mgconsole_core::{Error, QueryAssembler, Record, Summary};
 
 use crate::repl::{format_summary, meta_command, MetaCommand};
 use crate::syntax::Completer;
+use crate::theme::{Chord, ChordKey, Gesture};
 
 use super::effect::{Effect, TxOp};
 use super::event::{Event, Key, KeyCode};
@@ -351,38 +352,85 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     if key.ctrl && key.code == KeyCode::Char('c') {
         return interrupt(state);
     }
-    // Ctrl-R refreshes the Schema (slice 12): re-fetch labels/types/keys.
-    if key.ctrl && key.code == KeyCode::Char('r') {
-        state.status.message = "refreshing schema…".to_string();
-        return vec![Effect::FetchSchema];
-    }
-    // Ctrl-B toggles the schema sidebar (slice 13); it is unavailable when no
-    // Schema was fetched (the feature is off — nothing to browse).
-    if key.ctrl && key.code == KeyCode::Char('b') {
-        toggle_schema_sidebar(state);
-        return Vec::new();
-    }
-    // Ctrl-P toggles the parameters drawer (slice 16).
-    if key.ctrl && key.code == KeyCode::Char('p') {
-        state.drawer = if state.drawer == Some(DrawerKind::Params) {
-            None
-        } else {
-            Some(DrawerKind::Params)
-        };
-        return Vec::new();
-    }
-    // Ctrl-Y toggles the summary drawer (notifications/stats/exec-info, slice 18).
-    if key.ctrl && key.code == KeyCode::Char('y') {
-        state.drawer = if state.drawer == Some(DrawerKind::Summary) {
-            None
-        } else {
-            Some(DrawerKind::Summary)
-        };
-        return Vec::new();
+    // The rebindable gestures (issue 14): a key press is matched against the
+    // resolved `[keys]` bindings (defaults reproduce today's chords). The buffer
+    // gestures are bound here too but acted on in issue 18.
+    if let Some(chord) = chord_of(key) {
+        if let Some(gesture) = state.keys.gesture_for(chord) {
+            return handle_gesture(state, gesture);
+        }
     }
     match state.focus {
         Focus::Editor => editor_key(state, key),
         Focus::Results => results_key(state, key),
+    }
+}
+
+/// Map a workbench [`Key`] onto a neutral [`Chord`] for keybinding lookup (issue
+/// 14), or `None` for a key the binding layer never matches (a bare printable
+/// character, [`KeyCode::Other`]). Bare characters are excluded so ordinary typing
+/// is never swallowed by a gesture binding.
+fn chord_of(key: Key) -> Option<Chord> {
+    let chord_key = match key.code {
+        KeyCode::Char(c) if key.ctrl || key.alt => ChordKey::Char(c.to_ascii_lowercase()),
+        KeyCode::Char(_) | KeyCode::Other => return None,
+        KeyCode::Enter => ChordKey::Enter,
+        KeyCode::Esc => ChordKey::Esc,
+        KeyCode::Tab => ChordKey::Tab,
+        KeyCode::Backspace => ChordKey::Backspace,
+        KeyCode::Delete => ChordKey::Delete,
+        KeyCode::Up => ChordKey::Up,
+        KeyCode::Down => ChordKey::Down,
+        KeyCode::Left => ChordKey::Left,
+        KeyCode::Right => ChordKey::Right,
+        KeyCode::Home => ChordKey::Home,
+        KeyCode::End => ChordKey::End,
+        KeyCode::PageUp => ChordKey::PageUp,
+        KeyCode::PageDown => ChordKey::PageDown,
+    };
+    Some(Chord {
+        ctrl: key.ctrl,
+        alt: key.alt,
+        shift: key.shift,
+        key: chord_key,
+    })
+}
+
+/// Run a rebindable gesture (issue 14). The drawer/schema toggles act here; the
+/// Buffer gestures are matched but not yet acted on (issue 18 fills them in).
+fn handle_gesture(state: &mut WorkbenchState, gesture: Gesture) -> Vec<Effect> {
+    match gesture {
+        Gesture::RefreshSchema => {
+            state.status.message = "refreshing schema…".to_string();
+            vec![Effect::FetchSchema]
+        }
+        Gesture::ToggleSchema => {
+            toggle_schema_sidebar(state);
+            Vec::new()
+        }
+        Gesture::ToggleParams => {
+            state.drawer = toggle_drawer(state.drawer, DrawerKind::Params);
+            Vec::new()
+        }
+        Gesture::ToggleSummary => {
+            state.drawer = toggle_drawer(state.drawer, DrawerKind::Summary);
+            Vec::new()
+        }
+        // Buffer (tab) gestures arrive in issue 18; recognised now so their chords
+        // are reserved and rebindable, a no-op until then.
+        Gesture::NewBuffer
+        | Gesture::CloseBuffer
+        | Gesture::NextBuffer
+        | Gesture::PrevBuffer => Vec::new(),
+    }
+}
+
+/// Toggle `drawer` to `kind`, or closed if it is already showing `kind`.
+fn toggle_drawer(drawer: Option<DrawerKind>, kind: DrawerKind) -> Option<DrawerKind> {
+    if drawer == Some(kind) {
+        None
+    } else {
+        Some(kind)
     }
 }
 
@@ -904,6 +952,16 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
         MetaCommand::SetSetting { name, value } => {
             match state.settings.set(&name, &value) {
                 Ok(()) => {
+                    // `:set theme` repaints: re-resolve the palette over the newly
+                    // named built-in base with the config `[theme]` overrides still
+                    // applied (issue 14).
+                    if name == "theme" {
+                        let (palette, _warnings) = crate::theme::resolve_palette(
+                            &state.settings.theme,
+                            &state.config.theme_overrides,
+                        );
+                        state.palette = palette;
+                    }
                     state.status.message =
                         format!("{name} = {}", state.settings.get(&name).unwrap_or(value));
                 }
@@ -2499,5 +2557,77 @@ mod tests {
         let effects = submit_meta(&mut s, ":forget gone");
         assert!(effects.is_empty(), "nothing to persist for an absent name");
         assert!(s.status.message.contains("no saved query named 'gone'"));
+    }
+
+    // --- Theme + keybindings (issue 14) ---------------------------------------
+
+    #[test]
+    fn set_theme_repaints_the_palette_at_runtime() {
+        use crate::syntax::HighlightCategory;
+        use crate::theme::ThemeColor;
+        let mut s = wb();
+        // Default theme: keyword is yellow.
+        assert_eq!(s.palette.color(HighlightCategory::Keyword), ThemeColor::Yellow);
+        submit_meta(&mut s, ":set theme mono");
+        // mono: every category the terminal default.
+        assert_eq!(s.palette.color(HighlightCategory::Keyword), ThemeColor::Default);
+        assert_eq!(s.status.message, "theme = mono");
+    }
+
+    #[test]
+    fn set_theme_keeps_config_overrides_over_the_new_base() {
+        use crate::syntax::HighlightCategory;
+        use crate::theme::ThemeColor;
+        let mut config = WorkbenchConfig::default();
+        // A config [theme] override sits on top of whichever base is active.
+        config
+            .theme_overrides
+            .insert("keyword".to_string(), "red".to_string());
+        let (palette, _) = crate::theme::resolve_palette("default", &config.theme_overrides);
+        config.palette = palette;
+        let mut s = WorkbenchState::new(config, true);
+        assert_eq!(s.palette.color(HighlightCategory::Keyword), ThemeColor::Red);
+        // Switching the base to mono keeps the explicit keyword override.
+        submit_meta(&mut s, ":set theme mono");
+        assert_eq!(s.palette.color(HighlightCategory::Keyword), ThemeColor::Red);
+        assert_eq!(s.palette.color(HighlightCategory::Function), ThemeColor::Default);
+    }
+
+    #[test]
+    fn set_theme_lists_alongside_the_other_settings() {
+        let mut s = wb();
+        submit_meta(&mut s, ":set");
+        assert!(s.status.message.contains("theme = default"), "{}", s.status.message);
+    }
+
+    #[test]
+    fn a_default_chord_drives_its_gesture() {
+        // Ctrl-P toggles the params drawer by default (no rebinding).
+        let mut s = wb();
+        assert_eq!(s.drawer, None);
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('p'))));
+        assert_eq!(s.drawer, Some(DrawerKind::Params));
+    }
+
+    #[test]
+    fn a_rebound_chord_drives_the_gesture_and_the_old_chord_does_not() {
+        // Rebind toggle-params to Ctrl-G; the default Ctrl-P no longer toggles it.
+        let mut config = WorkbenchConfig::default();
+        let (keys, warnings) = crate::theme::resolve_keys(&BTreeMap::from([(
+            "toggle-params".to_string(),
+            "ctrl+g".to_string(),
+        )]));
+        assert!(warnings.is_empty());
+        config.keys = keys;
+        let mut s = WorkbenchState::new(config, true);
+
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('g'))));
+        assert_eq!(s.drawer, Some(DrawerKind::Params), "the rebound chord works");
+
+        // The old default chord is now unbound: Ctrl-P is ordinary input, not a toggle.
+        s.drawer = None;
+        s.focus = Focus::Editor;
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('p'))));
+        assert_eq!(s.drawer, None, "the freed default chord no longer toggles");
     }
 }

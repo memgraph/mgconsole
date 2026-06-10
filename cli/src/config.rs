@@ -56,12 +56,20 @@ pub struct Profile {
     pub settings: FileSettings,
 }
 
-/// The whole parsed `config.toml`: the top-level `[settings]` overlay and the
-/// named connection profiles.
+/// The whole parsed `config.toml`: the top-level `[settings]` overlay, the named
+/// connection profiles, and the Workbench `[theme]`/`[keys]` override tables
+/// (issue 14). The latter two are kept as raw name→value maps here and resolved
+/// (with warnings) by [`crate::theme`], so config parsing stays lenient and one
+/// bad theme/key line never blocks the console.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
     pub settings: FileSettings,
     pub profiles: BTreeMap<String, Profile>,
+    /// `[theme]`: per-category colour overrides applied on top of the active
+    /// built-in theme (issue 14).
+    pub theme: BTreeMap<String, String>,
+    /// `[keys]`: gesture→chord rebindings over the defaults (issue 14).
+    pub keys: BTreeMap<String, String>,
 }
 
 impl Config {
@@ -88,6 +96,12 @@ struct RawConfig {
     settings: RawSettings,
     #[serde(default)]
     profiles: BTreeMap<String, RawProfile>,
+    /// `[theme]`: category→colour overrides (issue 14), validated on resolution.
+    #[serde(default)]
+    theme: BTreeMap<String, String>,
+    /// `[keys]`: gesture→chord rebindings (issue 14), validated on resolution.
+    #[serde(default)]
+    keys: BTreeMap<String, String>,
 }
 
 /// The `[settings]` table. Each value is a string so it shares the exact
@@ -96,6 +110,7 @@ struct RawConfig {
 #[serde(deny_unknown_fields)]
 struct RawSettings {
     display: Option<String>,
+    theme: Option<String>,
 }
 
 /// A `[profiles.<name>]` table: connection fields plus a nested `[settings]`
@@ -135,7 +150,22 @@ fn settings_from_raw(raw: RawSettings) -> Result<FileSettings, String> {
         Some(value) => Some(value.parse().map_err(|e: String| e)?),
         None => None,
     };
-    Ok(FileSettings { display })
+    // The theme name is validated against the built-in set so a typo in
+    // `[settings] theme = …` is caught at load, like an invalid display value.
+    let theme = match raw.theme {
+        Some(value) => {
+            let value = value.trim().to_ascii_lowercase();
+            if crate::theme::builtin_palette(&value).is_none() {
+                return Err(format!(
+                    "unknown theme '{value}' (known: {})",
+                    crate::theme::BUILTIN_THEMES.join(", ")
+                ));
+            }
+            Some(value)
+        }
+        None => None,
+    };
+    Ok(FileSettings { display, theme })
 }
 
 /// Parse config text into a [`Config`], validating each setting value against its
@@ -158,7 +188,12 @@ fn parse(text: &str) -> Result<Config, String> {
         };
         profiles.insert(name, profile);
     }
-    Ok(Config { settings, profiles })
+    Ok(Config {
+        settings,
+        profiles,
+        theme: raw.theme,
+        keys: raw.keys,
+    })
 }
 
 #[cfg(test)]
@@ -274,5 +309,37 @@ mod tests {
     fn an_invalid_setting_value_is_rejected_with_the_valid_set() {
         let err = parse("[settings]\ndisplay = \"grid\"\n").expect_err("invalid value");
         assert!(err.contains("grid"), "message names the bad value: {err}");
+    }
+
+    #[test]
+    fn the_theme_and_keys_tables_load_as_raw_override_maps() {
+        let config = parse(
+            "[settings]\ntheme = \"mono\"\n\
+             [theme]\nkeyword = \"red\"\n\
+             [keys]\ntoggle-schema = \"ctrl+g\"\n",
+        )
+        .expect("valid");
+        assert_eq!(config.settings.theme.as_deref(), Some("mono"));
+        assert_eq!(config.theme.get("keyword").map(String::as_str), Some("red"));
+        assert_eq!(
+            config.keys.get("toggle-schema").map(String::as_str),
+            Some("ctrl+g")
+        );
+    }
+
+    #[test]
+    fn an_unknown_theme_name_in_settings_is_rejected() {
+        let err = parse("[settings]\ntheme = \"neon\"\n").expect_err("unknown theme");
+        assert!(err.contains("neon"), "{err}");
+    }
+
+    #[test]
+    fn theme_and_keys_values_are_kept_raw_for_lenient_resolution() {
+        // Even a nonsense colour/chord parses at the config layer (it becomes a
+        // warning at resolution, not a fatal load error — issue 14).
+        let config = parse("[theme]\nkeyword = \"chartreuse\"\n[keys]\nzz = \"nope\"\n")
+            .expect("raw maps parse");
+        assert_eq!(config.theme.get("keyword").map(String::as_str), Some("chartreuse"));
+        assert_eq!(config.keys.get("zz").map(String::as_str), Some("nope"));
     }
 }

@@ -19,6 +19,7 @@ pub mod queries;
 pub mod repl;
 pub mod settings;
 pub mod syntax;
+pub mod theme;
 #[cfg(feature = "tui")]
 pub mod workbench;
 

@@ -1,6 +1,6 @@
 # 14 — Theme + keybinding config (Workbench)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

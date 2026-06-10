@@ -397,7 +397,7 @@ fn draw_editor(frame: &mut Frame, area: Rect, state: &WorkbenchState, focused: b
     let end = (scroll + height).min(lines.len());
     let visible: Vec<Line> = lines[scroll.min(lines.len())..end]
         .iter()
-        .map(|line| highlight::highlight_line(line, state.color))
+        .map(|line| highlight::highlight_line(line, state.color, &state.palette))
         .collect();
     frame.render_widget(Paragraph::new(visible), area);
     let x = area.x + (cursor_col as u16).min(area.width.saturating_sub(1));

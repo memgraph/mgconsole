@@ -13,10 +13,23 @@ use mgconsole_core::DisplayMode;
 
 /// The resolved console settings, shared by every Frontend so `:set display`
 /// means the same thing in the REPL and the Workbench.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     /// How a buffered result is laid out (`tabular`/`vertical`/`auto`).
     pub display: DisplayMode,
+    /// The active Workbench theme name (issue 14): the built-in base palette
+    /// `:set theme` switches between (`default`/`mono`). The REPL stores it for
+    /// consistency but does not repaint on it.
+    pub theme: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            display: DisplayMode::default(),
+            theme: "default".to_string(),
+        }
+    }
 }
 
 /// The config-file layer of the precedence chain (issue 02): each setting is
@@ -26,6 +39,7 @@ pub struct Settings {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileSettings {
     pub display: Option<DisplayMode>,
+    pub theme: Option<String>,
 }
 
 impl FileSettings {
@@ -36,6 +50,7 @@ impl FileSettings {
     pub fn overlay(&self, other: &FileSettings) -> FileSettings {
         FileSettings {
             display: other.display.or(self.display),
+            theme: other.theme.clone().or_else(|| self.theme.clone()),
         }
     }
 }
@@ -49,6 +64,10 @@ impl Settings {
         let mut settings = Self::default();
         if let Some(display) = file.display {
             settings.display = display;
+        }
+        // The theme has no CLI flag (issue 14: default < config < runtime `:set`).
+        if let Some(theme) = &file.theme {
+            settings.theme.clone_from(theme);
         }
         if let Some(display) = cli_display {
             settings.display = display;
@@ -65,6 +84,19 @@ impl Settings {
                 self.display = value.parse()?;
                 Ok(())
             }
+            // The theme name is validated against the built-in set (issue 14) so a
+            // typo is rejected rather than silently leaving the palette unchanged.
+            "theme" => {
+                let value = value.trim().to_ascii_lowercase();
+                if crate::theme::builtin_palette(&value).is_none() {
+                    return Err(format!(
+                        "unknown theme '{value}' (known: {})",
+                        crate::theme::BUILTIN_THEMES.join(", ")
+                    ));
+                }
+                self.theme = value;
+                Ok(())
+            }
             other => Err(format!("unknown setting '{other}'")),
         }
     }
@@ -73,13 +105,17 @@ impl Settings {
     pub fn get(&self, name: &str) -> Option<String> {
         match name {
             "display" => Some(self.display.to_string()),
+            "theme" => Some(self.theme.clone()),
             _ => None,
         }
     }
 
     /// Every setting as a `(name, value)` pair, in listing order.
     pub fn entries(&self) -> Vec<(&'static str, String)> {
-        vec![("display", self.display.to_string())]
+        vec![
+            ("display", self.display.to_string()),
+            ("theme", self.theme.clone()),
+        ]
     }
 
     /// A multi-line `name = value` listing for `:set` with no argument.
@@ -106,6 +142,7 @@ mod tests {
         let none = FileSettings::default();
         let config = FileSettings {
             display: Some(DisplayMode::Vertical),
+            ..FileSettings::default()
         };
         // Default only.
         assert_eq!(Settings::resolve(&none, None).display, DisplayMode::Auto);
@@ -148,6 +185,25 @@ mod tests {
 
     #[test]
     fn listing_reads_as_name_equals_value() {
-        assert_eq!(Settings::default().list(), "display = auto");
+        assert_eq!(Settings::default().list(), "display = auto\ntheme = default");
+    }
+
+    #[test]
+    fn the_theme_setting_validates_against_the_builtins_and_resolves_by_precedence() {
+        // Default is `default`; config can pin another built-in; runtime `:set`
+        // wins (issue 14: default < config < runtime, no CLI flag).
+        assert_eq!(Settings::default().theme, "default");
+        let config = FileSettings {
+            theme: Some("mono".to_string()),
+            ..FileSettings::default()
+        };
+        let mut settings = Settings::resolve(&config, None);
+        assert_eq!(settings.theme, "mono", "config pins the theme");
+        settings.set("theme", "default").expect("valid built-in");
+        assert_eq!(settings.theme, "default", "runtime :set wins");
+        // An unknown theme is rejected and the store is untouched.
+        let err = settings.set("theme", "neon").expect_err("unknown theme");
+        assert!(err.contains("neon"), "{err}");
+        assert_eq!(settings.theme, "default", "unchanged on error");
     }
 }

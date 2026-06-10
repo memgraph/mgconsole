@@ -214,14 +214,27 @@ fn run_interactive(
         Frontend::Workbench => {
             #[cfg(feature = "tui")]
             {
+                // Resolve the Workbench theme + keybindings (issue 14): the built-in
+                // palette named by the `theme` Setting with the `[theme]` overrides,
+                // and the `[keys]` rebindings over the defaults. Warnings are
+                // reported to stderr; one bad line never blocks the workbench.
+                let (palette, theme_warnings) =
+                    mgconsole::theme::resolve_palette(&settings.theme, &config.theme);
+                let (keys, key_warnings) = mgconsole::theme::resolve_keys(&config.keys);
+                for warning in theme_warnings.iter().chain(&key_warnings) {
+                    eprintln!("warning: {warning}");
+                }
                 let wb_config = workbench::WorkbenchConfig {
                     verbose: cli.verbose_execution_info,
                     settings,
                     profile,
                     read_only,
                     endpoint: session.endpoint().to_string(),
-                    connect: workbench::state::ConnectContext { config, options },
                     queries: load_queries(),
+                    palette,
+                    keys,
+                    theme_overrides: config.theme.clone(),
+                    connect: workbench::state::ConnectContext { config, options },
                     ..workbench::WorkbenchConfig::default()
                 };
                 runtime.block_on(workbench::run(session, wb_config, colorize, history))?;

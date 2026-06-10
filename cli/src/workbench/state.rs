@@ -12,6 +12,7 @@ use mgconsole_core::{ConnectOptions, Record, Summary, TransactionState, Value};
 
 use crate::config::Config;
 use crate::queries::NamedQueries;
+use crate::theme::{builtin_palette, KeyBindings, Palette};
 use tui_textarea::{Input, Key as TaKey, TextArea};
 
 use crate::settings::Settings;
@@ -150,6 +151,13 @@ pub struct WorkbenchState {
     /// by `:load`. Shared spine with the REPL; the pure reducer mutates it and the
     /// edge persists via [`Effect::PersistQueries`](super::Effect::PersistQueries).
     pub queries: NamedQueries,
+    /// The active highlight palette (issue 14): the built-in theme named by the
+    /// `theme` Setting with the config `[theme]` overrides applied. Recomputed by
+    /// `:set theme`. Drives editor highlighting via [`super::highlight`].
+    pub palette: Palette,
+    /// The resolved gesture→chord bindings (issue 14): defaults plus config
+    /// `[keys]` rebindings. The reducer looks a key press up here.
+    pub keys: KeyBindings,
     /// Frontend-local configuration.
     pub config: WorkbenchConfig,
 }
@@ -192,6 +200,8 @@ impl WorkbenchState {
             last_query: None,
             redirect: None,
             queries: config.queries.clone(),
+            palette: config.palette,
+            keys: config.keys.clone(),
             config,
         }
     }
@@ -325,6 +335,14 @@ pub struct WorkbenchConfig {
     /// The saved-queries store loaded at startup (issue 13), seeding the state's
     /// live [`NamedQueries`] which `:save`/`:forget` then mutate and persist.
     pub queries: NamedQueries,
+    /// The startup highlight palette (issue 14): the built-in theme named by the
+    /// `theme` Setting with the config `[theme]` overrides applied.
+    pub palette: Palette,
+    /// The resolved gesture→chord bindings (issue 14): defaults plus `[keys]`.
+    pub keys: KeyBindings,
+    /// The config `[theme]` colour overrides, kept so `:set theme` can re-resolve
+    /// the palette over a different built-in base at runtime (issue 14).
+    pub theme_overrides: BTreeMap<String, String>,
 }
 
 /// An active `:watch` (issue 11): which query to re-run and the tick countdown
@@ -356,6 +374,9 @@ impl Default for WorkbenchConfig {
             endpoint: String::new(),
             connect: ConnectContext::default(),
             queries: NamedQueries::in_memory(),
+            palette: builtin_palette("default").expect("default is built in"),
+            keys: KeyBindings::default(),
+            theme_overrides: BTreeMap::new(),
         }
     }
 }
