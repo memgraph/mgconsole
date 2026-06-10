@@ -49,6 +49,9 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
             match kind {
                 DrawerKind::Schema => draw_sidebar(frame, columns[1], state.schema.as_ref()),
                 DrawerKind::Params => draw_params(frame, columns[1], &state.params),
+                DrawerKind::Summary => {
+                    draw_summary(frame, columns[1], state.shown(), state.config.verbose);
+                }
             }
             columns[0]
         }
@@ -204,6 +207,69 @@ fn draw_params(frame: &mut Frame, area: Rect, params: &BTreeMap<String, Value>) 
         Paragraph::new(crate::repl::format_params(params)).wrap(Wrap { trim: false }),
         inner,
     );
+}
+
+/// Draw the summary drawer (slice 18): the shown result's notifications, update
+/// statistics, and — when `--verbose-execution-info` is set — the per-query
+/// execution info. Reuses the Core's `Summary`/`Notification` types; distinct
+/// from the result data.
+fn draw_summary(frame: &mut Frame, area: Rect, result: Option<&CurrentResult>, verbose: bool) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Summary (Ctrl-Y close)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    match result.and_then(|result| result.summary.as_ref()) {
+        Some(summary) => {
+            if !summary.notifications.is_empty() {
+                lines.push(bold_line("Notifications"));
+                for note in &summary.notifications {
+                    lines.push(Line::from(format!("  [{}] {}", note.severity, note.title)));
+                    if !note.description.is_empty() {
+                        lines.push(Line::from(format!("    {}", note.description)));
+                    }
+                }
+                lines.push(Line::from(""));
+            }
+            if !summary.stats.is_empty() {
+                lines.push(bold_line("Statistics"));
+                for (key, value) in &summary.stats {
+                    lines.push(Line::from(format!("  {key}: {}", render::tabular(value))));
+                }
+                lines.push(Line::from(""));
+            }
+            if verbose {
+                let info = summary.execution_info();
+                lines.push(bold_line("Execution info"));
+                push_timing(&mut lines, "cost estimate", info.cost_estimate);
+                push_timing(&mut lines, "parsing", info.parsing_time);
+                push_timing(&mut lines, "planning", info.planning_time);
+                push_timing(&mut lines, "execution", info.plan_execution_time);
+            }
+            if lines.is_empty() {
+                lines.push(Line::from("(no notifications or statistics)"));
+            }
+        }
+        None => lines.push(Line::from("(run a query to see its summary)")),
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+/// A bold heading line for a drawer section.
+fn bold_line(title: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        title.to_string(),
+        Style::default().add_modifier(Modifier::BOLD),
+    ))
+}
+
+/// Append an execution-info value line when the server reported it.
+fn push_timing(lines: &mut Vec<Line<'static>>, label: &str, value: Option<f64>) {
+    if let Some(value) = value {
+        lines.push(Line::from(format!("  {label}: {value}")));
+    }
 }
 
 /// Append a titled section of names to the sidebar lines.
@@ -476,6 +542,32 @@ mod tests {
         let rendered = render(&mut state);
         assert!(rendered.contains("Produce {n}"), "operator drawn");
         assert!(rendered.contains("2 hits"), "annotation drawn");
+    }
+
+    #[test]
+    fn renders_the_summary_drawer_with_notifications_and_stats() {
+        use mgconsole_core::{Notification, Summary, Value};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let mut result = CurrentResult::new("CREATE ...".to_string(), vec![]);
+        result.summary = Some(Summary {
+            notifications: vec![Notification {
+                code: "Hint".into(),
+                title: "Add an index".into(),
+                description: String::new(),
+                severity: "INFORMATION".into(),
+            }],
+            stats: std::collections::BTreeMap::from([(
+                "nodes-created".to_string(),
+                Value::Integer(1),
+            )]),
+            ..Summary::default()
+        });
+        state.history.push(result);
+        state.drawer = Some(DrawerKind::Summary);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Notifications"), "section header");
+        assert!(rendered.contains("Add an index"), "notification title");
+        assert!(rendered.contains("nodes-created"), "update statistic");
     }
 
     #[test]

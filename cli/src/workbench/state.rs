@@ -226,6 +226,7 @@ pub enum Focus {
 pub enum DrawerKind {
     Schema,
     Params,
+    Summary,
 }
 
 /// The one-line status message. Distinct from the keybind hint, which the draw
@@ -251,6 +252,9 @@ pub struct WorkbenchConfig {
     pub newline_hint: &'static str,
     /// The memory backstop on rows held for one result (see [`DEFAULT_ROW_CAP`]).
     pub row_cap: usize,
+    /// Whether `--verbose-execution-info` was set: the summary drawer then shows
+    /// the per-query execution info (cost/parse/plan/execute) too (slice 18).
+    pub verbose: bool,
 }
 
 impl Default for WorkbenchConfig {
@@ -259,6 +263,7 @@ impl Default for WorkbenchConfig {
             editor_percent: 40,
             newline_hint: "Alt+Enter",
             row_cap: DEFAULT_ROW_CAP,
+            verbose: false,
         }
     }
 }

@@ -131,7 +131,14 @@ fn on_completed(
         return Vec::new();
     }
     let rows = state.history.last().map_or(0, |result| result.rows.len());
-    state.status.message = format_summary(rows, elapsed);
+    // Surface a notification count in the status line (full detail in the
+    // summary drawer, slice 18); the drawer reads the stored Summary.
+    let note = match summary.notifications.len() {
+        0 => String::new(),
+        1 => " · 1 notification".to_string(),
+        n => format!(" · {n} notifications"),
+    };
+    state.status.message = format!("{}{note}", format_summary(rows, elapsed));
     if let Some(result) = state.live_mut() {
         result.summary = Some(summary);
         // An EXPLAIN/PROFILE result renders as an operator tree, not a table.
@@ -243,6 +250,15 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             None
         } else {
             Some(DrawerKind::Params)
+        };
+        return Vec::new();
+    }
+    // Ctrl-Y toggles the summary drawer (notifications/stats/exec-info, slice 18).
+    if key.ctrl && key.code == KeyCode::Char('y') {
+        state.drawer = if state.drawer == Some(DrawerKind::Summary) {
+            None
+        } else {
+            Some(DrawerKind::Summary)
         };
         return Vec::new();
     }
@@ -1627,6 +1643,40 @@ mod tests {
         assert_eq!(s.editor.buffer(), "OLD;");
         update(&mut s, ctrl(KeyCode::Down)); // past newest → restore
         assert_eq!(s.editor.buffer(), "typing");
+    }
+
+    // --- notifications / stats / summary (slice 18) -------------------------
+
+    #[test]
+    fn a_completed_result_keeps_its_summary_and_notes_notifications_in_the_status() {
+        use mgconsole_core::Notification;
+        let mut s = wb();
+        let id = submit_query(&mut s, "MATCH (n) RETURN n;");
+        update(&mut s, Event::QueryStarted { id, header: vec!["n".to_string()] });
+        let summary = Summary {
+            notifications: vec![Notification {
+                code: "Hint".into(),
+                title: "Add an index".into(),
+                description: "label scan".into(),
+                severity: "INFORMATION".into(),
+            }],
+            ..Summary::default()
+        };
+        update(
+            &mut s,
+            Event::QueryCompleted { id, summary, elapsed: Duration::from_millis(1) },
+        );
+        assert!(s.status.message.contains("1 notification"), "status: {}", s.status.message);
+        assert!(s.shown().unwrap().summary.is_some(), "summary kept for the drawer");
+    }
+
+    #[test]
+    fn ctrl_y_toggles_the_summary_drawer() {
+        let mut s = wb();
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('y'))));
+        assert_eq!(s.drawer, Some(DrawerKind::Summary));
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('y'))));
+        assert_eq!(s.drawer, None);
     }
 
     #[test]

@@ -173,12 +173,11 @@ fn run_interactive(
         Frontend::Workbench => {
             #[cfg(feature = "tui")]
             {
-                runtime.block_on(workbench::run(
-                    session,
-                    workbench::WorkbenchConfig::default(),
-                    colorize,
-                    history,
-                ))?;
+                let config = workbench::WorkbenchConfig {
+                    verbose: cli.verbose_execution_info,
+                    ..workbench::WorkbenchConfig::default()
+                };
+                runtime.block_on(workbench::run(session, config, colorize, history))?;
             }
             #[cfg(not(feature = "tui"))]
             unreachable!("the resolver cannot pick the workbench without the tui feature");
