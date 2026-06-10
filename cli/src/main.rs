@@ -60,10 +60,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let explicit = explicit_flags(&matches);
 
-    // Resolve the non-interactive query sources (issue 20): the `run` subcommand
-    // names them (`-` = stdin), and a bare invocation reads piped stdin (the sugar
-    // for `run -`); a TTY stdin with no subcommand is interactive (`None`).
-    let sources = resolve_sources(cli.command.as_ref(), io::stdin().is_terminal());
+    // Resolve the non-interactive query sources: `-c` runs one-shot (issue 21),
+    // the `run` subcommand names files (`-` = stdin, issue 20), and a bare
+    // invocation reads piped stdin (the sugar for `run -`); a TTY stdin with no
+    // `-c`/subcommand is interactive (`None`).
+    let sources = resolve_sources(
+        cli.one_shot.as_deref(),
+        cli.command.as_ref(),
+        io::stdin().is_terminal(),
+    );
 
     // Parser mode validates the sources with the clause scanner and never touches
     // the database (PRD: validate before touching Memgraph), so handle it before
@@ -355,6 +360,9 @@ fn read_all_sources(sources: &[QuerySource]) -> Vec<String> {
     for source in sources {
         let result = match source {
             QuerySource::Stdin => read_queries(io::stdin().lock()),
+            // The inline `-c` string is split into queries by the same assembler
+            // the piped path uses, so `-c "Q1; Q2"` runs both in order (issue 21).
+            QuerySource::Inline(query) => read_queries(io::Cursor::new(query.as_bytes())),
             QuerySource::File(path) => match std::fs::File::open(path) {
                 Ok(file) => read_queries(io::BufReader::new(file)),
                 Err(e) => {
@@ -368,6 +376,7 @@ fn read_all_sources(sources: &[QuerySource]) -> Vec<String> {
             Err(e) => {
                 let what = match source {
                     QuerySource::Stdin => "stdin".to_string(),
+                    QuerySource::Inline(_) => "the -c query".to_string(),
                     QuerySource::File(path) => path.display().to_string(),
                 };
                 eprintln!("error: reading {what}: {e}");

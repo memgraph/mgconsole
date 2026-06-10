@@ -165,6 +165,30 @@ async fn the_run_subcommand_executes_files_in_order_and_stops_on_a_missing_file(
 }
 
 #[tokio::test]
+async fn the_command_flag_runs_one_shot_and_reflects_errors() {
+    // Issue 21: `-c` runs a single (or `;`-separated) query through the serial path
+    // and exits, with data on stdout and the TTY-aware default format.
+    let mg = start_memgraph().await;
+
+    let out = run_cli(&mg, &["--output-format", "csv", "-c", "RETURN 1 AS n; RETURN 2 AS n"], "");
+    assert!(
+        out.status.success(),
+        "one-shot exits zero; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Both statements ran in order; only result data on stdout.
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "n\n1\nn\n2\n");
+
+    // A query error exits non-zero with the failure on stderr.
+    let bad = run_cli(&mg, &["-c", "THIS IS NOT CYPHER"], "");
+    assert!(!bad.status.success(), "a failing -c exits non-zero");
+    assert!(
+        !String::from_utf8_lossy(&bad.stderr).is_empty(),
+        "the failure is reported on stderr"
+    );
+}
+
+#[tokio::test]
 async fn batched_parallel_import_loads_data_via_the_cli_flags() {
     let mg = start_memgraph().await;
 

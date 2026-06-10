@@ -1,6 +1,6 @@
 # 21 — `-c "QUERY"` one-shot
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

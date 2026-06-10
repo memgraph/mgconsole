@@ -262,6 +262,14 @@ pub struct Cli {
     #[arg(long)]
     pub parser_stats: bool,
 
+    /// Run a single query string and exit (issue 21), like `psql -c` /
+    /// `cypher-shell --command`. Non-interactive regardless of stdin: it bypasses
+    /// both interactive Frontends and runs through the serial path, honouring the
+    /// TTY-aware output default (issue 19). Several `;`-separated statements run in
+    /// order. Composes with the connection flags and `--profile`.
+    #[arg(short = 'c', long = "command")]
+    pub one_shot: Option<String>,
+
     /// An optional subcommand (issue 20). With none, the bare invocation runs the
     /// interactive Frontend (TTY stdin) or the serial path over piped stdin.
     #[command(subcommand)]
@@ -283,20 +291,30 @@ pub enum Command {
     },
 }
 
-/// A source of queries for a non-interactive run (issue 20): standard input or a
-/// named file. `-` resolves to [`Stdin`](QuerySource::Stdin).
+/// A source of queries for a non-interactive run: standard input, a named file
+/// (issue 20), or an inline query string (`-c`, issue 21). `-` resolves to
+/// [`Stdin`](QuerySource::Stdin).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuerySource {
     Stdin,
     File(PathBuf),
+    Inline(String),
 }
 
-/// Resolve the non-interactive query sources from the parsed command and whether
-/// stdin is a terminal (issue 20), or `None` for the interactive Frontend. Pure,
-/// so the routing is unit-tested: `run` names its sources (`-` → stdin, possibly
-/// mixed); a bare invocation reads stdin only when it is *not* a TTY (the
+/// Resolve the non-interactive query sources from `-c`, the parsed subcommand, and
+/// whether stdin is a terminal, or `None` for the interactive Frontend. Pure, so
+/// the routing is unit-tested. Precedence: `-c` wins and is always non-interactive
+/// (issue 21); else `run` names its sources (`-` → stdin, possibly mixed, issue
+/// 20); else a bare invocation reads stdin only when it is *not* a TTY (the
 /// `… | mgconsole` sugar for `run -`), and otherwise goes interactive.
-pub fn resolve_sources(command: Option<&Command>, stdin_is_tty: bool) -> Option<Vec<QuerySource>> {
+pub fn resolve_sources(
+    one_shot: Option<&str>,
+    command: Option<&Command>,
+    stdin_is_tty: bool,
+) -> Option<Vec<QuerySource>> {
+    if let Some(query) = one_shot {
+        return Some(vec![QuerySource::Inline(query.to_string())]);
+    }
     match command {
         Some(Command::Run { files }) => {
             // A bare `run` with no files reads stdin, like `run -`.
@@ -795,7 +813,7 @@ mod tests {
             files: vec!["a.cypherl".to_string(), "-".to_string(), "b.cypherl".to_string()],
         };
         assert_eq!(
-            resolve_sources(Some(&run), true),
+            resolve_sources(None, Some(&run), true),
             Some(vec![
                 File(PathBuf::from("a.cypherl")),
                 Stdin,
@@ -805,13 +823,41 @@ mod tests {
         );
         // `run -` is the explicit spelling of `… | mgconsole`.
         let run_dash = Command::Run { files: vec!["-".to_string()] };
-        assert_eq!(resolve_sources(Some(&run_dash), true), Some(vec![Stdin]));
+        assert_eq!(resolve_sources(None, Some(&run_dash), true), Some(vec![Stdin]));
         // A bare `run` reads stdin, like `run -`.
         let run_bare = Command::Run { files: vec![] };
-        assert_eq!(resolve_sources(Some(&run_bare), true), Some(vec![Stdin]));
+        assert_eq!(resolve_sources(None, Some(&run_bare), true), Some(vec![Stdin]));
         // No subcommand: a piped stdin is sugar for `run -`; a TTY goes interactive.
-        assert_eq!(resolve_sources(None, false), Some(vec![Stdin]));
-        assert_eq!(resolve_sources(None, true), None, "interactive");
+        assert_eq!(resolve_sources(None, None, false), Some(vec![Stdin]));
+        assert_eq!(resolve_sources(None, None, true), None, "interactive");
+    }
+
+    #[test]
+    fn the_command_flag_runs_one_shot_and_bypasses_the_frontends() {
+        use QuerySource::Inline;
+        // `-c` is non-interactive regardless of stdin TTY, and wins over a
+        // subcommand and the piped-stdin default (issue 21).
+        assert_eq!(
+            resolve_sources(Some("RETURN 1"), None, true),
+            Some(vec![Inline("RETURN 1".to_string())]),
+            "-c bypasses the interactive frontend even at a terminal"
+        );
+        let run = Command::Run { files: vec!["a.cypherl".to_string()] };
+        assert_eq!(
+            resolve_sources(Some("RETURN 1"), Some(&run), false),
+            Some(vec![Inline("RETURN 1".to_string())]),
+            "-c takes precedence over run"
+        );
+    }
+
+    #[test]
+    fn the_command_flag_parses_with_its_short_and_long_forms() {
+        assert_eq!(parse(&["-c", "RETURN 1"]).expect("short").one_shot.as_deref(), Some("RETURN 1"));
+        assert_eq!(
+            parse(&["--command", "RETURN 2"]).expect("long").one_shot.as_deref(),
+            Some("RETURN 2")
+        );
+        assert_eq!(parse(&[]).expect("none").one_shot, None);
     }
 
     #[test]
