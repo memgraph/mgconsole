@@ -644,3 +644,21 @@ async fn connection_loss_in_a_transaction_aborts_to_autocommit() {
         "the autocommit path announces the reconnect"
     );
 }
+
+#[tokio::test]
+async fn use_database_surfaces_a_clear_error_and_keeps_the_session_usable() {
+    // Community has no multi-tenancy license, so USE DATABASE is rejected — which
+    // is exactly the "switch failed, current database unchanged" path (issue 08).
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    match session.use_database("somedb").await {
+        Err(Error::Query(_)) => {}
+        other => panic!("expected a query error for USE DATABASE, got {other:?}"),
+    }
+
+    // The Session survives the rejection and runs the next query.
+    let mut ok = session.run("RETURN 1 AS n").await.expect("session still usable");
+    let rec = ok.records().next().await.expect("ok").expect("row");
+    assert_eq!(rec.fields(), &[Value::Integer(1)]);
+}

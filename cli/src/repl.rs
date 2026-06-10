@@ -67,6 +67,8 @@ pub enum MetaCommand {
     /// `:connect <target>` — swap to a new Session at a profile or `host[:port]`
     /// (issue 07).
     Connect(String),
+    /// `:use <db>` — switch the active Database within the Session (issue 08).
+    Use(String),
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -100,6 +102,13 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
                 )
             } else {
                 MetaCommand::Connect(args.to_string())
+            }
+        }
+        "use" => {
+            if args.is_empty() {
+                MetaCommand::Invalid(":use needs a database name, e.g. ':use analytics'".to_string())
+            } else {
+                MetaCommand::Use(args.to_string())
             }
         }
         _ => MetaCommand::Unknown(trimmed.to_string()),
@@ -231,7 +240,8 @@ pub fn help_text() -> &'static str {
      \t:begin                 Open an explicit transaction\n\
      \t:commit                Commit the open transaction\n\
      \t:rollback              Roll back the open transaction\n\
-     \t:connect <target>      Swap to another server (a profile or host[:port])"
+     \t:connect <target>      Swap to another server (a profile or host[:port])\n\
+     \t:use <db>              Switch the active database (multi-tenancy)"
 }
 
 /// Documentation pointers, printed by `:docs`. Carried over from `mgconsole`.
@@ -333,6 +343,11 @@ pub trait QueryRunner {
     /// 07). On success returns a label for the confirmation and the prompt
     /// reflects the new connection; on failure the prior Session is left intact.
     fn connect(&mut self, target: &str) -> Result<String, Error>;
+
+    /// Switch the active Database within the Session (`:use`, issue 08). On
+    /// success the prompt reflects the new Database; on failure the current one is
+    /// left active.
+    fn use_database(&mut self, database: &str) -> Result<(), Error>;
 }
 
 /// Frontend-local REPL configuration.
@@ -436,6 +451,11 @@ fn dispatch_meta(
                 Err(e) => writeln!(err, "error: {e}")?,
             }
         }
+        // `:use` switches the active Database on the same Session (issue 08).
+        MetaCommand::Use(database) => match runner.use_database(&database) {
+            Ok(()) => writeln!(out, "using database {database}")?,
+            Err(e) => writeln!(err, "error: {e}")?,
+        },
         MetaCommand::Invalid(message) => writeln!(err, "error: {message}")?,
         MetaCommand::Unknown(cmd) => writeln!(err, "error: unknown command '{cmd}'")?,
     }
@@ -706,6 +726,19 @@ mod tests {
     }
 
     #[test]
+    fn use_parses_and_drives_the_runner() {
+        assert_eq!(
+            meta_command(":use analytics"),
+            Some(MetaCommand::Use("analytics".to_string()))
+        );
+        assert!(matches!(meta_command(":use"), Some(MetaCommand::Invalid(_))));
+        let (_src, runner, out, _err) =
+            drive(vec![Line::Text(":use analytics".into())], vec![]);
+        assert_eq!(runner.used, vec!["analytics".to_string()]);
+        assert!(out.contains("using database analytics"), "confirmation: {out}");
+    }
+
+    #[test]
     fn format_params_reads_clearly_when_empty() {
         assert_eq!(format_params(&BTreeMap::new()), "No parameters set.");
     }
@@ -779,6 +812,7 @@ mod tests {
         read_only: bool,
         tx: TransactionState,
         connected: Vec<String>,
+        used: Vec<String>,
     }
 
     impl ScriptedRunner {
@@ -793,6 +827,7 @@ mod tests {
                 read_only: false,
                 tx: TransactionState::Auto,
                 connected: Vec::new(),
+                used: Vec::new(),
             }
         }
 
@@ -858,6 +893,11 @@ mod tests {
             self.connected.push(target.to_string());
             self.tx = TransactionState::Auto;
             Ok(target.to_string())
+        }
+
+        fn use_database(&mut self, database: &str) -> Result<(), Error> {
+            self.used.push(database.to_string());
+            Ok(())
         }
     }
 

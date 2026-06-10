@@ -190,6 +190,20 @@ pub async fn run(
                     };
                     let _ = tx.send(Event::Connected(outcome));
                 }
+                Effect::UseDatabase(database) => {
+                    // Switch the active Database on the shared Session (issue 08).
+                    // On success re-fetch the Schema so completion + the sidebar
+                    // reflect the newly-active Database.
+                    let outcome = session.lock().await.use_database(&database).await;
+                    let event = match outcome {
+                        Ok(()) => {
+                            tokio::spawn(fetch_schema(Arc::clone(&session), tx.clone()));
+                            Event::DatabaseChanged(Ok(database))
+                        }
+                        Err(e) => Event::DatabaseChanged(Err(e.to_string())),
+                    };
+                    let _ = tx.send(event);
+                }
                 Effect::Transaction(op) => {
                     // Apply the explicit-transaction operation on the shared Session
                     // (issue 05) and report the resulting state + message.

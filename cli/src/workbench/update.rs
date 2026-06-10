@@ -84,6 +84,17 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Event::DatabaseChanged(result) => {
+            match result {
+                Ok(database) => {
+                    state.status.message = format!("using database {database}");
+                    state.database = Some(database);
+                }
+                // A failed switch leaves the current Database active.
+                Err(message) => state.status.message = format!("error: {message}"),
+            }
+            Vec::new()
+        }
         Event::ParamEvaluated { name, value } => {
             match value {
                 Ok(value) => {
@@ -712,6 +723,11 @@ fn record_history(state: &mut WorkbenchState, submission: &str, effects: &mut Ve
 /// `:param` family (slice 16) reuses the REPL's store and server-side evaluation;
 /// the editor is cleared since a command is consumed (unlike a query, which is
 /// kept for re-run).
+// One arm per command in the shared vocabulary; the match grows with each new
+// `:`-command (issues 04–13). Splitting it would scatter the small per-arm state
+// edits for no clarity gain — it is the Workbench analogue of the REPL's
+// `dispatch_meta`.
+#[allow(clippy::too_many_lines)]
 fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
     match meta {
         MetaCommand::Quit => vec![Effect::Quit],
@@ -808,6 +824,15 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 state.status.message = "note: the open transaction is aborted by :connect".to_string();
             }
             vec![Effect::Connect(target)]
+        }
+        // `:use` switches the active Database (issue 08); refuse mid-query.
+        MetaCommand::Use(database) => {
+            if matches!(state.run, RunState::Running { .. }) {
+                state.status.message = "session busy — cancel first".to_string();
+                return Vec::new();
+            }
+            state.editor.clear();
+            vec![Effect::UseDatabase(database)]
         }
         MetaCommand::Invalid(message) => {
             state.status.message = format!("error: {message}");
@@ -1836,6 +1861,27 @@ mod tests {
         s.endpoint = "old:7687".to_string();
         update(&mut s, Event::Connected(Err("refused".to_string())));
         assert_eq!(s.endpoint, "old:7687", "prior connection display intact");
+        assert!(s.status.message.contains("error"));
+    }
+
+    #[test]
+    fn use_emits_a_use_database_effect() {
+        let mut s = wb();
+        type_str(&mut s, ":use analytics");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert_eq!(effects, vec![Effect::UseDatabase("analytics".to_string())]);
+        assert_eq!(s.editor.buffer(), "");
+    }
+
+    #[test]
+    fn the_database_changed_event_updates_the_active_database() {
+        let mut s = wb();
+        update(&mut s, Event::DatabaseChanged(Ok("analytics".to_string())));
+        assert_eq!(s.database.as_deref(), Some("analytics"));
+        assert!(s.status.message.contains("using database analytics"));
+        // A failed switch keeps the current database.
+        update(&mut s, Event::DatabaseChanged(Err("no such db".to_string())));
+        assert_eq!(s.database.as_deref(), Some("analytics"), "unchanged on error");
         assert!(s.status.message.contains("error"));
     }
 

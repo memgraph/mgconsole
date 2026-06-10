@@ -137,6 +137,9 @@ pub enum Event {
     /// A `:connect` swap finished (issue 07): `Ok` carries the new connection
     /// facts to show; `Err` is a message and the prior Session stays intact.
     Connected(Result<Connected, String>),
+    /// A `:use` switch finished (issue 08): `Ok(db)` is the newly-active Database;
+    /// `Err` is a message and the current Database stays active.
+    DatabaseChanged(Result<String, String>),
 }
 
 /// The new connection facts after a successful `:connect` swap (issue 07).

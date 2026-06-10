@@ -105,6 +105,8 @@ pub enum Effect {
     /// Swap to a new Session at the given `:connect` target (issue 07): a profile
     /// name or `host[:port]`.
     Connect(String),
+    /// Switch the active Database within the Session (`:use`, issue 08).
+    UseDatabase(String),
     /// Leave the workbench and restore the terminal.
     Quit,
 }

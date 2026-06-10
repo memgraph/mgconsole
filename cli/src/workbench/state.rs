@@ -130,6 +130,9 @@ pub struct WorkbenchState {
     /// The Endpoint shown in the status bar (issue 07): seeded from config,
     /// updated by `:connect`.
     pub endpoint: String,
+    /// The active Database once switched with `:use` (issue 08); `None` keeps the
+    /// server default. Shown in the status bar; reset by a `:connect` swap.
+    pub database: Option<String>,
     /// Frontend-local configuration.
     pub config: WorkbenchConfig,
 }
@@ -166,6 +169,7 @@ impl WorkbenchState {
             tx: TransactionState::Auto,
             profile: config.profile.clone(),
             endpoint: config.endpoint.clone(),
+            database: None,
             config,
         }
     }

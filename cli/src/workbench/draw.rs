@@ -472,6 +472,9 @@ fn status_text(state: &WorkbenchState) -> String {
     let mut prefix = String::new();
     if !state.endpoint.is_empty() {
         write!(prefix, "{}", state.endpoint).unwrap();
+        if let Some(db) = &state.database {
+            write!(prefix, "/{db}").unwrap();
+        }
     }
     if let Some(name) = &state.profile {
         if !prefix.is_empty() {

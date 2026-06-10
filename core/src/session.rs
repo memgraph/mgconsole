@@ -337,6 +337,18 @@ impl Session {
         self.run_with_params(query, &BTreeMap::new()).await
     }
 
+    /// Switch the active Database within this Session (`:use`, issue 08) via
+    /// Memgraph multi-tenancy `USE DATABASE`. The connection is unchanged — same
+    /// Endpoint, same Session. A failure (unknown database, or no multi-tenancy
+    /// license) surfaces as [`Error::Query`] and leaves the current Database
+    /// active. The empty result is drained so the Session is ready for the next
+    /// query.
+    pub async fn use_database(&mut self, database: &str) -> Result<(), Error> {
+        let mut result = self.run(&format!("USE DATABASE {database}")).await?;
+        result.records().discard().await?;
+        Ok(())
+    }
+
     /// Run a query bound to a set of named parameters and return its result.
     ///
     /// Errors with [`Error::ResultStillOpen`] if a prior result is still being

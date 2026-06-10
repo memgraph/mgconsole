@@ -233,6 +233,7 @@ fn run_interactive(
                 profile: profile.clone(),
                 read_only,
                 tx: session.transaction_state(),
+                database: None,
             }));
             let mut runner = SessionRunner {
                 runtime,
@@ -425,6 +426,9 @@ fn explicit_flags(matches: &clap::ArgMatches) -> ExplicitFlags {
 fn repl_prompt(info: &PromptInfo) -> String {
     use std::fmt::Write as _;
     let mut prompt = format!("memgraph@{}", info.endpoint);
+    if let Some(db) = &info.database {
+        write!(prompt, "/{db}").unwrap();
+    }
     if let Some(name) = &info.profile {
         write!(prompt, " ({name})").unwrap();
     }
@@ -576,6 +580,9 @@ struct PromptInfo {
     profile: Option<String>,
     read_only: bool,
     tx: TransactionState,
+    /// The active Database name once switched with `:use` (issue 08); `None` keeps
+    /// the server default and shows nothing.
+    database: Option<String>,
 }
 
 impl SessionRunner<'_> {
@@ -714,8 +721,18 @@ impl QueryRunner for SessionRunner<'_> {
             prompt.profile = resolved.profile;
             prompt.read_only = self.session.is_read_only();
             prompt.tx = TransactionState::Auto;
+            // A new Session starts on the server's default Database.
+            prompt.database = None;
         }
         Ok(label)
+    }
+
+    fn use_database(&mut self, database: &str) -> Result<(), Error> {
+        self.runtime.block_on(self.session.use_database(database))?;
+        if let Ok(mut prompt) = self.prompt.lock() {
+            prompt.database = Some(database.to_string());
+        }
+        Ok(())
     }
 }
 
@@ -737,6 +754,7 @@ mod tests {
             profile: profile.map(str::to_string),
             read_only,
             tx,
+            database: None,
         };
         assert_eq!(repl_prompt(&info(None, false, Auto)), "memgraph@127.0.0.1:7687> ");
         assert_eq!(
@@ -754,6 +772,15 @@ mod tests {
         assert_eq!(
             repl_prompt(&info(None, false, Failed)),
             "memgraph@127.0.0.1:7687 [tx failed]> "
+        );
+        // The active database shows after the endpoint (issue 08).
+        let with_db = PromptInfo {
+            database: Some("analytics".to_string()),
+            ..info(Some("prod"), false, Auto)
+        };
+        assert_eq!(
+            repl_prompt(&with_db),
+            "memgraph@127.0.0.1:7687/analytics (prod)> "
         );
     }
 
