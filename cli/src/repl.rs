@@ -11,10 +11,11 @@
 //! recognition, and the result summary — carry the detail and are tested
 //! directly.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::time::Duration;
 
-use mgconsole_core::{tabular, Error, QueryAssembler};
+use mgconsole_core::{render, tabular, Error, QueryAssembler, Value};
 
 /// Whether a buffer the user has entered is a complete submission, or still
 /// needs a continuation line. Drives rustyline's `Validator`: incomplete input
@@ -43,6 +44,17 @@ pub enum MetaCommand {
     Help,
     /// Print documentation pointers (`:docs`).
     Docs,
+    /// `:param <name> <expr>` — evaluate the Cypher expression server-side and
+    /// store the result as `$name` for later queries (slice 20).
+    SetParam { name: String, expr: String },
+    /// `:params` — list the currently set parameters.
+    ListParams,
+    /// `:params clear` — remove all parameters.
+    ClearParams,
+    /// A recognised command used wrongly (e.g. `:param` with no expression). The
+    /// message explains the misuse so the Frontend can report it without ending
+    /// the session.
+    Invalid(String),
     /// A `:`-prefixed word that is not recognised.
     Unknown(String),
 }
@@ -53,13 +65,77 @@ pub enum MetaCommand {
 pub fn meta_command(line: &str) -> Option<MetaCommand> {
     let trimmed = line.trim();
     let rest = trimmed.strip_prefix(':')?;
-    let name = rest.split_whitespace().next().unwrap_or("");
-    Some(match name {
+    let (keyword, args) = split_first_word(rest);
+    Some(match keyword {
         "quit" | "exit" => MetaCommand::Quit,
         "help" => MetaCommand::Help,
         "docs" => MetaCommand::Docs,
+        "param" => parse_set_param(args),
+        "params" => parse_params(args),
         _ => MetaCommand::Unknown(trimmed.to_string()),
     })
+}
+
+/// Parse the argument of `:param` into a `SetParam`, or an [`MetaCommand::Invalid`]
+/// describing the misuse. The name is the first word; everything after it is the
+/// Cypher expression, kept verbatim (it may contain spaces, e.g. `21 * 2`).
+fn parse_set_param(args: &str) -> MetaCommand {
+    let (name, expr) = split_first_word(args);
+    if name.is_empty() || expr.is_empty() {
+        return MetaCommand::Invalid(
+            ":param needs a name and an expression, e.g. ':param age 21 * 2'".to_string(),
+        );
+    }
+    MetaCommand::SetParam {
+        name: name.to_string(),
+        expr: expr.to_string(),
+    }
+}
+
+/// Parse the argument of `:params`: empty lists, `clear` empties, anything else
+/// is a misuse.
+fn parse_params(args: &str) -> MetaCommand {
+    match args {
+        "" => MetaCommand::ListParams,
+        "clear" => MetaCommand::ClearParams,
+        other => MetaCommand::Invalid(format!(
+            ":params takes no argument or 'clear', got '{other}'"
+        )),
+    }
+}
+
+/// Split a string into its first whitespace-delimited word and the trimmed
+/// remainder. Both are `""` when absent.
+fn split_first_word(s: &str) -> (&str, &str) {
+    let s = s.trim_start();
+    match s.find(char::is_whitespace) {
+        Some(i) => (&s[..i], s[i..].trim()),
+        None => (s, ""),
+    }
+}
+
+/// Render the current parameters for `:params`. Empty reads as a clear sentence;
+/// otherwise one `$name = value` per line, ordered by name (the store is a
+/// `BTreeMap`). A string value is quoted so it is unambiguous in the listing.
+pub fn format_params(params: &BTreeMap<String, Value>) -> String {
+    if params.is_empty() {
+        return "No parameters set.".to_string();
+    }
+    params
+        .iter()
+        .map(|(name, value)| format!("${name} = {}", display_param(value)))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Render a stored parameter value for the listing: a string is quoted (matching
+/// the nested-string convention of tabular rendering) so it reads unambiguously;
+/// every other Value uses the shared tabular renderer.
+fn display_param(value: &Value) -> String {
+    match value {
+        Value::String(s) => format!("\"{s}\""),
+        other => render::tabular(other),
+    }
 }
 
 /// Interactive-mode usage, printed by `:help`. Carried over from `mgconsole`'s
@@ -137,10 +213,18 @@ pub struct Rendered {
     pub elapsed: Duration,
 }
 
-/// Runs one complete query and returns its rendered result. Abstracted so the
-/// loop is testable without a live database.
+/// Runs queries against the database. Abstracted so the loop is testable without
+/// a live database. `params` carries the REPL's current `:param` store, bound to
+/// every query so `$name` references resolve (slice 20).
 pub trait QueryRunner {
-    fn run(&mut self, query: &str) -> Result<Rendered, Error>;
+    /// Run one complete query bound to the current parameters and render it.
+    fn run(&mut self, query: &str, params: &BTreeMap<String, Value>) -> Result<Rendered, Error>;
+
+    /// Evaluate a `:param` expression server-side with the existing parameters in
+    /// scope, returning the resulting Value to store. Implemented by running
+    /// `RETURN <expr>` and taking the single value back.
+    fn evaluate(&mut self, expr: &str, params: &BTreeMap<String, Value>)
+        -> Result<Value, Error>;
 }
 
 /// Frontend-local REPL configuration.
@@ -164,6 +248,8 @@ pub fn run_loop(
     config: &ReplConfig,
 ) -> io::Result<()> {
     let mut assembler = QueryAssembler::new();
+    // The `:param` store, bound to every query so `$name` references resolve.
+    let mut params: BTreeMap<String, Value> = BTreeMap::new();
     loop {
         let continued = assembler.has_pending();
         let text = match source.read(continued)? {
@@ -189,6 +275,30 @@ pub fn run_loop(
                     writeln!(out, "{}", docs_text())?;
                     continue;
                 }
+                // Evaluate the expression server-side with the existing params in
+                // scope, then store the result. A bad expression is reported (the
+                // Session survives it; slice 14) and the loop continues.
+                Some(MetaCommand::SetParam { name, expr }) => {
+                    match runner.evaluate(&expr, &params) {
+                        Ok(value) => {
+                            params.insert(name, value);
+                        }
+                        Err(e) => writeln!(err, "error: {e}")?,
+                    }
+                    continue;
+                }
+                Some(MetaCommand::ListParams) => {
+                    writeln!(out, "{}", format_params(&params))?;
+                    continue;
+                }
+                Some(MetaCommand::ClearParams) => {
+                    params.clear();
+                    continue;
+                }
+                Some(MetaCommand::Invalid(message)) => {
+                    writeln!(err, "error: {message}")?;
+                    continue;
+                }
                 Some(MetaCommand::Unknown(cmd)) => {
                     writeln!(err, "error: unknown command '{cmd}'")?;
                     continue;
@@ -200,7 +310,7 @@ pub fn run_loop(
         // The trailing newline lets a line comment close and separates physical
         // lines when assembling across reads.
         for query in assembler.push(&format!("{text}\n")) {
-            match runner.run(&query) {
+            match runner.run(&query, &params) {
                 Ok(result) => {
                     if !result.table.is_empty() {
                         writeln!(out, "{}", result.table)?;
@@ -301,6 +411,58 @@ mod tests {
         assert_eq!(meta_command("RETURN 1"), None);
     }
 
+    // --- :param / :params parsing (pure) -------------------------------------
+
+    #[test]
+    fn set_param_keeps_the_whole_expression_verbatim() {
+        // The expression may contain spaces; everything after the name is it.
+        assert_eq!(
+            meta_command(":param age 21 * 2"),
+            Some(MetaCommand::SetParam {
+                name: "age".to_string(),
+                expr: "21 * 2".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn params_lists_and_clears() {
+        assert_eq!(meta_command(":params"), Some(MetaCommand::ListParams));
+        assert_eq!(meta_command(":params clear"), Some(MetaCommand::ClearParams));
+    }
+
+    #[test]
+    fn param_without_a_name_or_expression_is_invalid() {
+        assert!(matches!(meta_command(":param"), Some(MetaCommand::Invalid(_))));
+        assert!(matches!(
+            meta_command(":param age"),
+            Some(MetaCommand::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn params_with_an_unknown_argument_is_invalid() {
+        assert!(matches!(
+            meta_command(":params bogus"),
+            Some(MetaCommand::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn format_params_reads_clearly_when_empty() {
+        assert_eq!(format_params(&BTreeMap::new()), "No parameters set.");
+    }
+
+    #[test]
+    fn format_params_lists_each_param_ordered_with_strings_quoted() {
+        let params = BTreeMap::from([
+            ("age".to_string(), Value::Integer(42)),
+            ("name".to_string(), Value::String("Ada".to_string())),
+        ]);
+        // BTreeMap order: age before name.
+        assert_eq!(format_params(&params), "$age = 42\n$name = \"Ada\"");
+    }
+
     #[test]
     fn summary_counts_and_times_the_result() {
         assert_eq!(
@@ -346,27 +508,52 @@ mod tests {
         }
     }
 
-    /// Records every query it is asked to run and returns scripted results.
+    /// Records every query (and the params bound to it) and returns scripted
+    /// results. `:param` evaluations are recorded separately and answered from a
+    /// scripted value queue (defaulting to `Null`), so a test can assert both the
+    /// expression seen and the params in scope at evaluation time.
     struct ScriptedRunner {
         seen: Vec<String>,
+        seen_params: Vec<BTreeMap<String, Value>>,
         results: VecDeque<Result<Rendered, Error>>,
+        eval_seen: Vec<(String, BTreeMap<String, Value>)>,
+        eval_results: VecDeque<Result<Value, Error>>,
     }
 
     impl ScriptedRunner {
         fn returning(results: Vec<Result<Rendered, Error>>) -> Self {
             Self {
                 seen: Vec::new(),
+                seen_params: Vec::new(),
                 results: results.into(),
+                eval_seen: Vec::new(),
+                eval_results: VecDeque::new(),
             }
+        }
+
+        /// Pre-seed the values `evaluate` hands back, in call order.
+        fn evaluating(mut self, values: Vec<Result<Value, Error>>) -> Self {
+            self.eval_results = values.into();
+            self
         }
     }
 
     impl QueryRunner for ScriptedRunner {
-        fn run(&mut self, query: &str) -> Result<Rendered, Error> {
+        fn run(&mut self, query: &str, params: &BTreeMap<String, Value>) -> Result<Rendered, Error> {
             self.seen.push(query.to_string());
+            self.seen_params.push(params.clone());
             self.results
                 .pop_front()
                 .unwrap_or_else(|| Ok(ok_result("", 0)))
+        }
+
+        fn evaluate(
+            &mut self,
+            expr: &str,
+            params: &BTreeMap<String, Value>,
+        ) -> Result<Value, Error> {
+            self.eval_seen.push((expr.to_string(), params.clone()));
+            self.eval_results.pop_front().unwrap_or(Ok(Value::Null))
         }
     }
 
@@ -383,8 +570,14 @@ mod tests {
         lines: Vec<Line>,
         results: Vec<Result<Rendered, Error>>,
     ) -> (ScriptedSource, ScriptedRunner, String, String) {
+        drive_with(lines, ScriptedRunner::returning(results))
+    }
+
+    fn drive_with(
+        lines: Vec<Line>,
+        mut runner: ScriptedRunner,
+    ) -> (ScriptedSource, ScriptedRunner, String, String) {
         let mut source = ScriptedSource::of(lines);
-        let mut runner = ScriptedRunner::returning(results);
         let mut out = Vec::new();
         let mut err = Vec::new();
         run_loop(
@@ -516,5 +709,112 @@ mod tests {
         assert!(runner.seen.is_empty(), "no query runs for :help/:docs");
         assert!(out.contains("Supported commands"), "help printed: {out}");
         assert!(out.contains("memgr.ph"), "docs printed: {out}");
+    }
+
+    // --- :param family, driven through the loop -------------------------------
+
+    #[test]
+    fn a_set_param_is_bound_to_a_later_query() {
+        let runner = ScriptedRunner::returning(vec![Ok(ok_result("t", 1))])
+            .evaluating(vec![Ok(Value::Integer(42))]);
+        let (_src, runner, _out, _err) = drive_with(
+            vec![
+                Line::Text(":param age 21 * 2".into()),
+                Line::Text("RETURN $age;".into()),
+            ],
+            runner,
+        );
+        // The expression was evaluated server-side, and the stored value bound to
+        // the next query.
+        assert_eq!(runner.eval_seen[0].0, "21 * 2");
+        assert_eq!(
+            runner.seen_params,
+            vec![BTreeMap::from([("age".to_string(), Value::Integer(42))])]
+        );
+    }
+
+    #[test]
+    fn existing_params_are_in_scope_when_evaluating_a_new_one() {
+        let runner = ScriptedRunner::returning(vec![])
+            .evaluating(vec![Ok(Value::Integer(1)), Ok(Value::Integer(2))]);
+        let (_src, runner, _out, _err) = drive_with(
+            vec![
+                Line::Text(":param x 1".into()),
+                Line::Text(":param y $x + 1".into()),
+            ],
+            runner,
+        );
+        // The second evaluation saw `x` already in scope.
+        assert_eq!(runner.eval_seen[1].0, "$x + 1");
+        assert_eq!(
+            runner.eval_seen[1].1,
+            BTreeMap::from([("x".to_string(), Value::Integer(1))])
+        );
+    }
+
+    #[test]
+    fn params_lists_then_clears_the_store() {
+        let runner = ScriptedRunner::returning(vec![]).evaluating(vec![Ok(Value::Integer(7))]);
+        let (_src, _runner, out, _err) = drive_with(
+            vec![
+                Line::Text(":param n 7".into()),
+                Line::Text(":params".into()),
+                Line::Text(":params clear".into()),
+                Line::Text(":params".into()),
+            ],
+            runner,
+        );
+        // First listing shows the param; after clear, the listing is empty again.
+        assert!(out.contains("$n = 7"), "listing shows the param: {out}");
+        assert!(out.contains("No parameters set."), "cleared: {out}");
+    }
+
+    #[test]
+    fn a_cleared_param_is_no_longer_bound() {
+        let runner = ScriptedRunner::returning(vec![Ok(ok_result("t", 1))])
+            .evaluating(vec![Ok(Value::Integer(7))]);
+        let (_src, runner, _out, _err) = drive_with(
+            vec![
+                Line::Text(":param n 7".into()),
+                Line::Text(":params clear".into()),
+                Line::Text("RETURN 1;".into()),
+            ],
+            runner,
+        );
+        assert_eq!(runner.seen_params, vec![BTreeMap::new()]);
+    }
+
+    #[test]
+    fn a_malformed_param_command_is_reported_and_the_loop_survives() {
+        let (_src, runner, _out, err) = drive(
+            vec![
+                Line::Text(":param".into()),
+                Line::Text("RETURN 1;".into()),
+            ],
+            vec![Ok(ok_result("t", 1))],
+        );
+        assert!(err.contains("error:"), "misuse reported: {err}");
+        // The session survived: the following query still ran.
+        assert_eq!(runner.seen, vec!["RETURN 1".to_string()]);
+    }
+
+    #[test]
+    fn a_failed_param_evaluation_is_reported_and_the_loop_survives() {
+        let boom = Error::Query(mgconsole_core::error::QueryError {
+            code: "Memgraph.ClientError.MemgraphError.SyntaxError".to_string(),
+            message: "bad expression".to_string(),
+        });
+        let runner = ScriptedRunner::returning(vec![Ok(ok_result("t", 1))])
+            .evaluating(vec![Err(boom)]);
+        let (_src, runner, _out, err) = drive_with(
+            vec![
+                Line::Text(":param x @@@".into()),
+                Line::Text("RETURN 1;".into()),
+            ],
+            runner,
+        );
+        assert!(err.contains("bad expression"), "eval error surfaced: {err}");
+        // Nothing was stored, and the next query still ran with no params.
+        assert_eq!(runner.seen_params, vec![BTreeMap::new()]);
     }
 }

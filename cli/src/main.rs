@@ -8,6 +8,7 @@
 //! are reused unchanged; the loop itself is covered by unit tests in `repl`.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::io::{self, BufRead, IsTerminal};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -245,7 +246,7 @@ struct SessionRunner<'a> {
 }
 
 impl QueryRunner for SessionRunner<'_> {
-    fn run(&mut self, query: &str) -> Result<Rendered, Error> {
+    fn run(&mut self, query: &str, params: &BTreeMap<String, Value>) -> Result<Rendered, Error> {
         let runtime = self.runtime;
         let session = &mut self.session;
         let cap = self.row_cap;
@@ -253,7 +254,7 @@ impl QueryRunner for SessionRunner<'_> {
 
         runtime.block_on(async move {
             let start = Instant::now();
-            let mut result = session.run(query).await?;
+            let mut result = session.run_with_params(query, params).await?;
             let header = result.header().to_vec();
             let (records, overflowed) = result.records().collect_capped(cap).await?;
             // Drop any rows beyond the cap so the connection is ready for reuse.
@@ -274,6 +275,29 @@ impl QueryRunner for SessionRunner<'_> {
                 overflowed,
                 elapsed,
             })
+        })
+    }
+
+    fn evaluate(
+        &mut self,
+        expr: &str,
+        params: &BTreeMap<String, Value>,
+    ) -> Result<Value, Error> {
+        let runtime = self.runtime;
+        let session = &mut self.session;
+
+        runtime.block_on(async move {
+            // Evaluate the expression server-side with the existing params in
+            // scope; the single returned value becomes the stored parameter.
+            let query = format!("RETURN {expr}");
+            let mut result = session.run_with_params(&query, params).await?;
+            let first = result.records().next().await?;
+            // A multi-row/column expression is unusual for a param; keep only the
+            // first field and drain the rest so the connection stays reusable.
+            result.records().discard().await?;
+            Ok(first
+                .and_then(|record| record.into_fields().into_iter().next())
+                .unwrap_or(Value::Null))
         })
     }
 }
