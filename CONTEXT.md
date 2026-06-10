@@ -13,6 +13,15 @@ the definition here wins until deliberately changed.
   Frontend; a full-screen terminal UI and a non-interactive script runner are
   other Frontends over the same Core.
 
+## Query text
+
+- **Token** — a lexical unit of Cypher _query text_, recognised by its shape
+  alone without consulting the database: a keyword, function name, string,
+  number, query parameter, comment, or punctuation. The input-side counterpart
+  to a Value (which is database output). One token reading underlies the three
+  things the console does with raw query text: splitting input into queries,
+  detecting a query's clauses, and colouring input as it is typed.
+
 ## Session and results
 
 - **Session** — a single live conversation with one Memgraph server over which
