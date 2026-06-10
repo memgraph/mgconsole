@@ -22,12 +22,12 @@ This is the first demoable interactive shell.
 
 ## Acceptance criteria
 
-- [ ] rustyline's `Validator` keeps editing until the `QueryAssembler` (slice 15) reports a complete query, with a continuation prompt
-- [ ] Each completed query runs and its result renders as tabular
-- [ ] Per-query round-trip time and a row-count summary print after results
-- [ ] A query error is shown and the prompt returns (session survives)
-- [ ] A fatal connection error shows reconnect attempts and resumes on success
-- [ ] Ctrl-D and `:quit` exit cleanly
+- [x] rustyline's `Validator` keeps editing until the `QueryAssembler` (slice 15) reports a complete query, with a continuation prompt
+- [x] Each completed query runs and its result renders as tabular
+- [x] Per-query round-trip time and a row-count summary print after results
+- [x] A query error is shown and the prompt returns (session survives)
+- [x] A fatal connection error shows reconnect attempts and resumes on success
+- [x] Ctrl-D and `:quit` exit cleanly
 
 ## Blocked by
 

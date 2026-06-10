@@ -17,4 +17,6 @@ path = "src/main.rs"
 clap = { version = "4.6.1", features = ["derive"] }
 mgconsole-core = { path = "../core" }
 rpassword = "7.5.4"
+rustyline = { version = "15", features = ["derive"] }
+terminal_size = "0.4"
 tokio = { workspace = true }
