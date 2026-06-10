@@ -22,15 +22,12 @@ async fn runs_a_cypherl_stream_serially_and_takes_effect() {
         "CREATE (:Person {name: 'Bo', age: 21})".to_string(),
     ];
     let mut sink = Vec::new();
-    let report = run_serial(
-        session,
-        queries,
-        &mut sink,
-        &ImportFormat::Cypherl,
-    )
-    .await;
+    let report = run_serial(session, queries, &mut sink, &ImportFormat::Cypherl).await;
 
-    assert!(report.is_success(), "clean import has no failures: {report:?}");
+    assert!(
+        report.is_success(),
+        "clean import has no failures: {report:?}"
+    );
     assert_eq!(report.executed, 2);
     // Write queries return no columns, so cypherl output is empty.
     assert!(sink.is_empty(), "writes produce no output: {sink:?}");
@@ -56,7 +53,13 @@ async fn renders_results_in_the_selected_format() {
         "MATCH (p:Person) RETURN p.name AS name, p.age AS age".to_string(),
     ];
     let mut sink = Vec::new();
-    let report = run_serial(session, queries, &mut sink, &ImportFormat::Csv(CsvOptions::default())).await;
+    let report = run_serial(
+        session,
+        queries,
+        &mut sink,
+        &ImportFormat::Csv(CsvOptions::default()),
+    )
+    .await;
 
     assert!(report.is_success());
     assert_eq!(String::from_utf8(sink).unwrap(), "name,age\nAda,36\n");

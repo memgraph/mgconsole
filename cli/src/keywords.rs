@@ -347,4 +347,3 @@ pub const AWESOME_FUNCTIONS: &[&str] = &[
     "VALUES",
     "VALUETYPE",
 ];
-

@@ -7,7 +7,10 @@ use mgconsole_core::value::{Node, Path, Relationship, UnboundRelationship};
 use mgconsole_core::Value;
 
 fn props(pairs: &[(&str, Value)]) -> std::collections::BTreeMap<String, Value> {
-    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.clone()))
+        .collect()
 }
 
 #[test]
@@ -32,7 +35,12 @@ fn scalar_tabular_goldens() {
 }
 
 fn map(pairs: &[(&str, Value)]) -> Value {
-    Value::Map(pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
+    Value::Map(
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect(),
+    )
 }
 
 #[test]
@@ -41,7 +49,11 @@ fn container_tabular_goldens() {
         ("list_empty", Value::List(vec![])),
         (
             "list_ints",
-            Value::List(vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)]),
+            Value::List(vec![
+                Value::Integer(1),
+                Value::Integer(2),
+                Value::Integer(3),
+            ]),
         ),
         (
             "list_strings",
@@ -59,7 +71,10 @@ fn container_tabular_goldens() {
         ("map_empty", map(&[])),
         (
             "map_basic",
-            map(&[("age", Value::Integer(36)), ("name", Value::String("Ada".into()))]),
+            map(&[
+                ("age", Value::Integer(36)),
+                ("name", Value::String("Ada".into())),
+            ]),
         ),
         (
             "list_of_maps",
@@ -91,12 +106,35 @@ fn container_tabular_goldens() {
 }
 
 #[test]
+// A flat table of graph-shape golden cases; its length is the case count, not
+// hidden complexity, so splitting it to satisfy `too_many_lines` adds no clarity.
+#[allow(clippy::too_many_lines)]
 fn graph_tabular_goldens() {
-    let node_a = Node { id: 0, labels: vec!["A".into()], properties: props(&[]) };
-    let node_b = Node { id: 1, labels: vec!["B".into()], properties: props(&[]) };
-    let node_c = Node { id: 2, labels: vec!["C".into()], properties: props(&[]) };
-    let r1 = UnboundRelationship { id: 10, rel_type: "R1".into(), properties: props(&[]) };
-    let r2 = UnboundRelationship { id: 11, rel_type: "R2".into(), properties: props(&[]) };
+    let node_a = Node {
+        id: 0,
+        labels: vec!["A".into()],
+        properties: props(&[]),
+    };
+    let node_b = Node {
+        id: 1,
+        labels: vec!["B".into()],
+        properties: props(&[]),
+    };
+    let node_c = Node {
+        id: 2,
+        labels: vec!["C".into()],
+        properties: props(&[]),
+    };
+    let r1 = UnboundRelationship {
+        id: 10,
+        rel_type: "R1".into(),
+        properties: props(&[]),
+    };
+    let r2 = UnboundRelationship {
+        id: 11,
+        rel_type: "R2".into(),
+        properties: props(&[]),
+    };
 
     let cases: Vec<(&str, Value)> = vec![
         (
@@ -113,9 +151,20 @@ fn graph_tabular_goldens() {
         ),
         (
             "node_multi_label",
-            Value::Node(Node { id: 1, labels: vec!["A".into(), "B".into()], properties: props(&[]) }),
+            Value::Node(Node {
+                id: 1,
+                labels: vec!["A".into(), "B".into()],
+                properties: props(&[]),
+            }),
         ),
-        ("node_bare", Value::Node(Node { id: 2, labels: vec![], properties: props(&[]) })),
+        (
+            "node_bare",
+            Value::Node(Node {
+                id: 2,
+                labels: vec![],
+                properties: props(&[]),
+            }),
+        ),
         (
             "relationship",
             Value::Relationship(Relationship {
@@ -160,7 +209,11 @@ fn graph_tabular_goldens() {
         ),
         (
             "path_single_node",
-            Value::Path(Path { nodes: vec![node_a], relationships: vec![], sequence: vec![] }),
+            Value::Path(Path {
+                nodes: vec![node_a],
+                relationships: vec![],
+                sequence: vec![],
+            }),
         ),
     ];
     golden::check_tabular("graph", &cases);
@@ -178,12 +231,31 @@ fn temporal_tabular_goldens() {
     let cases: Vec<(&str, Value)> = vec![
         ("date", Value::Date(date)),
         ("local_time", Value::LocalTime(time)),
-        ("local_time_whole", Value::LocalTime(NaiveTime::from_hms_opt(9, 0, 0).unwrap())),
-        ("local_datetime", Value::LocalDateTime(NaiveDateTime::new(date, time))),
-        ("duration", Value::Duration(Duration { months: 0, days: 1, seconds: 7384, nanos: 0 })),
+        (
+            "local_time_whole",
+            Value::LocalTime(NaiveTime::from_hms_opt(9, 0, 0).unwrap()),
+        ),
+        (
+            "local_datetime",
+            Value::LocalDateTime(NaiveDateTime::new(date, time)),
+        ),
+        (
+            "duration",
+            Value::Duration(Duration {
+                months: 0,
+                days: 1,
+                seconds: 7384,
+                nanos: 0,
+            }),
+        ),
         (
             "duration_fractional",
-            Value::Duration(Duration { months: 0, days: 1, seconds: 7384, nanos: 500_000_000 }),
+            Value::Duration(Duration {
+                months: 0,
+                days: 1,
+                seconds: 7384,
+                nanos: 500_000_000,
+            }),
         ),
         (
             "datetime_offset",
@@ -192,13 +264,12 @@ fn temporal_tabular_goldens() {
         (
             "datetime_zoned",
             Value::DateTimeZoned(
-                chrono_tz::Europe::Zagreb.with_ymd_and_hms(2021, 6, 15, 12, 34, 56).unwrap(),
+                chrono_tz::Europe::Zagreb
+                    .with_ymd_and_hms(2021, 6, 15, 12, 34, 56)
+                    .unwrap(),
             ),
         ),
-        (
-            "time_with_offset",
-            Value::Time(time, off),
-        ),
+        ("time_with_offset", Value::Time(time, off)),
     ];
     golden::check_tabular("temporal", &cases);
 }
@@ -208,11 +279,48 @@ fn point_and_enum_tabular_goldens() {
     use mgconsole_core::value::{Point2d, Point3d};
 
     let cases: Vec<(&str, Value)> = vec![
-        ("point_2d_cartesian", Value::Point2d(Point2d { srid: 7203, x: 1.0, y: 2.0 })),
-        ("point_2d_wgs84", Value::Point2d(Point2d { srid: 4326, x: 1.0, y: 2.0 })),
-        ("point_3d_cartesian", Value::Point3d(Point3d { srid: 9157, x: 1.0, y: 2.0, z: 3.0 })),
-        ("point_3d_wgs84", Value::Point3d(Point3d { srid: 4979, x: 1.0, y: 2.0, z: 3.0 })),
-        ("point_2d_fractional", Value::Point2d(Point2d { srid: 4326, x: 1.5, y: 2.25 })),
+        (
+            "point_2d_cartesian",
+            Value::Point2d(Point2d {
+                srid: 7203,
+                x: 1.0,
+                y: 2.0,
+            }),
+        ),
+        (
+            "point_2d_wgs84",
+            Value::Point2d(Point2d {
+                srid: 4326,
+                x: 1.0,
+                y: 2.0,
+            }),
+        ),
+        (
+            "point_3d_cartesian",
+            Value::Point3d(Point3d {
+                srid: 9157,
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            }),
+        ),
+        (
+            "point_3d_wgs84",
+            Value::Point3d(Point3d {
+                srid: 4979,
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+            }),
+        ),
+        (
+            "point_2d_fractional",
+            Value::Point2d(Point2d {
+                srid: 4326,
+                x: 1.5,
+                y: 2.25,
+            }),
+        ),
         ("enum", Value::Enum("Status::Active".into())),
     ];
     golden::check_tabular("point_enum", &cases);

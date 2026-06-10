@@ -50,7 +50,7 @@ enum State {
 /// Scan a buffer into (complete queries, unterminated remainder). Empty queries
 /// (e.g. between `;;`) are skipped.
 fn scan(buf: &str) -> (Vec<String>, String) {
-    use State::{Normal, Single, Double, Backtick, LineComment, BlockComment};
+    use State::{Backtick, BlockComment, Double, LineComment, Normal, Single};
 
     let chars: Vec<char> = buf.chars().collect();
     let mut complete = Vec::new();
@@ -133,7 +133,10 @@ mod tests {
 
     #[test]
     fn single_query_terminates_on_semicolon() {
-        assert_eq!(split("RETURN 1;"), (vec!["RETURN 1".to_string()], String::new()));
+        assert_eq!(
+            split("RETURN 1;"),
+            (vec!["RETURN 1".to_string()], String::new())
+        );
     }
 
     #[test]
@@ -161,12 +164,18 @@ mod tests {
     #[test]
     fn semicolon_inside_strings_does_not_terminate() {
         assert_eq!(split("RETURN 'a;b';").0, vec!["RETURN 'a;b'".to_string()]);
-        assert_eq!(split("RETURN \"a;b\";").0, vec!["RETURN \"a;b\"".to_string()]);
+        assert_eq!(
+            split("RETURN \"a;b\";").0,
+            vec!["RETURN \"a;b\"".to_string()]
+        );
     }
 
     #[test]
     fn escaped_quote_keeps_string_open() {
-        assert_eq!(split(r"RETURN 'a\';b';").0, vec![r"RETURN 'a\';b'".to_string()]);
+        assert_eq!(
+            split(r"RETURN 'a\';b';").0,
+            vec![r"RETURN 'a\';b'".to_string()]
+        );
     }
 
     #[test]
@@ -175,7 +184,10 @@ mod tests {
             split("RETURN 1 // c ; x\nRETURN 2;").0,
             vec!["RETURN 1 // c ; x\nRETURN 2".to_string()]
         );
-        assert_eq!(split("RETURN /* ; */ 1;").0, vec!["RETURN /* ; */ 1".to_string()]);
+        assert_eq!(
+            split("RETURN /* ; */ 1;").0,
+            vec!["RETURN /* ; */ 1".to_string()]
+        );
     }
 
     #[test]

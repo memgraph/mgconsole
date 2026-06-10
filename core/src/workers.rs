@@ -73,8 +73,7 @@ fn resolve_count(requested: usize) -> usize {
     if requested > 0 {
         return requested;
     }
-    std::thread::available_parallelism()
-        .map_or(1, std::num::NonZero::get)
+    std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
 }
 
 #[cfg(test)]

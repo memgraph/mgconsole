@@ -38,7 +38,12 @@ fn duration(d: &crate::value::Duration) -> String {
     if d.months != 0 {
         write!(out, "{}M", d.months).unwrap();
     }
-    write!(out, "{}DT{}H{}M{}.{:06}S", d.days, hours, minutes, seconds, micros).unwrap();
+    write!(
+        out,
+        "{}DT{}H{}M{}.{:06}S",
+        d.days, hours, minutes, seconds, micros
+    )
+    .unwrap();
     out
 }
 
@@ -88,9 +93,7 @@ fn render(value: &Value, quote: bool) -> String {
         }
         Value::Map(m) => format!("{{{}}}", render_pairs(m)),
         Value::Node(n) => render_node(n),
-        Value::Relationship(r) => {
-            rel_body(&r.rel_type, &r.properties)
-        }
+        Value::Relationship(r) => rel_body(&r.rel_type, &r.properties),
         Value::UnboundRelationship(r) => rel_body(&r.rel_type, &r.properties),
         Value::Path(p) => render_path(p),
         // Temporals match Memgraph's textual conventions: 6-digit microseconds
@@ -107,7 +110,12 @@ fn render(value: &Value, quote: bool) -> String {
             dt.timezone().name()
         ),
         Value::Point2d(p) => {
-            format!("point({{srid: {}, x: {}, y: {}}})", p.srid, float(p.x), float(p.y))
+            format!(
+                "point({{srid: {}, x: {}, y: {}}})",
+                p.srid,
+                float(p.x),
+                float(p.y)
+            )
         }
         Value::Point3d(p) => format!(
             "point({{srid: {}, x: {}, y: {}, z: {}}})",
@@ -208,7 +216,10 @@ mod tests {
 
     #[test]
     fn renders_enum_qualified() {
-        assert_eq!(tabular(&Value::Enum("Status::Active".into())), "Status::Active");
+        assert_eq!(
+            tabular(&Value::Enum("Status::Active".into())),
+            "Status::Active"
+        );
     }
 
     #[test]
@@ -235,7 +246,10 @@ mod tests {
         );
         assert_eq!(tabular(&map(&[])), "{}");
         assert_eq!(
-            tabular(&map(&[("a", Value::Integer(1)), ("b", Value::String("two".into()))])),
+            tabular(&map(&[
+                ("a", Value::Integer(1)),
+                ("b", Value::String("two".into()))
+            ])),
             "{a: 1, b: \"two\"}"
         );
     }
@@ -247,7 +261,10 @@ mod tests {
             "[{x: 1}]"
         );
         assert_eq!(
-            tabular(&map(&[("xs", Value::List(vec![Value::Integer(1), Value::Integer(2)]))])),
+            tabular(&map(&[(
+                "xs",
+                Value::List(vec![Value::Integer(1), Value::Integer(2)])
+            )])),
             "{xs: [1, 2]}"
         );
         // Quotes inside a nested string are escaped.
@@ -258,11 +275,19 @@ mod tests {
     }
 
     fn map(pairs: &[(&str, Value)]) -> Value {
-        Value::Map(pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
+        Value::Map(
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect(),
+        )
     }
 
     fn props(pairs: &[(&str, Value)]) -> std::collections::BTreeMap<String, Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     #[test]
@@ -271,7 +296,10 @@ mod tests {
             tabular(&Value::Node(Node {
                 id: 0,
                 labels: vec!["Person".into()],
-                properties: props(&[("name", Value::String("Ada".into())), ("age", Value::Integer(36))]),
+                properties: props(&[
+                    ("name", Value::String("Ada".into())),
+                    ("age", Value::Integer(36))
+                ]),
             })),
             "(:Person {age: 36, name: \"Ada\"})"
         );
@@ -317,8 +345,8 @@ mod tests {
 
     #[test]
     fn renders_temporals_matching_memgraph() {
-        use chrono::{FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
         use crate::value::Duration as Dur;
+        use chrono::{FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
 
         let date = NaiveDate::from_ymd_opt(2021, 6, 15).unwrap();
         assert_eq!(tabular(&Value::Date(date)), "2021-06-15");
@@ -327,14 +355,27 @@ mod tests {
         assert_eq!(tabular(&Value::LocalTime(lt)), "12:34:56.789000");
 
         let ldt = NaiveDateTime::new(date, lt);
-        assert_eq!(tabular(&Value::LocalDateTime(ldt)), "2021-06-15T12:34:56.789000");
+        assert_eq!(
+            tabular(&Value::LocalDateTime(ldt)),
+            "2021-06-15T12:34:56.789000"
+        );
 
         assert_eq!(
-            tabular(&Value::Duration(Dur { months: 0, days: 1, seconds: 7384, nanos: 0 })),
+            tabular(&Value::Duration(Dur {
+                months: 0,
+                days: 1,
+                seconds: 7384,
+                nanos: 0
+            })),
             "P1DT2H3M4.000000S"
         );
         assert_eq!(
-            tabular(&Value::Duration(Dur { months: 0, days: 1, seconds: 7384, nanos: 500_000_000 })),
+            tabular(&Value::Duration(Dur {
+                months: 0,
+                days: 1,
+                seconds: 7384,
+                nanos: 500_000_000
+            })),
             "P1DT2H3M4.500000S"
         );
 
@@ -358,15 +399,28 @@ mod tests {
     fn renders_points_with_srid() {
         use crate::value::{Point2d, Point3d};
         assert_eq!(
-            tabular(&Value::Point2d(Point2d { srid: 7203, x: 1.0, y: 2.0 })),
+            tabular(&Value::Point2d(Point2d {
+                srid: 7203,
+                x: 1.0,
+                y: 2.0
+            })),
             "point({srid: 7203, x: 1.0, y: 2.0})"
         );
         assert_eq!(
-            tabular(&Value::Point3d(Point3d { srid: 9157, x: 1.0, y: 2.0, z: 3.0 })),
+            tabular(&Value::Point3d(Point3d {
+                srid: 9157,
+                x: 1.0,
+                y: 2.0,
+                z: 3.0
+            })),
             "point({srid: 9157, x: 1.0, y: 2.0, z: 3.0})"
         );
         assert_eq!(
-            tabular(&Value::Point2d(Point2d { srid: 4326, x: 1.5, y: 2.25 })),
+            tabular(&Value::Point2d(Point2d {
+                srid: 4326,
+                x: 1.5,
+                y: 2.25
+            })),
             "point({srid: 4326, x: 1.5, y: 2.25})"
         );
     }
@@ -374,13 +428,33 @@ mod tests {
     #[test]
     fn renders_paths_with_direction() {
         let nodes = vec![
-            Node { id: 0, labels: vec!["A".into()], properties: props(&[]) },
-            Node { id: 1, labels: vec!["B".into()], properties: props(&[]) },
-            Node { id: 2, labels: vec!["C".into()], properties: props(&[]) },
+            Node {
+                id: 0,
+                labels: vec!["A".into()],
+                properties: props(&[]),
+            },
+            Node {
+                id: 1,
+                labels: vec!["B".into()],
+                properties: props(&[]),
+            },
+            Node {
+                id: 2,
+                labels: vec!["C".into()],
+                properties: props(&[]),
+            },
         ];
         let rels = vec![
-            UnboundRelationship { id: 10, rel_type: "R1".into(), properties: props(&[]) },
-            UnboundRelationship { id: 11, rel_type: "R2".into(), properties: props(&[]) },
+            UnboundRelationship {
+                id: 10,
+                rel_type: "R1".into(),
+                properties: props(&[]),
+            },
+            UnboundRelationship {
+                id: 11,
+                rel_type: "R2".into(),
+                properties: props(&[]),
+            },
         ];
         // Forward single hop.
         assert_eq!(

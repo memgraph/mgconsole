@@ -246,7 +246,11 @@ impl Lazy {
         match end {
             Message::Success(s) => summary.absorb_terminal(s.metadata()),
             Message::Failure(f) => return Err(Error::Query(proto::query_error(f.metadata()))),
-            other => return Err(Error::Protocol(format!("unexpected DISCARD reply: {other:?}"))),
+            other => {
+                return Err(Error::Protocol(format!(
+                    "unexpected DISCARD reply: {other:?}"
+                )))
+            }
         }
         Ok(())
     }

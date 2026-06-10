@@ -184,7 +184,12 @@ fn format_parser_report(report: &ParserReport, stats: bool) -> String {
         };
         writeln!(out, "{}: {clauses}", i + 1).unwrap();
     }
-    writeln!(out, "Parsed {} queries; nothing executed.", report.query_count()).unwrap();
+    writeln!(
+        out,
+        "Parsed {} queries; nothing executed.",
+        report.query_count()
+    )
+    .unwrap();
     if stats {
         out.push_str("Clause statistics:\n");
         for (clause, count) in &report.clause_counts {
@@ -217,8 +222,12 @@ fn import_format(cli: &Cli, table_options: TableOptions) -> ImportFormat {
 fn open_history(cli: &Cli) -> Option<HistoryFile> {
     let env = std::env::var(history::HISTORY_ENV).ok();
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let path =
-        history::resolve_history_file(&cli.history, env.as_deref(), cli.no_history, home.as_deref())?;
+    let path = history::resolve_history_file(
+        &cli.history,
+        env.as_deref(),
+        cli.no_history,
+        home.as_deref(),
+    )?;
     match history::prepare_history_dir(&path) {
         Ok(()) => Some(HistoryFile::new(path)),
         Err(message) => {
@@ -349,7 +358,10 @@ impl QueryRunner for SessionRunner<'_> {
             result.records().discard().await?;
             let elapsed = start.elapsed();
 
-            let rows: Vec<Vec<Value>> = records.into_iter().map(mgconsole_core::Record::into_fields).collect();
+            let rows: Vec<Vec<Value>> = records
+                .into_iter()
+                .map(mgconsole_core::Record::into_fields)
+                .collect();
             // A write returns no columns; rendering an empty table is just a
             // degenerate box, so leave it out and let the summary speak.
             let table = if header.is_empty() {
@@ -366,11 +378,7 @@ impl QueryRunner for SessionRunner<'_> {
         })
     }
 
-    fn evaluate(
-        &mut self,
-        expr: &str,
-        params: &BTreeMap<String, Value>,
-    ) -> Result<Value, Error> {
+    fn evaluate(&mut self, expr: &str, params: &BTreeMap<String, Value>) -> Result<Value, Error> {
         let runtime = self.runtime;
         let session = &mut self.session;
 
@@ -443,11 +451,17 @@ mod tests {
     #[test]
     fn output_flag_maps_to_the_render_format() {
         assert!(matches!(
-            import_format(&cli_with(&["--output-format", "jsonl"]), TableOptions::default()),
+            import_format(
+                &cli_with(&["--output-format", "jsonl"]),
+                TableOptions::default()
+            ),
             ImportFormat::Jsonl
         ));
         assert!(matches!(
-            import_format(&cli_with(&["--output-format", "cypherl"]), TableOptions::default()),
+            import_format(
+                &cli_with(&["--output-format", "cypherl"]),
+                TableOptions::default()
+            ),
             ImportFormat::Cypherl
         ));
         assert!(matches!(
@@ -474,24 +488,24 @@ mod tests {
 
     #[test]
     fn parser_report_lists_clauses_and_a_no_execution_summary() {
-        let report = run_parser(vec![
-            "CREATE (n)".to_string(),
-            "RETURN 1".to_string(),
-        ]);
+        let report = run_parser(vec!["CREATE (n)".to_string(), "RETURN 1".to_string()]);
         let text = format_parser_report(&report, false);
         assert!(text.contains("1: Create"), "per-query clauses: {text}");
-        assert!(text.contains("2: (no ordering clauses)"), "empty case: {text}");
-        assert!(text.contains("Parsed 2 queries; nothing executed."), "{text}");
+        assert!(
+            text.contains("2: (no ordering clauses)"),
+            "empty case: {text}"
+        );
+        assert!(
+            text.contains("Parsed 2 queries; nothing executed."),
+            "{text}"
+        );
         // Without the flag, no statistics block.
         assert!(!text.contains("Clause statistics"), "{text}");
     }
 
     #[test]
     fn parser_report_appends_statistics_when_requested() {
-        let report = run_parser(vec![
-            "CREATE (a)".to_string(),
-            "CREATE (b)".to_string(),
-        ]);
+        let report = run_parser(vec!["CREATE (a)".to_string(), "CREATE (b)".to_string()]);
         let text = format_parser_report(&report, true);
         assert!(text.contains("Clause statistics:"), "{text}");
         assert!(text.contains("Create: 2"), "aggregate count: {text}");

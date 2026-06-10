@@ -87,17 +87,20 @@ async fn dump_reimport_round_trips_a_seeded_database() {
 
     // Re-import into the fresh target reproduces the data.
     import(&mut tgt, &dump1).await;
-    assert_eq!(scalar(&mut tgt, "MATCH (p:Person) RETURN count(p)").await, 2);
     assert_eq!(
-        scalar(&mut tgt, "MATCH (:Person)-[r:KNOWS]->(:Person) RETURN count(r)").await,
-        1
+        scalar(&mut tgt, "MATCH (p:Person) RETURN count(p)").await,
+        2
     );
     assert_eq!(
         scalar(
             &mut tgt,
-            "MATCH (p:Person {name: 'Ada'}) RETURN p.age"
+            "MATCH (:Person)-[r:KNOWS]->(:Person) RETURN count(r)"
         )
         .await,
+        1
+    );
+    assert_eq!(
+        scalar(&mut tgt, "MATCH (p:Person {name: 'Ada'}) RETURN p.age").await,
         36
     );
 

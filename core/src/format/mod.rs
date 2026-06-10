@@ -57,7 +57,9 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut writer = CsvWriter::new(&mut buf, &CsvOptions::default());
-            write_stream(&mut writer, &header, &mut stream).await.unwrap();
+            write_stream(&mut writer, &header, &mut stream)
+                .await
+                .unwrap();
         }
         assert_eq!(String::from_utf8(buf).unwrap(), "n,name\n1,Ada\n2,Bo\n");
     }

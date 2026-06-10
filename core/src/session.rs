@@ -18,7 +18,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bolt_client::{Client, Metadata, Params};
-use bolt_proto::{version::{V4_4, V4_3, V4_2, V4_1}, Message};
+use bolt_proto::{
+    version::{V4_1, V4_2, V4_3, V4_4},
+    Message,
+};
 use tokio::io::BufStream;
 use tokio::sync::Mutex;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt};
@@ -247,11 +250,7 @@ impl Session {
 
 /// Open a connection and complete the Bolt handshake + HELLO, returning the
 /// shared connection. Shared by the initial connect and by reconnect.
-async fn establish(
-    host: &str,
-    port: u16,
-    options: &ConnectOptions,
-) -> Result<SharedConn, Error> {
+async fn establish(host: &str, port: u16, options: &ConnectOptions) -> Result<SharedConn, Error> {
     let stream = transport::connect_stream(host, port, options.use_tls).await?;
     let mut client = Client::new(BufStream::new(stream).compat(), &[V4_4, V4_3, V4_2, V4_1])
         .await

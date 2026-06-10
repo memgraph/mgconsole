@@ -173,9 +173,7 @@ pub(crate) fn to_bolt(value: &Value) -> Result<bolt_proto::Value, Error> {
         Value::Float(f) => B::Float(*f),
         Value::Bytes(b) => B::Bytes(b.clone()),
         Value::String(s) => B::String(s.clone()),
-        Value::List(items) => {
-            B::List(items.iter().map(to_bolt).collect::<Result<Vec<_>, _>>()?)
-        }
+        Value::List(items) => B::List(items.iter().map(to_bolt).collect::<Result<Vec<_>, _>>()?),
         Value::Map(m) => B::Map(
             m.iter()
                 .map(|(k, v)| Ok((k.clone(), to_bolt(v)?)))
@@ -245,11 +243,7 @@ fn from_map(m: std::collections::HashMap<String, bolt_proto::Value>) -> Value {
             }
         }
     }
-    Value::Map(
-        m.into_iter()
-            .map(|(k, v)| (k, Value::from(v)))
-            .collect(),
-    )
+    Value::Map(m.into_iter().map(|(k, v)| (k, Value::from(v))).collect())
 }
 
 #[cfg(test)]
@@ -258,7 +252,10 @@ mod tests {
 
     #[test]
     fn scalar_translates() {
-        assert_eq!(Value::from(bolt_proto::Value::Integer(42)), Value::Integer(42));
+        assert_eq!(
+            Value::from(bolt_proto::Value::Integer(42)),
+            Value::Integer(42)
+        );
         assert_eq!(
             Value::from(bolt_proto::Value::String("hi".into())),
             Value::String("hi".into())
@@ -269,7 +266,10 @@ mod tests {
     #[test]
     fn enum_sentinel_map_normalises_to_enum() {
         let mut m = std::collections::HashMap::new();
-        m.insert("__type".to_string(), bolt_proto::Value::String("mg_enum".into()));
+        m.insert(
+            "__type".to_string(),
+            bolt_proto::Value::String("mg_enum".into()),
+        );
         m.insert(
             "__value".to_string(),
             bolt_proto::Value::String("Status::Active".into()),
@@ -292,7 +292,10 @@ mod tests {
 
     #[test]
     fn scalars_encode_to_bolt() {
-        assert_eq!(to_bolt(&Value::Integer(7)).unwrap(), bolt_proto::Value::Integer(7));
+        assert_eq!(
+            to_bolt(&Value::Integer(7)).unwrap(),
+            bolt_proto::Value::Integer(7)
+        );
         assert_eq!(to_bolt(&Value::Null).unwrap(), bolt_proto::Value::Null);
         assert_eq!(
             to_bolt(&Value::String("hi".into())).unwrap(),
@@ -329,14 +332,20 @@ mod tests {
             seconds: 3,
             nanos: 4,
         });
-        assert!(matches!(to_bolt(&dur).unwrap(), bolt_proto::Value::Duration(_)));
+        assert!(matches!(
+            to_bolt(&dur).unwrap(),
+            bolt_proto::Value::Duration(_)
+        ));
 
         let point = Value::Point2d(Point2d {
             srid: 4326,
             x: 1.0,
             y: 2.0,
         });
-        assert!(matches!(to_bolt(&point).unwrap(), bolt_proto::Value::Point2D(_)));
+        assert!(matches!(
+            to_bolt(&point).unwrap(),
+            bolt_proto::Value::Point2D(_)
+        ));
     }
 
     #[test]

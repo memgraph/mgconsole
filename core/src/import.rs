@@ -413,11 +413,7 @@ mod tests {
 
     #[test]
     fn parser_aggregates_clause_counts_across_queries() {
-        let report = run_parser(queries(&[
-            "CREATE (a)",
-            "CREATE (b)",
-            "MATCH (n) RETURN n",
-        ]));
+        let report = run_parser(queries(&["CREATE (a)", "CREATE (b)", "MATCH (n) RETURN n"]));
         assert_eq!(report.clause_counts.get(&Clause::Create), Some(&2));
         assert_eq!(report.clause_counts.get(&Clause::Match), Some(&1));
         assert_eq!(report.clause_counts.get(&Clause::Merge), None);
@@ -463,7 +459,10 @@ mod tests {
 
     #[test]
     fn a_plain_create_is_a_vertices_phase_query() {
-        assert_eq!(classify_phase("CREATE (:Person {name: 'Ada'})"), Phase::Vertices);
+        assert_eq!(
+            classify_phase("CREATE (:Person {name: 'Ada'})"),
+            Phase::Vertices
+        );
         // A self-contained MERGE creates its own endpoints — no dependency.
         assert_eq!(classify_phase("MERGE (n:X {id: 1})"), Phase::Vertices);
     }

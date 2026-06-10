@@ -45,11 +45,7 @@ impl<W: Write> RowWriter for JsonlWriter<W> {
     fn write_row(&mut self, row: &[Value]) -> std::io::Result<()> {
         let mut obj = Map::new();
         for (i, value) in row.iter().enumerate() {
-            let key = self
-                .header
-                .get(i)
-                .cloned()
-                .unwrap_or_else(|| i.to_string());
+            let key = self.header.get(i).cloned().unwrap_or_else(|| i.to_string());
             obj.insert(key, json_value(value));
         }
         let line = serde_json::to_string(&J::Object(obj)).map_err(std::io::Error::other)?;
@@ -118,7 +114,10 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = JsonlWriter::new(&mut buf);
-            let hdr: Vec<String> = header.iter().map(std::string::ToString::to_string).collect();
+            let hdr: Vec<String> = header
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect();
             w.write_header(&hdr).unwrap();
             w.write_row(row).unwrap();
             w.finish().unwrap();

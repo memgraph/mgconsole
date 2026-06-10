@@ -89,7 +89,10 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = CsvWriter::new(&mut buf, opts);
-            let hdr: Vec<String> = header.iter().map(std::string::ToString::to_string).collect();
+            let hdr: Vec<String> = header
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect();
             w.write_header(&hdr).unwrap();
             for r in rows {
                 w.write_row(r).unwrap();
@@ -117,7 +120,10 @@ mod tests {
         let out = write(
             &["a", "b"],
             &[vec![Value::Integer(1), Value::Integer(2)]],
-            &CsvOptions { delimiter: b'\t', ..Default::default() },
+            &CsvOptions {
+                delimiter: b'\t',
+                ..Default::default()
+            },
         );
         assert_eq!(out, "a\tb\n1\t2\n");
     }

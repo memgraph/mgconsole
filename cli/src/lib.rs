@@ -150,9 +150,7 @@ impl Cli {
     /// flags: an escape character is mandatory once doublequote escaping is off.
     pub fn validate(&self) -> Result<(), String> {
         if !self.csv_doublequote && self.csv_escapechar.is_none() {
-            return Err(
-                "--csv-escapechar is required when --csv-doublequote is false".to_string(),
-            );
+            return Err("--csv-escapechar is required when --csv-doublequote is false".to_string());
         }
         Ok(())
     }
@@ -238,8 +236,7 @@ mod tests {
 
     #[test]
     fn escapechar_satisfies_doublequote_off() {
-        let cli = parse(&["--csv-doublequote", "false", "--csv-escapechar", "\\"])
-            .expect("parses");
+        let cli = parse(&["--csv-doublequote", "false", "--csv-escapechar", "\\"]).expect("parses");
         assert_eq!(cli.csv_escapechar, Some('\\'));
         cli.validate().expect("escape char supplied");
     }

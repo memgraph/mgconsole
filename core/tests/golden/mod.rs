@@ -42,7 +42,10 @@ pub fn check_tabular(category: &str, cases: &[(&str, Value)]) {
             path.display()
         )
     });
-    assert_eq!(rendered, expected, "tabular golden mismatch for `{category}`");
+    assert_eq!(
+        rendered, expected,
+        "tabular golden mismatch for `{category}`"
+    );
 }
 
 /// Compare a multi-line block of text (e.g. a whole rendered table) against a
@@ -61,5 +64,8 @@ pub fn check_block(format: &str, name: &str, rendered: &str) {
             path.display()
         )
     });
-    assert_eq!(rendered, expected, "block golden mismatch for `{format}/{name}`");
+    assert_eq!(
+        rendered, expected,
+        "block golden mismatch for `{format}/{name}`"
+    );
 }

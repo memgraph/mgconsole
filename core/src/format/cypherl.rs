@@ -83,8 +83,17 @@ mod tests {
 
     #[test]
     fn trailing_semicolon_is_idempotent() {
-        assert_eq!(write(&[vec![Value::String("RETURN 1;".into())]]), "RETURN 1;\n");
-        assert_eq!(write(&[vec![Value::String("RETURN 1".into())]]), "RETURN 1;\n");
-        assert_eq!(write(&[vec![Value::String("RETURN 1 ;  ".into())]]), "RETURN 1;\n");
+        assert_eq!(
+            write(&[vec![Value::String("RETURN 1;".into())]]),
+            "RETURN 1;\n"
+        );
+        assert_eq!(
+            write(&[vec![Value::String("RETURN 1".into())]]),
+            "RETURN 1;\n"
+        );
+        assert_eq!(
+            write(&[vec![Value::String("RETURN 1 ;  ".into())]]),
+            "RETURN 1;\n"
+        );
     }
 }

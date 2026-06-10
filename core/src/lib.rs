@@ -23,13 +23,13 @@ pub mod workers;
 pub use clause::{scan_clauses, Clause};
 pub use error::Error;
 pub use import::{
-    classify_phase, into_batches, run_parallel, run_parallel_ordered, run_parser, run_serial, Batch,
-    ImportFailure, ImportReport, OutputFormat as ImportFormat, ParallelReport, ParsedQuery,
+    classify_phase, into_batches, run_parallel, run_parallel_ordered, run_parser, run_serial,
+    Batch, ImportFailure, ImportReport, OutputFormat as ImportFormat, ParallelReport, ParsedQuery,
     ParserReport, Phase,
 };
 pub use parse::QueryAssembler;
 pub use result::{ExecutionInfo, Notification, QueryResult, Record, RecordStream, Summary};
-pub use tabular::{render_table, TableOptions, DEFAULT_ROW_CAP};
 pub use session::{ConnectOptions, Credentials, ReconnectNotice, Session};
+pub use tabular::{render_table, TableOptions, DEFAULT_ROW_CAP};
 pub use value::Value;
 pub use workers::Workers;

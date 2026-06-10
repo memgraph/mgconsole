@@ -133,10 +133,7 @@ async fn binds_named_parameters_of_every_kind() {
     );
     params.insert(
         "m".to_string(),
-        Value::Map(BTreeMap::from([(
-            "k".to_string(),
-            Value::Boolean(true),
-        )])),
+        Value::Map(BTreeMap::from([("k".to_string(), Value::Boolean(true))])),
     );
     params.insert(
         "d".to_string(),
@@ -181,7 +178,10 @@ async fn parameter_resolves_against_stored_data() {
 
     let params = BTreeMap::from([("name".to_string(), Value::String("Ada".to_string()))]);
     let mut result = session
-        .run_with_params("MATCH (p:Person {name: $name}) RETURN p.age AS age", &params)
+        .run_with_params(
+            "MATCH (p:Person {name: $name}) RETURN p.age AS age",
+            &params,
+        )
         .await
         .expect("lookup by parameter");
     let record = result
@@ -208,7 +208,11 @@ async fn authenticates_with_valid_credentials_and_rejects_bad_ones() {
             .await
             .expect("create user");
         // Drain (PULL) so the user is committed before we reconnect as them.
-        created.records().discard().await.expect("commit create user");
+        created
+            .records()
+            .discard()
+            .await
+            .expect("commit create user");
     }
 
     let good = ConnectOptions {
@@ -221,7 +225,10 @@ async fn authenticates_with_valid_credentials_and_rejects_bad_ones() {
     let mut session = Session::connect_with(&mg.host, mg.port, &good)
         .await
         .expect("valid credentials authenticate");
-    let mut result = session.run("RETURN 1 AS n").await.expect("authed query runs");
+    let mut result = session
+        .run("RETURN 1 AS n")
+        .await
+        .expect("authed query runs");
     let record = result
         .records()
         .next()
@@ -284,7 +291,10 @@ async fn query_error_leaves_session_usable() {
     }
 
     // The Session survives it (RESET cleared the FAILED state): the next query runs.
-    let mut ok = session.run("RETURN 1 AS n").await.expect("session still usable");
+    let mut ok = session
+        .run("RETURN 1 AS n")
+        .await
+        .expect("session still usable");
     let record = ok.records().next().await.expect("ok").expect("one row");
     assert_eq!(record.fields(), &[Value::Integer(1)]);
 }
@@ -310,7 +320,10 @@ async fn run_errors_while_a_result_is_still_open() {
 
     // Draining the open result clears the guard; the Session is usable again.
     open.records().discard().await.expect("drain open result");
-    let mut next = session.run("RETURN 2 AS n").await.expect("usable after drain");
+    let mut next = session
+        .run("RETURN 2 AS n")
+        .await
+        .expect("usable after drain");
     let record = next.records().next().await.expect("ok").expect("one row");
     assert_eq!(record.fields(), &[Value::Integer(2)]);
 }
@@ -330,7 +343,10 @@ async fn recovers_from_an_abandoned_result_via_reset() {
     } // dropped here, still with records pending on the wire
 
     // The next run detects the abandoned result and RESETs before running.
-    let mut next = session.run("RETURN 7 AS n").await.expect("recovered via reset");
+    let mut next = session
+        .run("RETURN 7 AS n")
+        .await
+        .expect("recovered via reset");
     let record = next.records().next().await.expect("ok").expect("one row");
     assert_eq!(record.fields(), &[Value::Integer(7)]);
 }
@@ -392,7 +408,10 @@ async fn exhausting_reconnect_retries_surfaces_a_terminal_error() {
 
     match session.run("RETURN 2").await {
         Err(Error::Connection(msg)) => {
-            assert!(msg.contains("reconnect"), "terminal error mentions reconnect: {msg}");
+            assert!(
+                msg.contains("reconnect"),
+                "terminal error mentions reconnect: {msg}"
+            );
         }
         Err(other) => panic!("expected a terminal connection error, got {other:?}"),
         Ok(_) => panic!("query must fail when the server is unreachable"),

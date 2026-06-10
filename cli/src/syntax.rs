@@ -86,9 +86,9 @@ impl Completer {
 /// over non-boundary characters. The text from here to `pos` is the completion
 /// prefix, and what a chosen candidate replaces.
 pub fn word_start(line: &str, pos: usize) -> usize {
-    line[..pos]
-        .rfind(WORD_BOUNDARIES)
-        .map_or(0, |boundary| boundary + line[boundary..].chars().next().map_or(1, char::len_utf8))
+    line[..pos].rfind(WORD_BOUNDARIES).map_or(0, |boundary| {
+        boundary + line[boundary..].chars().next().map_or(1, char::len_utf8)
+    })
 }
 
 /// What a word is, for colouring.
@@ -246,9 +246,18 @@ mod tests {
     #[test]
     fn highlight_colours_keywords_and_functions_only() {
         let out = highlight("MATCH (n) RETURN abs(n.x)");
-        assert!(out.contains("\x1b[33mMATCH\x1b[0m"), "keyword yellow: {out:?}");
-        assert!(out.contains("\x1b[33mRETURN\x1b[0m"), "keyword yellow: {out:?}");
-        assert!(out.contains("\x1b[91mabs\x1b[0m"), "function bright-red: {out:?}");
+        assert!(
+            out.contains("\x1b[33mMATCH\x1b[0m"),
+            "keyword yellow: {out:?}"
+        );
+        assert!(
+            out.contains("\x1b[33mRETURN\x1b[0m"),
+            "keyword yellow: {out:?}"
+        );
+        assert!(
+            out.contains("\x1b[91mabs\x1b[0m"),
+            "function bright-red: {out:?}"
+        );
         // Boundaries and plain words survive untouched.
         assert!(out.contains("(n)"));
     }

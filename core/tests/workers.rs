@@ -46,7 +46,10 @@ async fn zero_workers_auto_detects_at_least_one() {
     let workers = Workers::connect(&mg.host, mg.port, &ConnectOptions::default(), 0)
         .await
         .expect("auto-detect workers");
-    assert!(!workers.is_empty(), "auto-detect yields at least one worker");
+    assert!(
+        !workers.is_empty(),
+        "auto-detect yields at least one worker"
+    );
 }
 
 #[tokio::test]

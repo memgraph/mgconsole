@@ -223,8 +223,7 @@ pub trait QueryRunner {
     /// Evaluate a `:param` expression server-side with the existing parameters in
     /// scope, returning the resulting Value to store. Implemented by running
     /// `RETURN <expr>` and taking the single value back.
-    fn evaluate(&mut self, expr: &str, params: &BTreeMap<String, Value>)
-        -> Result<Value, Error>;
+    fn evaluate(&mut self, expr: &str, params: &BTreeMap<String, Value>) -> Result<Value, Error>;
 }
 
 /// Frontend-local REPL configuration.
@@ -428,12 +427,18 @@ mod tests {
     #[test]
     fn params_lists_and_clears() {
         assert_eq!(meta_command(":params"), Some(MetaCommand::ListParams));
-        assert_eq!(meta_command(":params clear"), Some(MetaCommand::ClearParams));
+        assert_eq!(
+            meta_command(":params clear"),
+            Some(MetaCommand::ClearParams)
+        );
     }
 
     #[test]
     fn param_without_a_name_or_expression_is_invalid() {
-        assert!(matches!(meta_command(":param"), Some(MetaCommand::Invalid(_))));
+        assert!(matches!(
+            meta_command(":param"),
+            Some(MetaCommand::Invalid(_))
+        ));
         assert!(matches!(
             meta_command(":param age"),
             Some(MetaCommand::Invalid(_))
@@ -539,7 +544,11 @@ mod tests {
     }
 
     impl QueryRunner for ScriptedRunner {
-        fn run(&mut self, query: &str, params: &BTreeMap<String, Value>) -> Result<Rendered, Error> {
+        fn run(
+            &mut self,
+            query: &str,
+            params: &BTreeMap<String, Value>,
+        ) -> Result<Rendered, Error> {
             self.seen.push(query.to_string());
             self.seen_params.push(params.clone());
             self.results
@@ -628,7 +637,10 @@ mod tests {
             vec![Line::Text("RETURN 1; RETURN 2;".into())],
             vec![Ok(ok_result("a", 1)), Ok(ok_result("b", 1))],
         );
-        assert_eq!(runner.seen, vec!["RETURN 1".to_string(), "RETURN 2".to_string()]);
+        assert_eq!(
+            runner.seen,
+            vec!["RETURN 1".to_string(), "RETURN 2".to_string()]
+        );
         assert_eq!(out.matches("row in set").count(), 2);
     }
 
@@ -639,10 +651,7 @@ mod tests {
             message: "bad cypher".to_string(),
         });
         let (_src, runner, out, err) = drive(
-            vec![
-                Line::Text("BAD;".into()),
-                Line::Text("RETURN 1;".into()),
-            ],
+            vec![Line::Text("BAD;".into()), Line::Text("RETURN 1;".into())],
             vec![Err(boom), Ok(ok_result("t", 1))],
         );
         // The error was surfaced, then the next query still ran.
@@ -687,15 +696,16 @@ mod tests {
     fn an_overflowing_result_warns_about_the_row_cap() {
         let mut capped = ok_result("big", 1000);
         capped.overflowed = true;
-        let (_src, _runner, _out, err) =
-            drive(vec![Line::Text("MATCH (n) RETURN n;".into())], vec![Ok(capped)]);
+        let (_src, _runner, _out, err) = drive(
+            vec![Line::Text("MATCH (n) RETURN n;".into())],
+            vec![Ok(capped)],
+        );
         assert!(err.contains("1000-row"), "warning names the cap: {err}");
     }
 
     #[test]
     fn an_unknown_meta_command_is_reported_not_run() {
-        let (_src, runner, _out, err) =
-            drive(vec![Line::Text(":bogus".into())], vec![]);
+        let (_src, runner, _out, err) = drive(vec![Line::Text(":bogus".into())], vec![]);
         assert!(runner.seen.is_empty());
         assert!(err.contains("unknown command"));
     }
@@ -787,10 +797,7 @@ mod tests {
     #[test]
     fn a_malformed_param_command_is_reported_and_the_loop_survives() {
         let (_src, runner, _out, err) = drive(
-            vec![
-                Line::Text(":param".into()),
-                Line::Text("RETURN 1;".into()),
-            ],
+            vec![Line::Text(":param".into()), Line::Text("RETURN 1;".into())],
             vec![Ok(ok_result("t", 1))],
         );
         assert!(err.contains("error:"), "misuse reported: {err}");
@@ -804,8 +811,8 @@ mod tests {
             code: "Memgraph.ClientError.MemgraphError.SyntaxError".to_string(),
             message: "bad expression".to_string(),
         });
-        let runner = ScriptedRunner::returning(vec![Ok(ok_result("t", 1))])
-            .evaluating(vec![Err(boom)]);
+        let runner =
+            ScriptedRunner::returning(vec![Ok(ok_result("t", 1))]).evaluating(vec![Err(boom)]);
         let (_src, runner, _out, err) = drive_with(
             vec![
                 Line::Text(":param x @@@".into()),

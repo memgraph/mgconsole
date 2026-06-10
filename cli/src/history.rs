@@ -110,8 +110,8 @@ mod tests {
 
     #[test]
     fn an_explicit_flag_directory_is_used_literally() {
-        let path = resolve_history_file("/tmp/hist", None, false, Some(&home()))
-            .expect("history enabled");
+        let path =
+            resolve_history_file("/tmp/hist", None, false, Some(&home())).expect("history enabled");
         assert_eq!(path, PathBuf::from("/tmp/hist/client_history"));
     }
 
@@ -124,8 +124,13 @@ mod tests {
 
     #[test]
     fn the_environment_override_beats_the_default() {
-        let path = resolve_history_file(DEFAULT_HISTORY_DIR, Some("/env/place"), false, Some(&home()))
-            .expect("history enabled");
+        let path = resolve_history_file(
+            DEFAULT_HISTORY_DIR,
+            Some("/env/place"),
+            false,
+            Some(&home()),
+        )
+        .expect("history enabled");
         assert_eq!(path, PathBuf::from("/env/place/client_history"));
     }
 
@@ -146,7 +151,10 @@ mod tests {
         let file = blocker.join("sub").join(HISTORY_FILENAME);
 
         let err = prepare_history_dir(&file).expect_err("creating under a file must fail");
-        assert!(err.contains("could not create history directory"), "message: {err}");
+        assert!(
+            err.contains("could not create history directory"),
+            "message: {err}"
+        );
         assert!(err.contains("sub"), "message names the directory: {err}");
 
         std::fs::remove_file(&blocker).ok();
