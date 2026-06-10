@@ -156,7 +156,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     } else {
         let queries = read_queries(io::stdin().lock())?;
-        let format = import_format(&cli, table_options);
+        // The default format is a function of stdout (issue 19): jsonl into a pipe
+        // so `… | mgconsole | jq` composes, table at a terminal. An explicit
+        // `--output-format` still wins. Result data goes to stdout; the per-query
+        // failure reporting below goes to stderr (stream discipline, ADR 0014).
+        let resolved = OutputFormat::resolve(cli.output_format, out.is_terminal());
+        let format = import_format(&cli, resolved, table_options);
         let report = runtime.block_on(run_serial(&mut session, queries, &mut out, &format));
         // The Core stays diagnostic-free (ADR 0002); the Frontend reports each
         // failed query and maps any failure to a non-zero exit code.
@@ -250,11 +255,18 @@ fn run_interactive(
                 tx: session.transaction_state(),
                 database: None,
             }));
+            // The REPL renders result data in the TTY-aware resolved format (issue
+            // 19): tabular at a terminal, jsonl when stdout is redirected, so
+            // `mgconsole > out` writes faithful jsonl to the file. An explicit
+            // `--output-format` still wins.
+            let stdout_is_tty = out.is_terminal();
+            let resolved = OutputFormat::resolve(cli.output_format, stdout_is_tty);
             let mut runner = SessionRunner {
                 runtime,
                 session,
                 table_options,
                 row_cap: DEFAULT_ROW_CAP,
+                output_format: resolved,
                 config,
                 options,
                 prompt: prompt.clone(),
@@ -265,7 +277,19 @@ fn run_interactive(
             };
             let mut source = RustylineSource::new(history, colorize, prompt)?;
             let mut queries = load_queries();
-            repl::run_loop(&mut source, &mut runner, &mut queries, out, err, &repl_config)?;
+            // Stream discipline (ADR 0014): result data → stdout (`out`); all chrome
+            // — summaries, echoes, confirmations — → stderr, where it stays visible
+            // on the terminal even when stdout is redirected to a file.
+            let mut chrome = io::stderr();
+            repl::run_loop(
+                &mut source,
+                &mut runner,
+                &mut queries,
+                out,
+                &mut chrome,
+                err,
+                &repl_config,
+            )?;
         }
         Frontend::Piped => {
             unreachable!("the piped path is handled by the non-terminal branch")
@@ -336,10 +360,12 @@ fn format_parser_report(report: &ParserReport, stats: bool) -> String {
     out
 }
 
-/// Map the CLI output-format flag (plus its csv options and resolved table width)
-/// onto the Core's render format for the serial import path.
-fn import_format(cli: &Cli, table_options: TableOptions) -> ImportFormat {
-    match cli.output_format {
+/// Map the resolved output format (plus its csv options and table width) onto the
+/// Core's render format for the serial import path. The format is resolved by
+/// [`OutputFormat::resolve`] from the `--output-format` flag and stdout's TTY-ness
+/// (issue 19) before reaching here.
+fn import_format(cli: &Cli, format: OutputFormat, table_options: TableOptions) -> ImportFormat {
+    match format {
         OutputFormat::Table => ImportFormat::Tabular(table_options),
         OutputFormat::Csv => ImportFormat::Csv(CsvOptions {
             delimiter: cli.csv_delimiter as u8,
@@ -350,6 +376,30 @@ fn import_format(cli: &Cli, table_options: TableOptions) -> ImportFormat {
         OutputFormat::Jsonl => ImportFormat::Jsonl,
         OutputFormat::Cypherl => ImportFormat::Cypherl,
     }
+}
+
+/// Render result rows in a streaming output format (issue 19), for a redirected
+/// REPL or an explicit `--output-format`. Reuses the Core's row writers, returning
+/// the text without a trailing newline (the loop adds line separation). `Table` is
+/// handled by the tabular renderer at the call site and never reaches here.
+fn render_rows_as(format: OutputFormat, header: &Header, rows: &[Vec<Value>]) -> String {
+    use mgconsole_core::format::{CsvWriter, CypherlWriter, JsonlWriter, RowWriter};
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut writer: Box<dyn RowWriter> = match format {
+            OutputFormat::Csv => Box::new(CsvWriter::new(&mut buf, &CsvOptions::default())),
+            OutputFormat::Cypherl => Box::new(CypherlWriter::new(&mut buf)),
+            // Table is rendered by the tabular path and never reaches here; fall
+            // back to jsonl defensively alongside the real jsonl case.
+            OutputFormat::Jsonl | OutputFormat::Table => Box::new(JsonlWriter::new(&mut buf)),
+        };
+        let _ = writer.write_header(header);
+        for row in rows {
+            let _ = writer.write_row(row);
+        }
+        let _ = writer.finish();
+    }
+    String::from_utf8_lossy(&buf).trim_end_matches('\n').to_string()
 }
 
 /// Resolve and prepare the history file for an interactive session, honouring
@@ -605,6 +655,10 @@ struct SessionRunner<'a> {
     session: Session,
     table_options: TableOptions,
     row_cap: usize,
+    /// The resolved result format (issue 19): `Table` renders the display-mode
+    /// tabular layout (the interactive default); the streaming formats render rows
+    /// via the Core writers, so a redirected REPL (`mgconsole > out`) emits jsonl.
+    output_format: OutputFormat,
     /// The config (profiles) and the current connect options, so `:connect` can
     /// resolve a profile or a bare endpoint and re-establish (issue 07).
     config: mgconsole::config::Config,
@@ -648,6 +702,7 @@ impl QueryRunner for SessionRunner<'_> {
         let runtime = self.runtime;
         let session = &mut self.session;
         let cap = self.row_cap;
+        let output_format = self.output_format;
         // The `auto` display mode needs the live terminal width to decide whether
         // a row fits; resolve it here at the IO boundary (the Core stays
         // width-agnostic), independently of the `--fit-to-screen` column fitting.
@@ -674,8 +729,12 @@ impl QueryRunner for SessionRunner<'_> {
             // degenerate box, so leave it out and let the summary speak.
             let table = if header.is_empty() {
                 String::new()
-            } else {
+            } else if output_format == OutputFormat::Table {
                 render_records(&header, &rows, &render_options)
+            } else {
+                // A redirected REPL (or an explicit `--output-format`, issue 19)
+                // renders rows through the Core writers instead of the table.
+                render_rows_as(output_format, &header, &rows)
             };
             Ok(Rendered {
                 table,
@@ -977,6 +1036,7 @@ mod tests {
         assert!(matches!(
             import_format(
                 &cli_with(&["--output-format", "jsonl"]),
+                OutputFormat::Jsonl,
                 TableOptions::default()
             ),
             ImportFormat::Jsonl
@@ -984,12 +1044,13 @@ mod tests {
         assert!(matches!(
             import_format(
                 &cli_with(&["--output-format", "cypherl"]),
+                OutputFormat::Cypherl,
                 TableOptions::default()
             ),
             ImportFormat::Cypherl
         ));
         assert!(matches!(
-            import_format(&cli_with(&[]), TableOptions::default()),
+            import_format(&cli_with(&[]), OutputFormat::Table, TableOptions::default()),
             ImportFormat::Tabular(_)
         ));
     }
@@ -998,6 +1059,7 @@ mod tests {
     fn csv_options_carry_the_csv_flags() {
         let format = import_format(
             &cli_with(&["--output-format", "csv", "--csv-delimiter", ";"]),
+            OutputFormat::Csv,
             TableOptions::default(),
         );
         match format {

@@ -568,19 +568,23 @@ pub const SYSINFO_QUERIES: &[&str] = &["SHOW VERSION", "SHOW STORAGE INFO"];
 /// — the shared body of the loop's per-query handling, `:sysinfo`, and `:source`.
 /// Returns whether the query succeeded (so `:source` can stop on the first
 /// error); a query error is reported either way without ending the loop.
+#[allow(clippy::too_many_arguments)]
 fn execute_query(
     runner: &mut dyn QueryRunner,
     query: &str,
     params: &BTreeMap<String, Value>,
     display: DisplayMode,
     row_cap: usize,
+    data: &mut dyn Write,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> io::Result<bool> {
     match runner.run(query, params, display) {
         Ok(result) => {
+            // Result data goes to the data sink (stdout); the summary and any
+            // overflow notice are chrome and go to `out`/`err` (ADR 0014, issue 19).
             if !result.table.is_empty() {
-                writeln!(out, "{}", result.table)?;
+                writeln!(data, "{}", result.table)?;
             }
             writeln!(out, "{}", format_summary(result.row_count, result.elapsed))?;
             if result.overflowed {
@@ -624,6 +628,7 @@ fn dispatch_meta(
     last_query: Option<&str>,
     pending_redirect: &mut Option<(OutputFormat, PathBuf)>,
     row_cap: usize,
+    data: &mut dyn Write,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> io::Result<MetaFlow> {
@@ -701,7 +706,7 @@ fn dispatch_meta(
         // path, honouring the current `display` mode (issue 09).
         MetaCommand::Sysinfo => {
             for query in SYSINFO_QUERIES {
-                execute_query(runner, query, params, settings.display, row_cap, out, err)?;
+                execute_query(runner, query, params, settings.display, row_cap, data, out, err)?;
             }
         }
         // `:source` feeds a file through the same line/query path (issue 10), so a
@@ -709,7 +714,9 @@ fn dispatch_meta(
         // ending the session.
         MetaCommand::Source(path) => match std::fs::read_to_string(&path) {
             Ok(content) => {
-                source_content(&content, runner, settings, params, queries, row_cap, out, err)?;
+                source_content(
+                    &content, runner, settings, params, queries, row_cap, data, out, err,
+                )?;
             }
             Err(e) => writeln!(err, "error: cannot read source file '{path}': {e}")?,
         },
@@ -719,7 +726,7 @@ fn dispatch_meta(
             if runner.transaction_state() == TransactionState::Auto {
                 match parse_watch(&args, last_query) {
                     Ok(spec) => {
-                        runner.watch(&spec.query, params, spec.interval, settings.display, out)?;
+                        runner.watch(&spec.query, params, spec.interval, settings.display, data)?;
                     }
                     Err(message) => writeln!(err, "error: {message}")?,
                 }
@@ -791,6 +798,7 @@ fn source_content(
     params: &mut BTreeMap<String, Value>,
     queries: &mut NamedQueries,
     row_cap: usize,
+    data: &mut dyn Write,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> io::Result<()> {
@@ -812,6 +820,7 @@ fn source_content(
                     None,
                     &mut pending_redirect,
                     row_cap,
+                    data,
                     out,
                     err,
                 )?;
@@ -826,7 +835,7 @@ fn source_content(
                     writeln!(err, "source stopped at the failed statement")?;
                     return Ok(());
                 }
-            } else if !execute_query(runner, &query, params, settings.display, row_cap, out, err)? {
+            } else if !execute_query(runner, &query, params, settings.display, row_cap, data, out, err)? {
                 writeln!(err, "source stopped at the failed statement")?;
                 return Ok(());
             }
@@ -842,7 +851,7 @@ fn source_content(
                     writeln!(err, "error: {e}")?;
                 }
             } else {
-                execute_query(runner, &query, params, settings.display, row_cap, out, err)?;
+                execute_query(runner, &query, params, settings.display, row_cap, data, out, err)?;
             }
         }
     }
@@ -853,6 +862,7 @@ pub fn run_loop(
     source: &mut dyn LineSource,
     runner: &mut dyn QueryRunner,
     queries: &mut NamedQueries,
+    data: &mut dyn Write,
     out: &mut dyn Write,
     err: &mut dyn Write,
     config: &ReplConfig,
@@ -896,6 +906,7 @@ pub fn run_loop(
                     last_query.as_deref(),
                     &mut pending_redirect,
                     config.row_cap,
+                    data,
                     out,
                     err,
                 )? {
@@ -923,7 +934,9 @@ pub fn run_loop(
                     Err(e) => writeln!(err, "error: {e}")?,
                 }
             } else {
-                execute_query(runner, &query, &params, settings.display, config.row_cap, out, err)?;
+                execute_query(
+                    runner, &query, &params, settings.display, config.row_cap, data, out, err,
+                )?;
             }
             last_query = Some(query);
         }
@@ -1522,13 +1535,18 @@ mod tests {
         mut queries: NamedQueries,
     ) -> (ScriptedSource, ScriptedRunner, NamedQueries, String, String) {
         let mut source = ScriptedSource::of(lines);
-        let mut out = Vec::new();
+        // The data sink (result rows) and the chrome sink (summaries, echoes,
+        // confirmations) are separate in production (issue 19); the tests combine
+        // them into one `out` string so the existing assertions read both.
+        let mut data = Vec::new();
+        let mut chrome = Vec::new();
         let mut err = Vec::new();
         run_loop(
             &mut source,
             &mut runner,
             &mut queries,
-            &mut out,
+            &mut data,
+            &mut chrome,
             &mut err,
             &ReplConfig {
                 row_cap: 1000,
@@ -1536,13 +1554,44 @@ mod tests {
             },
         )
         .expect("loop runs to EOF");
+        let out = String::from_utf8(data).unwrap() + &String::from_utf8(chrome).unwrap();
         (
             source,
             runner,
             queries,
-            String::from_utf8(out).unwrap(),
+            out,
             String::from_utf8(err).unwrap(),
         )
+    }
+
+    #[test]
+    fn result_data_goes_to_the_data_sink_and_chrome_to_the_chrome_sink() {
+        // Stream discipline (ADR 0014, issue 19): the result rows land in the data
+        // sink (stdout); the summary is chrome and lands in the chrome sink.
+        let mut source = ScriptedSource::of(vec![Line::Text("RETURN 1;".into())]);
+        let mut runner = ScriptedRunner::returning(vec![Ok(ok_result("<rows>", 1))]);
+        let mut queries = NamedQueries::in_memory();
+        let mut data = Vec::new();
+        let mut chrome = Vec::new();
+        let mut err = Vec::new();
+        run_loop(
+            &mut source,
+            &mut runner,
+            &mut queries,
+            &mut data,
+            &mut chrome,
+            &mut err,
+            &ReplConfig {
+                row_cap: 1000,
+                settings: Settings::default(),
+            },
+        )
+        .expect("loop runs");
+        let data = String::from_utf8(data).unwrap();
+        let chrome = String::from_utf8(chrome).unwrap();
+        assert!(data.contains("<rows>"), "result data on the data sink: {data:?}");
+        assert!(!data.contains("row in set"), "no chrome on the data sink: {data:?}");
+        assert!(chrome.contains("1 row in set"), "summary on the chrome sink: {chrome:?}");
     }
 
     #[test]

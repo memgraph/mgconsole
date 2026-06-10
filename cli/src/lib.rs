@@ -55,6 +55,21 @@ impl OutputFormat {
         !matches!(self, OutputFormat::Table)
     }
 
+    /// Resolve the output format from an explicit `--output-format` and whether
+    /// stdout is a terminal (issue 19, ADR 0014). An explicit choice always wins;
+    /// otherwise the built-in default is a function of stdout — `table` at a
+    /// terminal, `jsonl` when piped/redirected, since Memgraph Values nest and a
+    /// non-interactive consumer needs a faithful, nesting format (ADR 0003). This
+    /// default sits *beneath* the precedence chain (default < config < flag), in
+    /// the `ColorChoice::resolve` style.
+    pub fn resolve(explicit: Option<OutputFormat>, stdout_is_tty: bool) -> OutputFormat {
+        match explicit {
+            Some(format) => format,
+            None if stdout_is_tty => OutputFormat::Table,
+            None => OutputFormat::Jsonl,
+        }
+    }
+
     /// Infer the format from a file extension (issue 12): `.csv`, `.jsonl`,
     /// `.cypherl`/`.cypher`, `.txt`/`.tsv` → table. Unknown extensions are `None`.
     pub fn from_extension(path: &std::path::Path) -> Option<Self> {
@@ -169,9 +184,11 @@ pub struct Cli {
     #[arg(long)]
     pub read_only: bool,
 
-    /// Output format for query results.
-    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
-    pub output_format: OutputFormat,
+    /// Output format for query results. With no flag the default depends on
+    /// stdout (issue 19, ADR 0014): `table` at a terminal, `jsonl` when piped or
+    /// redirected. An explicit value always wins.
+    #[arg(long, value_enum)]
+    pub output_format: Option<OutputFormat>,
 
     /// Truncate tabular output to fit the terminal width.
     #[arg(long)]
@@ -445,7 +462,7 @@ mod tests {
         assert_eq!(cli.password, "");
         assert!(cli.use_ssl);
         assert!(!cli.read_only, "read-only is opt-in");
-        assert_eq!(cli.output_format, OutputFormat::Table);
+        assert_eq!(cli.output_format, None, "no flag: the TTY-aware default applies");
         assert!(!cli.fit_to_screen);
         assert_eq!(cli.display, None, "no --display flag: the built-in default applies");
         assert!(!cli.plain, "the workbench is the default; --plain is opt-in");
@@ -677,7 +694,7 @@ mod tests {
     #[test]
     fn jsonl_is_accepted_as_output_format() {
         let cli = parse(&["--output-format", "jsonl"]).expect("jsonl parses");
-        assert_eq!(cli.output_format, OutputFormat::Jsonl);
+        assert_eq!(cli.output_format, Some(OutputFormat::Jsonl));
     }
 
     #[test]
@@ -689,8 +706,25 @@ mod tests {
             ("cypherl", OutputFormat::Cypherl),
         ] {
             let cli = parse(&["--output-format", text]).expect("format parses");
-            assert_eq!(cli.output_format, want);
+            assert_eq!(cli.output_format, Some(want));
         }
+    }
+
+    #[test]
+    fn the_default_output_format_is_tty_aware_and_an_explicit_flag_wins() {
+        // No flag: tabular at a terminal, jsonl when piped/redirected (ADR 0014).
+        assert_eq!(OutputFormat::resolve(None, true), OutputFormat::Table);
+        assert_eq!(OutputFormat::resolve(None, false), OutputFormat::Jsonl);
+        // An explicit choice wins in both directions.
+        assert_eq!(
+            OutputFormat::resolve(Some(OutputFormat::Table), false),
+            OutputFormat::Table,
+            "explicit table into a pipe still tabulates"
+        );
+        assert_eq!(
+            OutputFormat::resolve(Some(OutputFormat::Jsonl), true),
+            OutputFormat::Jsonl
+        );
     }
 
     #[test]

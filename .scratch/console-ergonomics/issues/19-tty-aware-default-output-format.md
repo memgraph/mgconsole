@@ -1,6 +1,6 @@
 # 19 — TTY-aware default output format + stream discipline
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

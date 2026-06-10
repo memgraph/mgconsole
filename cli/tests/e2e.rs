@@ -108,6 +108,22 @@ async fn pipes_a_cypherl_stream_and_reflects_the_exit_code() {
 }
 
 #[tokio::test]
+async fn a_piped_run_defaults_to_jsonl_with_data_only_on_stdout() {
+    // Issue 19 / ADR 0014: with no --output-format, a non-TTY stdout defaults to
+    // jsonl so `… | mgconsole | jq` composes, and only result data lands on stdout.
+    let mg = start_memgraph().await;
+    let out = run_cli(&mg, &[], "RETURN 1 AS n;\n");
+    assert!(
+        out.status.success(),
+        "exit zero; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    // jsonl: one object per record, no box-drawing table chrome.
+    assert_eq!(stdout.trim(), r#"{"n":1}"#, "default jsonl on a pipe: {stdout:?}");
+}
+
+#[tokio::test]
 async fn batched_parallel_import_loads_data_via_the_cli_flags() {
     let mg = start_memgraph().await;
 
