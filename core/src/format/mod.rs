@@ -7,15 +7,18 @@
 
 pub mod csv;
 pub mod cypherl;
+mod header;
 pub mod jsonl;
 
 use crate::error::Error;
 use crate::result::RecordStream;
 use crate::value::Value;
 
+pub use header::Header;
+
 /// A streaming output format: write a header, then each row as it arrives.
 pub trait RowWriter {
-    fn write_header(&mut self, header: &[String]) -> std::io::Result<()>;
+    fn write_header(&mut self, header: &Header) -> std::io::Result<()>;
     fn write_row(&mut self, row: &[Value]) -> std::io::Result<()>;
     /// Flush any buffered output. Default: nothing to do.
     fn finish(&mut self) -> std::io::Result<()> {
@@ -26,7 +29,7 @@ pub trait RowWriter {
 /// Drive a record stream through a writer, one Record at a time.
 pub async fn write_stream<W: RowWriter>(
     writer: &mut W,
-    header: &[String],
+    header: &Header,
     stream: &mut RecordStream,
 ) -> Result<(), Error> {
     writer.write_header(header)?;
@@ -52,7 +55,7 @@ mod tests {
             Record::new(vec![Value::Integer(1), Value::String("Ada".into())]),
             Record::new(vec![Value::Integer(2), Value::String("Bo".into())]),
         ]);
-        let header = vec!["n".to_string(), "name".to_string()];
+        let header = Header::new(vec!["n".to_string(), "name".to_string()]);
 
         let mut buf = Vec::new();
         {

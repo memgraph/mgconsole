@@ -11,7 +11,7 @@ use std::io::Write;
 use crate::render;
 use crate::value::Value;
 
-use super::RowWriter;
+use super::{Header, RowWriter};
 
 pub struct CypherlWriter<W: Write> {
     sink: W,
@@ -31,7 +31,7 @@ fn statement(s: &str) -> String {
 }
 
 impl<W: Write> RowWriter for CypherlWriter<W> {
-    fn write_header(&mut self, _header: &[String]) -> std::io::Result<()> {
+    fn write_header(&mut self, _header: &Header) -> std::io::Result<()> {
         // cypherl has no header.
         Ok(())
     }
@@ -60,7 +60,7 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = CypherlWriter::new(&mut buf);
-            w.write_header(&[]).unwrap();
+            w.write_header(&Header::new(Vec::new())).unwrap();
             for r in rows {
                 w.write_row(r).unwrap();
             }

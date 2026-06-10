@@ -2,10 +2,14 @@
 
 mod golden;
 
-use mgconsole_core::{render_table, TableOptions, Value};
+use mgconsole_core::{render_table, Header, TableOptions, Value};
 
-fn header(cols: &[&str]) -> Vec<String> {
-    cols.iter().map(std::string::ToString::to_string).collect()
+fn header(cols: &[&str]) -> Header {
+    Header::new(
+        cols.iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>(),
+    )
 }
 
 #[test]

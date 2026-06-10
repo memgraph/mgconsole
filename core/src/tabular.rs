@@ -9,6 +9,7 @@
 
 use comfy_table::{presets, ContentArrangement, Table};
 
+use crate::format::Header;
 use crate::render;
 use crate::value::Value;
 
@@ -23,11 +24,11 @@ pub struct TableOptions {
 }
 
 /// Render a header and buffered rows as an aligned ASCII table.
-pub fn render_table(header: &[String], rows: &[Vec<Value>], opts: &TableOptions) -> String {
+pub fn render_table(header: &Header, rows: &[Vec<Value>], opts: &TableOptions) -> String {
     let mut table = Table::new();
     table.load_preset(presets::ASCII_FULL);
     table.force_no_tty();
-    table.set_header(header.to_vec());
+    table.set_header(header.names().to_vec());
 
     match opts.fit_width {
         Some(width) => {
@@ -70,7 +71,7 @@ mod tests {
 
     #[test]
     fn table_has_header_and_aligned_columns() {
-        let header = vec!["n".to_string(), "name".to_string()];
+        let header = Header::new(vec!["n".to_string(), "name".to_string()]);
         let rows = vec![
             vec![Value::Integer(1), Value::String("Ada".into())],
             vec![Value::Integer(42), Value::String("Bob".into())],

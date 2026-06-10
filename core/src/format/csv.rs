@@ -6,7 +6,7 @@ use std::io::Write;
 use crate::render;
 use crate::value::Value;
 
-use super::RowWriter;
+use super::{Header, RowWriter};
 
 /// CSV formatting options, mirroring today's `mgconsole` flags.
 #[derive(Debug, Clone)]
@@ -58,8 +58,8 @@ fn cell(value: &Value) -> String {
 }
 
 impl<W: Write> RowWriter for CsvWriter<W> {
-    fn write_header(&mut self, header: &[String]) -> std::io::Result<()> {
-        self.inner.write_record(header).map_err(csv_io)
+    fn write_header(&mut self, header: &Header) -> std::io::Result<()> {
+        self.inner.write_record(header.names()).map_err(csv_io)
     }
 
     fn write_row(&mut self, row: &[Value]) -> std::io::Result<()> {
@@ -89,10 +89,12 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = CsvWriter::new(&mut buf, opts);
-            let hdr: Vec<String> = header
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect();
+            let hdr = Header::new(
+                header
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>(),
+            );
             w.write_header(&hdr).unwrap();
             for r in rows {
                 w.write_row(r).unwrap();

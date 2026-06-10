@@ -27,7 +27,7 @@ use mgconsole::{resolve_password, Cli, ImportMode, OutputFormat};
 use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
     render_table, run_parallel_ordered, run_parser, run_serial, ConnectOptions, Credentials,
-    Endpoint, Error, ImportFormat, ParserReport, QueryAssembler, ReconnectNotice, Session,
+    Endpoint, Error, Header, ImportFormat, ParserReport, QueryAssembler, ReconnectNotice, Session,
     TableOptions, Value, Workers, DEFAULT_ROW_CAP,
 };
 
@@ -352,7 +352,7 @@ impl QueryRunner for SessionRunner<'_> {
         runtime.block_on(async move {
             let start = Instant::now();
             let mut result = session.run_with_params(query, params).await?;
-            let header = result.header().to_vec();
+            let header = Header::new(result.header());
             let (records, overflowed) = result.records().collect_capped(cap).await?;
             // Drop any rows beyond the cap so the connection is ready for reuse.
             result.records().discard().await?;

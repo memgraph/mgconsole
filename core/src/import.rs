@@ -21,7 +21,7 @@ use tokio::sync::Mutex;
 
 use crate::clause::{scan_clauses, Clause};
 use crate::error::Error;
-use crate::format::{self, CsvOptions, CsvWriter, CypherlWriter, JsonlWriter};
+use crate::format::{self, CsvOptions, CsvWriter, CypherlWriter, Header, JsonlWriter};
 use crate::session::Session;
 use crate::tabular::{render_table, TableOptions};
 use crate::value::Value;
@@ -141,7 +141,7 @@ async fn execute_and_render<W: Write>(
     format: &OutputFormat,
 ) -> Result<(), Error> {
     let mut result = session.run_with_params(query, params).await?;
-    let header = result.header().to_vec();
+    let header = Header::new(result.header());
     if header.is_empty() {
         result.records().discard().await?;
         return Ok(());

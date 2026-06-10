@@ -22,6 +22,7 @@ pub mod workers;
 
 pub use clause::{scan_clauses, Clause};
 pub use error::Error;
+pub use format::Header;
 pub use import::{
     classify_phase, into_batches, run_parallel, run_parallel_ordered, run_parser, run_serial,
     Batch, ImportFailure, ImportReport, OutputFormat as ImportFormat, ParallelReport, ParsedQuery,

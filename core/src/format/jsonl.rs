@@ -19,35 +19,35 @@ use serde_json::{json, Map, Value as J};
 use crate::render;
 use crate::value::{Node, UnboundRelationship, Value};
 
-use super::RowWriter;
+use super::{Header, RowWriter};
 
 pub struct JsonlWriter<W: Write> {
     sink: W,
-    header: Vec<String>,
+    header: Header,
 }
 
 impl<W: Write> JsonlWriter<W> {
     pub fn new(sink: W) -> Self {
         Self {
             sink,
-            header: Vec::new(),
+            header: Header::new(Vec::new()),
         }
     }
 }
 
 impl<W: Write> RowWriter for JsonlWriter<W> {
-    fn write_header(&mut self, header: &[String]) -> std::io::Result<()> {
+    fn write_header(&mut self, header: &Header) -> std::io::Result<()> {
         // JSONL has no header line; remember the keys for each row object.
-        self.header = header.to_vec();
+        self.header = header.clone();
         Ok(())
     }
 
     fn write_row(&mut self, row: &[Value]) -> std::io::Result<()> {
-        let mut obj = Map::new();
-        for (i, value) in row.iter().enumerate() {
-            let key = self.header.get(i).cloned().unwrap_or_else(|| i.to_string());
-            obj.insert(key, json_value(value));
-        }
+        let obj: Map<String, J> = self
+            .header
+            .zip(row)
+            .map(|(key, value)| (key.to_string(), json_value(value)))
+            .collect();
         let line = serde_json::to_string(&J::Object(obj)).map_err(std::io::Error::other)?;
         writeln!(self.sink, "{line}")
     }
@@ -114,10 +114,12 @@ mod tests {
         let mut buf = Vec::new();
         {
             let mut w = JsonlWriter::new(&mut buf);
-            let hdr: Vec<String> = header
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect();
+            let hdr = Header::new(
+                header
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>(),
+            );
             w.write_header(&hdr).unwrap();
             w.write_row(row).unwrap();
             w.finish().unwrap();
