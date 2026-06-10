@@ -718,6 +718,25 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             state.editor.clear();
             Vec::new()
         }
+        // `:set` shares the REPL's Settings spine (issue 01): list every setting,
+        // or change one and report it — kept distinct from the `:param` store.
+        MetaCommand::ListSettings => {
+            state.status.message = state.settings.list().replace('\n', " · ");
+            state.editor.clear();
+            Vec::new()
+        }
+        MetaCommand::SetSetting { name, value } => {
+            match state.settings.set(&name, &value) {
+                Ok(()) => {
+                    state.status.message =
+                        format!("{name} = {}", state.settings.get(&name).unwrap_or(value));
+                }
+                // The session survives a bad name/value (ADR 0005); just report it.
+                Err(message) => state.status.message = format!("error: {message}"),
+            }
+            state.editor.clear();
+            Vec::new()
+        }
         MetaCommand::Invalid(message) => {
             state.status.message = format!("error: {message}");
             Vec::new()
@@ -1595,6 +1614,49 @@ mod tests {
         assert_eq!(s.drawer, Some(DrawerKind::Params));
         update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('p'))));
         assert_eq!(s.drawer, None);
+    }
+
+    // --- :set settings spine (issue 01) -------------------------------------
+
+    #[test]
+    fn set_display_changes_the_setting_and_clears_the_editor() {
+        use mgconsole_core::DisplayMode;
+        let mut s = wb();
+        type_str(&mut s, ":set display vertical");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(effects.is_empty(), "a setting change runs no query");
+        assert_eq!(s.settings.display, DisplayMode::Vertical);
+        assert_eq!(s.editor.buffer(), "", "the command is consumed");
+        assert!(s.status.message.contains("display = vertical"));
+    }
+
+    #[test]
+    fn bare_set_lists_the_settings_in_the_status() {
+        let mut s = wb();
+        type_str(&mut s, ":set");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(s.status.message.contains("display = auto"), "status: {}", s.status.message);
+    }
+
+    #[test]
+    fn an_invalid_setting_is_reported_without_losing_the_session() {
+        use mgconsole_core::DisplayMode;
+        let mut s = wb();
+        type_str(&mut s, ":set display grid");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(s.status.message.contains("error"), "status: {}", s.status.message);
+        assert_eq!(s.settings.display, DisplayMode::Auto, "unchanged on error");
+        // The session survives: a following query still runs.
+        let id = submit_query(&mut s, "RETURN 1;");
+        assert_eq!(id, 0);
+    }
+
+    #[test]
+    fn set_does_not_touch_the_param_store() {
+        let mut s = wb();
+        type_str(&mut s, ":set display vertical");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(s.params.is_empty(), ":set must not populate the :param store");
     }
 
     // --- persisted history recall (slice 17) --------------------------------

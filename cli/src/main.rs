@@ -23,15 +23,16 @@ use rustyline::{Context, Editor, Helper, Hinter};
 use mgconsole::frontend::{select_frontend, Frontend};
 use mgconsole::history::{self, HistoryFile};
 use mgconsole::repl::{self, Line, LineSource, QueryRunner, Rendered, ReplConfig};
+use mgconsole::settings::Settings;
 use mgconsole::syntax::{self, Completer};
 #[cfg(feature = "tui")]
 use mgconsole::workbench;
 use mgconsole::{no_color_active, resolve_password, Cli, ImportMode, OutputFormat};
 use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
-    render_table, run_parallel_ordered, run_parser, run_serial, ConnectOptions, Credentials,
-    Endpoint, Error, Header, ImportFormat, ParserReport, QueryAssembler, ReconnectNotice, Session,
-    TableOptions, Value, Workers, DEFAULT_ROW_CAP,
+    render_records, run_parallel_ordered, run_parser, run_serial, ConnectOptions, Credentials,
+    DisplayMode, Endpoint, Error, Header, ImportFormat, ParserReport, QueryAssembler,
+    ReconnectNotice, RenderOptions, Session, TableOptions, Value, Workers, DEFAULT_ROW_CAP,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -112,6 +113,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|(width, _)| width.0);
     let table_options = TableOptions { fit_width };
 
+    // Resolve the console Settings: built-in default < CLI flag (the config-file
+    // layer joins in issue 02, the runtime `:set` layer lives in each Frontend).
+    let settings = Settings::from_cli(cli.display);
+
     let mut out = io::stdout();
     let mut err = io::stderr();
 
@@ -121,7 +126,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // gets the non-interactive serial import path (slice 25), which streams output
     // in the selected format and exits non-zero if any query fails.
     if io::stdin().is_terminal() {
-        run_interactive(&cli, session, &runtime, table_options, &mut out, &mut err)?;
+        run_interactive(
+            &cli,
+            session,
+            &runtime,
+            table_options,
+            settings,
+            &mut out,
+            &mut err,
+        )?;
     } else {
         let queries = read_queries(io::stdin().lock())?;
         let format = import_format(&cli, table_options);
@@ -148,6 +161,7 @@ fn run_interactive(
     session: Session,
     runtime: &tokio::runtime::Runtime,
     table_options: TableOptions,
+    settings: Settings,
     out: &mut io::Stdout,
     err: &mut io::Stderr,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -175,6 +189,7 @@ fn run_interactive(
             {
                 let config = workbench::WorkbenchConfig {
                     verbose: cli.verbose_execution_info,
+                    settings,
                     ..workbench::WorkbenchConfig::default()
                 };
                 runtime.block_on(workbench::run(session, config, colorize, history))?;
@@ -191,6 +206,7 @@ fn run_interactive(
             };
             let config = ReplConfig {
                 row_cap: DEFAULT_ROW_CAP,
+                settings,
             };
             let mut source = RustylineSource::new(history, colorize)?;
             repl::run_loop(&mut source, &mut runner, out, err, &config)?;
@@ -408,11 +424,23 @@ struct SessionRunner<'a> {
 }
 
 impl QueryRunner for SessionRunner<'_> {
-    fn run(&mut self, query: &str, params: &BTreeMap<String, Value>) -> Result<Rendered, Error> {
+    fn run(
+        &mut self,
+        query: &str,
+        params: &BTreeMap<String, Value>,
+        display: DisplayMode,
+    ) -> Result<Rendered, Error> {
         let runtime = self.runtime;
         let session = &mut self.session;
         let cap = self.row_cap;
-        let table_options = &self.table_options;
+        // The `auto` display mode needs the live terminal width to decide whether
+        // a row fits; resolve it here at the IO boundary (the Core stays
+        // width-agnostic), independently of the `--fit-to-screen` column fitting.
+        let render_options = RenderOptions {
+            mode: display,
+            table: self.table_options.clone(),
+            term_width: terminal_size::terminal_size().map(|(width, _)| width.0),
+        };
 
         runtime.block_on(async move {
             let start = Instant::now();
@@ -432,7 +460,7 @@ impl QueryRunner for SessionRunner<'_> {
             let table = if header.is_empty() {
                 String::new()
             } else {
-                render_table(&header, &rows, table_options)
+                render_records(&header, &rows, &render_options)
             };
             Ok(Rendered {
                 table,

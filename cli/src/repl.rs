@@ -15,7 +15,9 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::time::Duration;
 
-use mgconsole_core::{render, tabular, Error, QueryAssembler, Value};
+use mgconsole_core::{render, tabular, DisplayMode, Error, QueryAssembler, Value};
+
+use crate::settings::Settings;
 
 /// Whether a buffer the user has entered is a complete submission, or still
 /// needs a continuation line. Drives rustyline's `Validator`: incomplete input
@@ -51,6 +53,11 @@ pub enum MetaCommand {
     ListParams,
     /// `:params clear` — remove all parameters.
     ClearParams,
+    /// `:set` with no argument — list every Setting and its current value.
+    ListSettings,
+    /// `:set <name> <value>` — change one Setting (console behaviour, never query
+    /// data — kept distinct from `:param`).
+    SetSetting { name: String, value: String },
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -72,6 +79,7 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
         "docs" => MetaCommand::Docs,
         "param" => parse_set_param(args),
         "params" => parse_params(args),
+        "set" => parse_set_setting(args),
         _ => MetaCommand::Unknown(trimmed.to_string()),
     })
 }
@@ -101,6 +109,26 @@ fn parse_params(args: &str) -> MetaCommand {
         other => MetaCommand::Invalid(format!(
             ":params takes no argument or 'clear', got '{other}'"
         )),
+    }
+}
+
+/// Parse the argument of `:set`: empty lists every Setting; `<name> <value>`
+/// changes one. A name with no value is a misuse (distinct from listing, which
+/// takes no name at all).
+fn parse_set_setting(args: &str) -> MetaCommand {
+    let args = args.trim();
+    if args.is_empty() {
+        return MetaCommand::ListSettings;
+    }
+    let (name, value) = split_first_word(args);
+    if value.is_empty() {
+        return MetaCommand::Invalid(format!(
+            ":set needs a value, e.g. ':set display vertical' (or ':set' to list); got '{name}'"
+        ));
+    }
+    MetaCommand::SetSetting {
+        name: name.to_string(),
+        value: value.to_string(),
     }
 }
 
@@ -155,7 +183,9 @@ pub fn help_text() -> &'static str {
      \t:param <name> <expr>   Set a query parameter to a Cypher expression\n\
      \t                       (e.g. ':param age 21 * 2'); use it as $<name>\n\
      \t:params                List all currently set query parameters\n\
-     \t:params clear          Remove all query parameters"
+     \t:params clear          Remove all query parameters\n\
+     \t:set                   List all console settings and their values\n\
+     \t:set <name> <value>    Change a console setting (e.g. ':set display vertical')"
 }
 
 /// Documentation pointers, printed by `:docs`. Carried over from `mgconsole`.
@@ -217,8 +247,15 @@ pub struct Rendered {
 /// a live database. `params` carries the REPL's current `:param` store, bound to
 /// every query so `$name` references resolve (slice 20).
 pub trait QueryRunner {
-    /// Run one complete query bound to the current parameters and render it.
-    fn run(&mut self, query: &str, params: &BTreeMap<String, Value>) -> Result<Rendered, Error>;
+    /// Run one complete query bound to the current parameters and render it in the
+    /// given display mode (the `display` Setting, resolved by the loop so a
+    /// runtime `:set display` takes effect on the next query).
+    fn run(
+        &mut self,
+        query: &str,
+        params: &BTreeMap<String, Value>,
+        display: DisplayMode,
+    ) -> Result<Rendered, Error>;
 
     /// Evaluate a `:param` expression server-side with the existing parameters in
     /// scope, returning the resulting Value to store. Implemented by running
@@ -230,6 +267,9 @@ pub trait QueryRunner {
 pub struct ReplConfig {
     /// The tabular row cap, so an overflow warning can name it.
     pub row_cap: usize,
+    /// The console Settings resolved at startup (default < CLI flag). The loop
+    /// takes its own mutable copy so runtime `:set` can change it.
+    pub settings: Settings,
 }
 
 /// The REPL's execute loop: read input, assemble it into complete queries, run
@@ -249,6 +289,9 @@ pub fn run_loop(
     let mut assembler = QueryAssembler::new();
     // The `:param` store, bound to every query so `$name` references resolve.
     let mut params: BTreeMap<String, Value> = BTreeMap::new();
+    // The console Settings, seeded from the resolved config; runtime `:set`
+    // mutates this copy. Kept rigorously distinct from `params` (CONTEXT.md).
+    let mut settings = config.settings.clone();
     loop {
         let continued = assembler.has_pending();
         let text = match source.read(continued)? {
@@ -294,6 +337,19 @@ pub fn run_loop(
                     params.clear();
                     continue;
                 }
+                Some(MetaCommand::ListSettings) => {
+                    writeln!(out, "{}", settings.list())?;
+                    continue;
+                }
+                // A bad name or value is reported (the session survives it) and
+                // the store is left untouched; never touches the `:param` store.
+                Some(MetaCommand::SetSetting { name, value }) => {
+                    match settings.set(&name, &value) {
+                        Ok(()) => writeln!(out, "{name} = {}", settings.get(&name).unwrap_or(value))?,
+                        Err(message) => writeln!(err, "error: {message}")?,
+                    }
+                    continue;
+                }
                 Some(MetaCommand::Invalid(message)) => {
                     writeln!(err, "error: {message}")?;
                     continue;
@@ -309,7 +365,7 @@ pub fn run_loop(
         // The trailing newline lets a line comment close and separates physical
         // lines when assembling across reads.
         for query in assembler.push(&format!("{text}\n")) {
-            match runner.run(&query, &params) {
+            match runner.run(&query, &params, settings.display) {
                 Ok(result) => {
                     if !result.table.is_empty() {
                         writeln!(out, "{}", result.table)?;
@@ -395,7 +451,7 @@ mod tests {
         assert!(help.contains("Cypher"));
         assert!(help.contains("semicolon"));
         // Every implemented command is listed (acceptance criterion 4).
-        for command in [":help", ":quit", ":docs", ":param", ":params"] {
+        for command in [":help", ":quit", ":docs", ":param", ":params", ":set"] {
             assert!(help.contains(command), "help should list {command}");
         }
     }
@@ -449,6 +505,33 @@ mod tests {
     fn params_with_an_unknown_argument_is_invalid() {
         assert!(matches!(
             meta_command(":params bogus"),
+            Some(MetaCommand::Invalid(_))
+        ));
+    }
+
+    // --- :set parsing (pure) -------------------------------------------------
+
+    #[test]
+    fn set_with_no_argument_lists_settings() {
+        assert_eq!(meta_command(":set"), Some(MetaCommand::ListSettings));
+        assert_eq!(meta_command("  :set  "), Some(MetaCommand::ListSettings));
+    }
+
+    #[test]
+    fn set_with_a_name_and_value_changes_one_setting() {
+        assert_eq!(
+            meta_command(":set display vertical"),
+            Some(MetaCommand::SetSetting {
+                name: "display".to_string(),
+                value: "vertical".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn set_with_a_name_but_no_value_is_invalid() {
+        assert!(matches!(
+            meta_command(":set display"),
             Some(MetaCommand::Invalid(_))
         ));
     }
@@ -520,6 +603,7 @@ mod tests {
     struct ScriptedRunner {
         seen: Vec<String>,
         seen_params: Vec<BTreeMap<String, Value>>,
+        seen_display: Vec<DisplayMode>,
         results: VecDeque<Result<Rendered, Error>>,
         eval_seen: Vec<(String, BTreeMap<String, Value>)>,
         eval_results: VecDeque<Result<Value, Error>>,
@@ -530,6 +614,7 @@ mod tests {
             Self {
                 seen: Vec::new(),
                 seen_params: Vec::new(),
+                seen_display: Vec::new(),
                 results: results.into(),
                 eval_seen: Vec::new(),
                 eval_results: VecDeque::new(),
@@ -548,9 +633,11 @@ mod tests {
             &mut self,
             query: &str,
             params: &BTreeMap<String, Value>,
+            display: DisplayMode,
         ) -> Result<Rendered, Error> {
             self.seen.push(query.to_string());
             self.seen_params.push(params.clone());
+            self.seen_display.push(display);
             self.results
                 .pop_front()
                 .unwrap_or_else(|| Ok(ok_result("", 0)))
@@ -594,7 +681,10 @@ mod tests {
             &mut runner,
             &mut out,
             &mut err,
-            &ReplConfig { row_cap: 1000 },
+            &ReplConfig {
+                row_cap: 1000,
+                settings: Settings::default(),
+            },
         )
         .expect("loop runs to EOF");
         (
@@ -803,6 +893,66 @@ mod tests {
         assert!(err.contains("error:"), "misuse reported: {err}");
         // The session survived: the following query still ran.
         assert_eq!(runner.seen, vec!["RETURN 1".to_string()]);
+    }
+
+    // --- :set family, driven through the loop ---------------------------------
+
+    #[test]
+    fn set_display_takes_effect_on_the_next_query() {
+        let (_src, runner, out, _err) = drive(
+            vec![
+                Line::Text(":set display vertical".into()),
+                Line::Text("RETURN 1;".into()),
+            ],
+            vec![Ok(ok_result("t", 1))],
+        );
+        // The query ran with the freshly-set display mode.
+        assert_eq!(runner.seen_display, vec![DisplayMode::Vertical]);
+        // The change was echoed.
+        assert!(out.contains("display = vertical"), "echoed: {out}");
+    }
+
+    #[test]
+    fn bare_set_lists_settings() {
+        let (_src, _runner, out, _err) = drive(vec![Line::Text(":set".into())], vec![]);
+        assert!(out.contains("display = auto"), "listing: {out}");
+    }
+
+    #[test]
+    fn an_unknown_setting_is_reported_and_the_loop_survives() {
+        let (_src, runner, _out, err) = drive(
+            vec![
+                Line::Text(":set bogus 1".into()),
+                Line::Text("RETURN 1;".into()),
+            ],
+            vec![Ok(ok_result("t", 1))],
+        );
+        assert!(err.contains("error:"), "misuse reported: {err}");
+        assert!(err.contains("bogus"), "names the setting: {err}");
+        // The session survived: the following query still ran (with the default).
+        assert_eq!(runner.seen, vec!["RETURN 1".to_string()]);
+        assert_eq!(runner.seen_display, vec![DisplayMode::Auto]);
+    }
+
+    #[test]
+    fn set_and_param_are_distinct_surfaces() {
+        // Setting `display` never populates the `:param` store, and vice versa.
+        let runner = ScriptedRunner::returning(vec![Ok(ok_result("t", 1))])
+            .evaluating(vec![Ok(Value::Integer(7))]);
+        let (_src, runner, _out, _err) = drive_with(
+            vec![
+                Line::Text(":set display vertical".into()),
+                Line::Text(":param n 7".into()),
+                Line::Text("RETURN 1;".into()),
+            ],
+            runner,
+        );
+        // The query saw the param but the setting stayed out of the param store.
+        assert_eq!(
+            runner.seen_params,
+            vec![BTreeMap::from([("n".to_string(), Value::Integer(7))])]
+        );
+        assert_eq!(runner.seen_display, vec![DisplayMode::Vertical]);
     }
 
     #[test]

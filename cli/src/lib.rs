@@ -7,11 +7,13 @@
 //! so they're covered by the unit tests below.
 
 use clap::{Parser, ValueEnum};
+use mgconsole_core::DisplayMode;
 
 pub mod frontend;
 pub mod history;
 pub mod keywords;
 pub mod repl;
+pub mod settings;
 pub mod syntax;
 #[cfg(feature = "tui")]
 pub mod workbench;
@@ -108,6 +110,12 @@ pub struct Cli {
     #[arg(long)]
     pub fit_to_screen: bool,
 
+    /// Result display mode: tabular, vertical, or auto (tabular until a row
+    /// exceeds the terminal width, then vertical). Overrides the built-in default
+    /// (auto); a runtime `:set display` overrides this in turn.
+    #[arg(long, value_parser = parse_display_mode)]
+    pub display: Option<DisplayMode>,
+
     /// Use the line-based REPL instead of the full-screen TUI workbench (ADR
     /// 0010). The workbench is the default for a capable interactive terminal;
     /// `--plain` forces the minimal REPL, as does an incapable terminal.
@@ -160,6 +168,12 @@ pub struct Cli {
     /// Collect and print per-query statistics in parser mode.
     #[arg(long)]
     pub parser_stats: bool,
+}
+
+/// clap value parser for `--display`, deferring to [`DisplayMode`]'s `FromStr` so
+/// the flag and the runtime `:set display` accept exactly the same spellings.
+fn parse_display_mode(value: &str) -> Result<DisplayMode, String> {
+    value.parse()
 }
 
 /// Resolve the password to authenticate with, prompting only when a username is
@@ -218,6 +232,7 @@ mod tests {
         assert!(cli.use_ssl);
         assert_eq!(cli.output_format, OutputFormat::Tabular);
         assert!(!cli.fit_to_screen);
+        assert_eq!(cli.display, None, "no --display flag: the built-in default applies");
         assert!(!cli.plain, "the workbench is the default; --plain is opt-in");
         assert_eq!(cli.color, ColorChoice::Auto);
         assert_eq!(cli.csv_delimiter, ',');
@@ -277,6 +292,24 @@ mod tests {
     fn plain_selects_the_repl_frontend() {
         assert!(!parse(&[]).expect("bare").plain);
         assert!(parse(&["--plain"]).expect("--plain parses").plain);
+    }
+
+    #[test]
+    fn display_flag_parses_each_mode_and_rejects_others() {
+        assert_eq!(parse(&[]).expect("bare").display, None);
+        assert_eq!(
+            parse(&["--display", "vertical"]).expect("vertical").display,
+            Some(DisplayMode::Vertical)
+        );
+        assert_eq!(
+            parse(&["--display", "tabular"]).expect("tabular").display,
+            Some(DisplayMode::Tabular)
+        );
+        assert_eq!(
+            parse(&["--display", "auto"]).expect("auto").display,
+            Some(DisplayMode::Auto)
+        );
+        assert!(parse(&["--display", "grid"]).is_err(), "unknown mode rejected");
     }
 
     #[test]

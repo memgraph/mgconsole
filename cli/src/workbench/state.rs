@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, VecDeque};
 use mgconsole_core::{Record, Summary, Value};
 use tui_textarea::{Input, Key as TaKey, TextArea};
 
+use crate::settings::Settings;
 use crate::syntax::{word_start, Completer};
 
 use super::effect::ExportFormat;
@@ -109,6 +110,11 @@ pub struct WorkbenchState {
     /// Whether colour is on (resolved `--color`/`NO_COLOR`); slice 05 uses it for
     /// editor highlighting. A monochrome workbench is styled, not disabled.
     pub color: bool,
+    /// The live console Settings (issue 01): seeded from config, mutated by
+    /// `:set`. Shared spine with the REPL — kept distinct from [`params`].
+    ///
+    /// [`params`]: Self::params
+    pub settings: Settings,
     /// Frontend-local configuration.
     pub config: WorkbenchConfig,
 }
@@ -140,6 +146,7 @@ impl WorkbenchState {
             recall_saved: None,
             status: StatusLine::default(),
             color,
+            settings: config.settings.clone(),
             config,
         }
     }
@@ -255,6 +262,9 @@ pub struct WorkbenchConfig {
     /// Whether `--verbose-execution-info` was set: the summary drawer then shows
     /// the per-query execution info (cost/parse/plan/execute) too (slice 18).
     pub verbose: bool,
+    /// The console Settings resolved at startup (default < CLI flag), seeding the
+    /// state's live [`Settings`] which `:set` then mutates (issue 01).
+    pub settings: Settings,
 }
 
 impl Default for WorkbenchConfig {
@@ -264,6 +274,7 @@ impl Default for WorkbenchConfig {
             newline_hint: "Alt+Enter",
             row_cap: DEFAULT_ROW_CAP,
             verbose: false,
+            settings: Settings::default(),
         }
     }
 }
