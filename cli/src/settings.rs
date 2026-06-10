@@ -28,6 +28,18 @@ pub struct FileSettings {
     pub display: Option<DisplayMode>,
 }
 
+impl FileSettings {
+    /// Overlay `other` onto `self`, with `other` winning for every value it
+    /// supplies — used to layer a selected profile's `[settings]` over the
+    /// top-level `[settings]` (issue 03), both at the config-file precedence layer.
+    #[must_use]
+    pub fn overlay(&self, other: &FileSettings) -> FileSettings {
+        FileSettings {
+            display: other.display.or(self.display),
+        }
+    }
+}
+
 impl Settings {
     /// Resolve the full precedence chain below runtime `:set`: built-in default <
     /// config file < CLI flag. Each later layer overrides only the values it

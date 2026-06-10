@@ -265,6 +265,9 @@ pub struct WorkbenchConfig {
     /// The console Settings resolved at startup (default < CLI flag), seeding the
     /// state's live [`Settings`] which `:set` then mutates (issue 01).
     pub settings: Settings,
+    /// The active connection profile's name (issue 03), shown in the status bar so
+    /// the user always knows which connection they are on. `None` = no profile.
+    pub profile: Option<String>,
 }
 
 impl Default for WorkbenchConfig {
@@ -275,6 +278,7 @@ impl Default for WorkbenchConfig {
             row_cap: DEFAULT_ROW_CAP,
             verbose: false,
             settings: Settings::default(),
+            profile: None,
         }
     }
 }

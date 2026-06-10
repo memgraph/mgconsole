@@ -14,7 +14,8 @@ use std::io::{self, BufRead, IsTerminal};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use clap::Parser;
+use clap::parser::ValueSource;
+use clap::{CommandFactory, FromArgMatches};
 use rustyline::completion::Completer as RustylineCompleter;
 use rustyline::highlight::{CmdKind, Highlighter as RustylineHighlighter};
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
@@ -24,11 +25,14 @@ use mgconsole::frontend::{select_frontend, Frontend};
 use mgconsole::history::{self, HistoryFile};
 use mgconsole::config;
 use mgconsole::repl::{self, Line, LineSource, QueryRunner, Rendered, ReplConfig};
-use mgconsole::settings::{FileSettings, Settings};
+use mgconsole::settings::Settings;
 use mgconsole::syntax::{self, Completer};
 #[cfg(feature = "tui")]
 use mgconsole::workbench;
-use mgconsole::{no_color_active, resolve_password, Cli, ImportMode, OutputFormat};
+use mgconsole::{
+    no_color_active, resolve_connection, resolve_password, Cli, Connection, ExplicitFlags,
+    ImportMode, OutputFormat,
+};
 use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
     render_records, run_parallel_ordered, run_parser, run_serial, ConnectOptions, Credentials,
@@ -37,11 +41,18 @@ use mgconsole_core::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let cli = Cli::parse();
+    // Parse via ArgMatches (not the bare derive) so we can see which connection
+    // flags were given explicitly — a profile fills only the unset ones (issue 03).
+    let matches = Cli::command().get_matches();
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(e) => e.exit(),
+    };
     if let Err(message) = cli.validate() {
         eprintln!("error: {message}");
         std::process::exit(2);
     }
+    let explicit = explicit_flags(&matches);
 
     // Parser mode validates a piped import file with the clause scanner and never
     // touches the database (PRD: validate before touching Memgraph), so handle it
@@ -53,9 +64,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    // Resolve config, the selected profile, the effective connection, and the
+    // settings (issue 03). An unknown --profile fails fast inside the helper.
+    let (connection, settings) = resolve_profile_connection(&cli, explicit);
+
     // Resolve auth before touching the network: a username with no password gets
     // a hidden prompt; an empty username stays anonymous.
-    let password = match resolve_password(&cli.username, &cli.password, || {
+    let password = match resolve_password(&connection.username, &connection.password, || {
         rpassword::prompt_password("Password: ")
     }) {
         Ok(password) => password,
@@ -65,13 +80,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let options = ConnectOptions {
-        credentials: (!cli.username.is_empty()).then(|| Credentials {
-            username: cli.username.clone(),
+        credentials: (!connection.username.is_empty()).then(|| Credentials {
+            username: connection.username.clone(),
             password,
         }),
-        use_tls: cli.use_ssl,
+        use_tls: connection.use_ssl,
     };
-    let endpoint = Endpoint::new(cli.host.clone(), cli.port);
+    let endpoint = Endpoint::new(connection.host.clone(), connection.port);
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -114,11 +129,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|(width, _)| width.0);
     let table_options = TableOptions { fit_width };
 
-    // Resolve the console Settings: built-in default < config file < CLI flag
-    // (ADR 0012; the runtime `:set` layer lives in each Frontend). A malformed
-    // config is reported but never fatal — the console starts on defaults.
-    let settings = Settings::resolve(&load_config(), cli.display);
-
     let mut out = io::stdout();
     let mut err = io::stderr();
 
@@ -134,6 +144,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &runtime,
             table_options,
             settings,
+            cli.profile.clone(),
             &mut out,
             &mut err,
         )?;
@@ -158,12 +169,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// the workbench by default, the line REPL when `--plain` is set or the terminal
 /// cannot host the workbench. Colour is resolved here at the IO boundary and
 /// governs colour *within* whichever Frontend runs, independently of the choice.
+#[allow(clippy::too_many_arguments)]
 fn run_interactive(
     cli: &Cli,
     session: Session,
     runtime: &tokio::runtime::Runtime,
     table_options: TableOptions,
     settings: Settings,
+    profile: Option<String>,
     out: &mut io::Stdout,
     err: &mut io::Stderr,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -192,6 +205,7 @@ fn run_interactive(
                 let config = workbench::WorkbenchConfig {
                     verbose: cli.verbose_execution_info,
                     settings,
+                    profile,
                     ..workbench::WorkbenchConfig::default()
                 };
                 runtime.block_on(workbench::run(session, config, colorize, history))?;
@@ -210,7 +224,7 @@ fn run_interactive(
                 row_cap: DEFAULT_ROW_CAP,
                 settings,
             };
-            let mut source = RustylineSource::new(history, colorize)?;
+            let mut source = RustylineSource::new(history, colorize, repl_prompt(profile.as_deref()))?;
             repl::run_loop(&mut source, &mut runner, out, err, &config)?;
         }
         Frontend::Piped => {
@@ -320,22 +334,71 @@ fn open_history(cli: &Cli) -> Option<HistoryFile> {
     }
 }
 
-/// Load the config-file Setting overlay (issue 02): resolve the path from
-/// `MGCONSOLE_CONFIG_PATH`/home, then read it. A missing file is the normal case
-/// (empty overlay); a malformed file is reported and treated as empty so the
-/// console still starts on defaults (ADR 0012).
-fn load_config() -> FileSettings {
+/// Load the config file (issue 02/03): resolve the path from
+/// `MGCONSOLE_CONFIG_PATH`/home, then read its `[settings]` overlay and
+/// `[profiles.*]` tables. A missing file is the normal case (empty config); a
+/// malformed file is reported and treated as empty so the console still starts on
+/// defaults (ADR 0012).
+fn load_config() -> config::Config {
     let env = std::env::var(config::CONFIG_ENV).ok();
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let Some(path) = config::resolve_config_path(env.as_deref(), home.as_deref()) else {
-        return FileSettings::default();
+        return config::Config::default();
     };
     match config::load(&path) {
-        Ok(overlay) => overlay,
+        Ok(config) => config,
         Err(message) => {
             eprintln!("warning: {message}; continuing on defaults");
-            FileSettings::default()
+            config::Config::default()
         }
+    }
+}
+
+/// Resolve the config file, the selected connection profile, the effective
+/// connection (flag > profile > default), and the console Settings
+/// (default < config < profile-settings < CLI flag). An unknown `--profile` is a
+/// fatal, clearly-reported error (issue 03).
+fn resolve_profile_connection(cli: &Cli, explicit: ExplicitFlags) -> (Connection, Settings) {
+    let config = load_config();
+    let profile = match cli.profile.as_deref() {
+        Some(name) => match config.select(name) {
+            Ok(profile) => Some(profile.clone()),
+            Err(message) => {
+                eprintln!("error: {message}");
+                std::process::exit(2);
+            }
+        },
+        None => None,
+    };
+    let connection = resolve_connection(cli, &explicit, profile.as_ref());
+    let file_layer = match &profile {
+        Some(profile) => config.settings.overlay(&profile.settings),
+        None => config.settings.clone(),
+    };
+    let settings = Settings::resolve(&file_layer, cli.display);
+    (connection, settings)
+}
+
+/// Read which connection flags clap saw on the command line (vs a default), so a
+/// profile fills only the unset ones (issue 03 precedence).
+fn explicit_flags(matches: &clap::ArgMatches) -> ExplicitFlags {
+    let given = |name: &str| matches.value_source(name) == Some(ValueSource::CommandLine);
+    ExplicitFlags {
+        host: given("host"),
+        port: given("port"),
+        username: given("username"),
+        password: given("password"),
+        use_ssl: given("use_ssl"),
+    }
+}
+
+/// The REPL primary prompt, naming the active profile when one is selected so the
+/// user always knows which connection they are on (issue 03). With no profile the
+/// prompt is the plain `memgraph> `.
+fn repl_prompt(profile: Option<&str>) -> String {
+    match profile {
+        Some(name) => format!("memgraph ({name})> "),
+        None => "memgraph> ".to_string(),
     }
 }
 
@@ -403,22 +466,33 @@ impl RustylineHighlighter for MgHelper {
 struct RustylineSource {
     editor: Editor<MgHelper, rustyline::history::DefaultHistory>,
     history: Option<HistoryFile>,
+    /// The primary prompt, carrying the active profile name when one is selected
+    /// (issue 03), so the user always sees which connection they are on.
+    prompt: String,
 }
 
 impl RustylineSource {
-    fn new(history: Option<HistoryFile>, colorize: bool) -> rustyline::Result<Self> {
+    fn new(
+        history: Option<HistoryFile>,
+        colorize: bool,
+        prompt: String,
+    ) -> rustyline::Result<Self> {
         let mut editor = Editor::new()?;
         editor.set_helper(Some(MgHelper::new(colorize)));
         if let Some(history) = &history {
             history.load(editor.history_mut());
         }
-        Ok(Self { editor, history })
+        Ok(Self {
+            editor,
+            history,
+            prompt,
+        })
     }
 }
 
 impl LineSource for RustylineSource {
     fn read(&mut self, continued: bool) -> io::Result<Line> {
-        let prompt = if continued { "      -> " } else { "memgraph> " };
+        let prompt = if continued { "      -> " } else { &self.prompt };
         match self.editor.readline(prompt) {
             Ok(line) => {
                 if let Some(history) = &self.history {
@@ -515,10 +589,17 @@ impl QueryRunner for SessionRunner<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
     use std::io::Cursor;
 
     fn queries_of(input: &str) -> Vec<String> {
         read_queries(Cursor::new(input)).expect("read")
+    }
+
+    #[test]
+    fn the_prompt_names_the_active_profile() {
+        assert_eq!(repl_prompt(None), "memgraph> ");
+        assert_eq!(repl_prompt(Some("prod")), "memgraph (prod)> ");
     }
 
     #[test]

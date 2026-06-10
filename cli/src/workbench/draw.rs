@@ -451,8 +451,9 @@ fn draw_result(frame: &mut Frame, area: Rect, result: &CurrentResult, focused: b
     frame.render_widget(table, area);
 }
 
-/// Compose the status line: the current message (if any) followed by the
-/// keybind hints, including the universal newline key (issue 01 AC).
+/// Compose the status line: the active profile (issue 03), then the current
+/// message (if any), then the keybind hints, including the universal newline key
+/// (issue 01 AC).
 fn status_text(state: &WorkbenchState) -> String {
     let hints = format!(
         "Enter: run · {}: newline · Tab: focus · Ctrl-C: cancel · Esc/Ctrl-D: quit",
@@ -465,11 +466,18 @@ fn status_text(state: &WorkbenchState) -> String {
     } else {
         state.status.message.clone()
     };
-    if message.is_empty() {
-        hints
-    } else {
-        format!("{message}  │  {hints}")
-    }
+    // The active profile is a stable prefix so it survives transient messages.
+    let prefix = state
+        .config
+        .profile
+        .as_ref()
+        .map(|name| format!("[{name}]"))
+        .unwrap_or_default();
+    [prefix, message, hints]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("  │  ")
 }
 
 #[cfg(test)]
@@ -502,6 +510,24 @@ mod tests {
         assert!(rendered.contains("Query"), "editor pane titled");
         assert!(rendered.contains("Results"), "results pane titled");
         assert!(rendered.contains("Alt+Enter"), "newline key surfaced in the hint");
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_active_profile() {
+        let config = WorkbenchConfig {
+            profile: Some("prod".to_string()),
+            ..WorkbenchConfig::default()
+        };
+        let mut state = WorkbenchState::new(config, true);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("[prod]"), "status bar names the profile");
+    }
+
+    #[test]
+    fn the_status_bar_omits_the_profile_when_none_is_selected() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let rendered = render(&mut state);
+        assert!(!rendered.contains('['), "no stale profile marker: {rendered}");
     }
 
     #[test]

@@ -9,6 +9,8 @@
 use clap::{Parser, ValueEnum};
 use mgconsole_core::DisplayMode;
 
+use crate::config::Profile;
+
 pub mod config;
 pub mod frontend;
 pub mod history;
@@ -117,6 +119,12 @@ pub struct Cli {
     #[arg(long, value_parser = parse_display_mode)]
     pub display: Option<DisplayMode>,
 
+    /// Connect using a named profile from `config.toml` (`[profiles.<name>]`):
+    /// its endpoint/auth/TLS drive the connection and its setting overrides apply
+    /// at the config-file precedence layer. Explicit connection flags still win.
+    #[arg(long)]
+    pub profile: Option<String>,
+
     /// Use the line-based REPL instead of the full-screen TUI workbench (ADR
     /// 0010). The workbench is the default for a capable interactive terminal;
     /// `--plain` forces the minimal REPL, as does an incapable terminal.
@@ -176,6 +184,70 @@ pub struct Cli {
 /// the flag and the runtime `:set display` accept exactly the same spellings.
 fn parse_display_mode(value: &str) -> Result<DisplayMode, String> {
     value.parse()
+}
+
+/// Which connection flags were given explicitly on the command line, as opposed
+/// to left at their clap default. A profile fills only the flags the user did not
+/// set, so an explicit flag always wins over the profile (issue 03 precedence).
+// One bool per connection flag, a flat 1:1 map like [`Cli`] itself.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExplicitFlags {
+    pub host: bool,
+    pub port: bool,
+    pub username: bool,
+    pub password: bool,
+    pub use_ssl: bool,
+}
+
+/// The resolved *where* and *how* of a connection after folding flag, profile,
+/// and default together. `readonly` is carried for issue 04 to enforce.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Connection {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub use_ssl: bool,
+    pub readonly: bool,
+}
+
+/// Resolve the connection from flag > profile > default. An explicit flag wins;
+/// otherwise a selected profile's value fills in; otherwise the clap default
+/// (already sitting in `cli`'s field) stands. `readonly` has no flag yet, so it
+/// comes from the profile (defaulting to off).
+pub fn resolve_connection(
+    cli: &Cli,
+    explicit: &ExplicitFlags,
+    profile: Option<&Profile>,
+) -> Connection {
+    fn pick<T>(explicit: bool, flag: T, from_profile: Option<T>) -> T {
+        if explicit {
+            flag
+        } else {
+            from_profile.unwrap_or(flag)
+        }
+    }
+    Connection {
+        host: pick(
+            explicit.host,
+            cli.host.clone(),
+            profile.and_then(|p| p.host.clone()),
+        ),
+        port: pick(explicit.port, cli.port, profile.and_then(|p| p.port)),
+        username: pick(
+            explicit.username,
+            cli.username.clone(),
+            profile.and_then(|p| p.username.clone()),
+        ),
+        password: pick(
+            explicit.password,
+            cli.password.clone(),
+            profile.and_then(|p| p.password.clone()),
+        ),
+        use_ssl: pick(explicit.use_ssl, cli.use_ssl, profile.and_then(|p| p.use_ssl)),
+        readonly: profile.and_then(|p| p.readonly).unwrap_or(false),
+    }
 }
 
 /// Resolve the password to authenticate with, prompting only when a username is
@@ -312,6 +384,66 @@ mod tests {
             Some(DisplayMode::Auto)
         );
         assert!(parse(&["--display", "grid"]).is_err(), "unknown mode rejected");
+    }
+
+    #[test]
+    fn profile_flag_parses() {
+        assert_eq!(parse(&[]).expect("bare").profile, None);
+        assert_eq!(
+            parse(&["--profile", "prod"]).expect("prod").profile.as_deref(),
+            Some("prod")
+        );
+    }
+
+    #[test]
+    fn connection_resolves_flag_over_profile_over_default() {
+        let profile = Profile {
+            host: Some("db.example.com".to_string()),
+            port: Some(7688),
+            username: Some("neo".to_string()),
+            use_ssl: Some(false),
+            readonly: Some(true),
+            ..Profile::default()
+        };
+        // No explicit flags: the profile fills in, default stands where the
+        // profile is silent (password).
+        let from_profile = resolve_connection(
+            &parse(&[]).expect("bare"),
+            &ExplicitFlags::default(),
+            Some(&profile),
+        );
+        assert_eq!(from_profile.host, "db.example.com");
+        assert_eq!(from_profile.port, 7688);
+        assert_eq!(from_profile.username, "neo");
+        assert_eq!(from_profile.password, "", "profile silent → default empty");
+        assert!(!from_profile.use_ssl);
+        assert!(from_profile.readonly);
+
+        // An explicit --host wins over the profile.
+        let explicit = ExplicitFlags {
+            host: true,
+            ..ExplicitFlags::default()
+        };
+        let overridden = resolve_connection(
+            &parse(&["--host", "localhost"]).expect("host"),
+            &explicit,
+            Some(&profile),
+        );
+        assert_eq!(overridden.host, "localhost", "explicit flag beats profile");
+        assert_eq!(overridden.port, 7688, "unset flag still takes the profile");
+    }
+
+    #[test]
+    fn connection_with_no_profile_uses_the_flag_defaults() {
+        let conn = resolve_connection(
+            &parse(&[]).expect("bare"),
+            &ExplicitFlags::default(),
+            None,
+        );
+        assert_eq!(conn.host, "127.0.0.1");
+        assert_eq!(conn.port, 7687);
+        assert!(conn.use_ssl);
+        assert!(!conn.readonly);
     }
 
     #[test]
