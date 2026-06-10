@@ -28,7 +28,10 @@ use super::state::{
 // Events are consumed by value: slice 02's lifecycle events carry owned data
 // (a Record, a Summary, an Error) the reducer takes ownership of. Today's
 // Key/Resize payloads are Copy, so the lint is transitional to this slice.
-#[allow(clippy::needless_pass_by_value)]
+// One arm per event in the workbench's vocabulary; the match grows with each new
+// lifecycle/command event (issues 02–12). Splitting it would scatter the small
+// per-event state edits for no clarity gain.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
 pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
     match event {
         // The draw re-reads the terminal size each frame, so a resize needs no
@@ -95,6 +98,17 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
                 Err(message) => state.status.message = format!("error: {message}"),
             }
             Vec::new()
+        }
+        Event::Redirected { id, result } => {
+            if !is_current(state, id) {
+                return Vec::new();
+            }
+            state.status.message = match result {
+                Ok((path, rows)) => format!("wrote {rows} row(s) to {}", path.display()),
+                Err(message) => format!("error: {message}"),
+            };
+            // Like a completed query: run the next pending statement or fall idle.
+            advance(state)
         }
         Event::SourceLoaded(result) => match result {
             Ok(content) => {
@@ -658,7 +672,7 @@ fn export_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     }
     if let Some(prompt) = state.export.as_mut() {
         match key.code {
-            KeyCode::Tab => prompt.format = prompt.format.next(),
+            KeyCode::Tab => prompt.format = super::effect::next_export_format(prompt.format),
             KeyCode::Backspace => {
                 prompt.path.pop();
             }
@@ -735,10 +749,40 @@ fn submit(state: &mut WorkbenchState) -> Vec<Effect> {
         return Vec::new(); // a blank buffer submits nothing
     };
     state.pending = statements.collect();
-    let mut effects = start_query(state, first);
+    // A `:o` redirect (issue 12) sends the first statement to a file instead of
+    // the result pane (one-shot); the rest run normally after.
+    let mut effects = if let Some((format, path)) = state.redirect.take() {
+        start_query_to_file(state, first, format, path)
+    } else {
+        start_query(state, first)
+    };
     // The whole submission is one recallable history entry (slice 17).
     record_history(state, &buffer, &mut effects);
     effects
+}
+
+/// Begin a `:o`-redirected query (issue 12): like [`start_query`] but the result
+/// streams to a file instead of the pane, emitting [`Effect::RunQueryToFile`].
+fn start_query_to_file(
+    state: &mut WorkbenchState,
+    query: String,
+    format: crate::OutputFormat,
+    path: std::path::PathBuf,
+) -> Vec<Effect> {
+    let id = state.next_id;
+    state.next_id += 1;
+    state.run = RunState::Running { id };
+    state.spinner = 0;
+    state.status.message = format!("running… → {} ({format})", path.display());
+    state.running_statement = Some(query.clone());
+    state.last_query = Some(query.clone());
+    vec![Effect::RunQueryToFile {
+        id,
+        query,
+        params: state.params.clone(),
+        format,
+        path,
+    }]
 }
 
 /// Recall an older history entry into the editor (Ctrl+Up). On the first step the
@@ -905,6 +949,20 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             }
             state.editor.clear();
             vec![Effect::UseDatabase(database)]
+        }
+        // `:o` arms the next submitted query to stream to a file (issue 12);
+        // one-shot. An unknown format/extension is reported.
+        MetaCommand::Redirect(args) => {
+            state.editor.clear();
+            match crate::repl::parse_redirect(&args) {
+                Ok((format, path)) => {
+                    state.status.message =
+                        format!("next query → {} ({format})", path.display());
+                    state.redirect = Some((format, path));
+                }
+                Err(message) => state.status.message = format!("error: {message}"),
+            }
+            Vec::new()
         }
         // `:source` reads a file (issue 10) then runs its statements as a
         // stop-on-error batch. The file read is an effect; the run happens when
@@ -1465,7 +1523,7 @@ mod tests {
 
     #[test]
     fn e_opens_the_export_prompt_and_enter_emits_the_export_effect() {
-        use crate::workbench::effect::ExportFormat;
+        use crate::OutputFormat;
         let mut s = with_one_cell(Value::String("Ada".into()));
         update(&mut s, Event::Key(Key::char('e')));
         assert!(s.export.is_some(), "prompt opened");
@@ -1476,7 +1534,7 @@ mod tests {
         assert_eq!(effects.len(), 1);
         match &effects[0] {
             Effect::Export { format, path, rows, .. } => {
-                assert_eq!(*format, ExportFormat::Jsonl);
+                assert_eq!(*format, OutputFormat::Jsonl);
                 assert_eq!(path.to_str(), Some("/tmp/out.jsonl"));
                 assert_eq!(rows.len(), 1, "exports the on-screen rows");
             }
@@ -2039,6 +2097,42 @@ mod tests {
         update(&mut s, Event::SourceLoaded(Err("cannot read x: nope".to_string())));
         assert!(s.status.message.contains("error"), "status: {}", s.status.message);
         assert!(matches!(s.run, RunState::Idle));
+    }
+
+    // --- :o redirect (issue 12) ---------------------------------------------
+
+    #[test]
+    fn redirect_arms_then_the_next_query_runs_to_file() {
+        use crate::OutputFormat;
+        let mut s = wb();
+        type_str(&mut s, ":o csv /tmp/wb_o.csv");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(effects.is_empty(), "arming runs nothing");
+        assert!(s.redirect.is_some(), "redirect armed");
+
+        // The next query runs to file (one-shot).
+        type_str(&mut s, "RETURN 1;");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        match effects.first() {
+            Some(Effect::RunQueryToFile { query, format, path, .. }) => {
+                assert_eq!(query, "RETURN 1");
+                assert_eq!(*format, OutputFormat::Csv);
+                assert_eq!(path, &PathBuf::from("/tmp/wb_o.csv"));
+            }
+            other => panic!("expected RunQueryToFile, got {other:?}"),
+        }
+        assert!(s.redirect.is_none(), "one-shot: redirect cleared");
+
+        // The redirected query completes via the Redirected event and the session
+        // is idle again.
+        let id = match s.run { RunState::Running { id } => id, RunState::Idle => panic!("running") };
+        let effects = update(
+            &mut s,
+            Event::Redirected { id, result: Ok((PathBuf::from("/tmp/wb_o.csv"), 1)) },
+        );
+        assert!(effects.is_empty());
+        assert!(matches!(s.run, RunState::Idle));
+        assert!(s.status.message.contains("wrote 1 row"));
     }
 
     // --- :watch (issue 11) --------------------------------------------------

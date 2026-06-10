@@ -143,6 +143,12 @@ pub enum Event {
     /// A `:source` file was read (issue 10): `Ok(contents)` to run as a
     /// stop-on-error batch, or `Err(message)` for a missing/unreadable file.
     SourceLoaded(Result<String, String>),
+    /// A `:o` redirected query finished (issue 12), tagged with its `id`:
+    /// `Ok((path, rows))` written, or `Err(message)`.
+    Redirected {
+        id: u64,
+        result: Result<(PathBuf, usize), String>,
+    },
 }
 
 /// The new connection facts after a successful `:connect` swap (issue 07).

@@ -324,7 +324,7 @@ fn format_parser_report(report: &ParserReport, stats: bool) -> String {
 /// onto the Core's render format for the serial import path.
 fn import_format(cli: &Cli, table_options: TableOptions) -> ImportFormat {
     match cli.output_format {
-        OutputFormat::Tabular => ImportFormat::Tabular(table_options),
+        OutputFormat::Table => ImportFormat::Tabular(table_options),
         OutputFormat::Csv => ImportFormat::Csv(CsvOptions {
             delimiter: cli.csv_delimiter as u8,
             quote: b'"',
@@ -733,6 +733,64 @@ impl QueryRunner for SessionRunner<'_> {
             prompt.database = Some(database.to_string());
         }
         Ok(())
+    }
+
+    fn run_to_file(
+        &mut self,
+        query: &str,
+        params: &BTreeMap<String, Value>,
+        format: OutputFormat,
+        path: &std::path::Path,
+    ) -> Result<usize, Error> {
+        use mgconsole_core::format::{CypherlWriter, JsonlWriter, RowWriter};
+        let runtime = self.runtime;
+        let session = &mut self.session;
+        runtime.block_on(async move {
+            let mut result = session.run_with_params(query, params).await?;
+            let header = Header::new(result.header());
+            let file = std::fs::File::create(path).map_err(|e| Error::Output(e.to_string()))?;
+            let mut sink = std::io::BufWriter::new(file);
+            let mut rows = 0usize;
+            match format {
+                // Streaming formats: write each row as it arrives (bounded memory).
+                OutputFormat::Csv | OutputFormat::Jsonl | OutputFormat::Cypherl => {
+                    let mut writer: Box<dyn RowWriter> = match format {
+                        OutputFormat::Csv => Box::new(mgconsole_core::format::CsvWriter::new(
+                            &mut sink,
+                            &CsvOptions::default(),
+                        )),
+                        OutputFormat::Jsonl => Box::new(JsonlWriter::new(&mut sink)),
+                        _ => Box::new(CypherlWriter::new(&mut sink)),
+                    };
+                    writer.write_header(&header)?;
+                    while let Some(record) = result.records().next().await? {
+                        writer.write_row(record.fields())?;
+                        rows += 1;
+                    }
+                    writer.finish()?;
+                }
+                // `table` buffers (the documented exception) and writes the layout.
+                OutputFormat::Table => {
+                    let records = result.records().collect().await?;
+                    let fields: Vec<Vec<Value>> = records
+                        .into_iter()
+                        .map(mgconsole_core::Record::into_fields)
+                        .collect();
+                    rows = fields.len();
+                    let opts = RenderOptions {
+                        mode: DisplayMode::Tabular,
+                        ..RenderOptions::default()
+                    };
+                    std::io::Write::write_all(
+                        &mut sink,
+                        render_records(&header, &fields, &opts).as_bytes(),
+                    )
+                    .map_err(|e| Error::Output(e.to_string()))?;
+                }
+            }
+            std::io::Write::flush(&mut sink).map_err(|e| Error::Output(e.to_string()))?;
+            Ok(rows)
+        })
     }
 
     fn watch(

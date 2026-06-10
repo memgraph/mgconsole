@@ -21,15 +21,70 @@ pub mod syntax;
 #[cfg(feature = "tui")]
 pub mod workbench;
 
-/// Output format for a Query result (CONTEXT.md: tabular buffers; csv/jsonl/
-/// cypherl stream). `jsonl` is the addition over today's mgconsole flags.
+/// The one output-format vocabulary (issue 12): `csv | jsonl | cypherl | table`,
+/// used identically by the batch `--output-format` flag, the Workbench export
+/// gesture, and `:o` redirection. `csv`/`jsonl`/`cypherl` stream; `table` is the
+/// buffer-all tabular layout. (`tabular` is accepted as an alias of `table`.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "lower")]
 pub enum OutputFormat {
-    Tabular,
+    #[value(alias = "tabular")]
+    Table,
     Csv,
     Jsonl,
     Cypherl,
+}
+
+impl OutputFormat {
+    /// The canonical lowercase name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OutputFormat::Table => "table",
+            OutputFormat::Csv => "csv",
+            OutputFormat::Jsonl => "jsonl",
+            OutputFormat::Cypherl => "cypherl",
+        }
+    }
+
+    /// Whether this format streams row-by-row (bounded memory) rather than
+    /// buffering the whole result like `table` does.
+    pub fn is_streaming(self) -> bool {
+        !matches!(self, OutputFormat::Table)
+    }
+
+    /// Infer the format from a file extension (issue 12): `.csv`, `.jsonl`,
+    /// `.cypherl`/`.cypher`, `.txt`/`.tsv` → table. Unknown extensions are `None`.
+    pub fn from_extension(path: &std::path::Path) -> Option<Self> {
+        match path.extension().and_then(|e| e.to_str())?.to_ascii_lowercase().as_str() {
+            "csv" => Some(OutputFormat::Csv),
+            "jsonl" | "json" => Some(OutputFormat::Jsonl),
+            "cypherl" | "cypher" | "cql" => Some(OutputFormat::Cypherl),
+            "txt" | "tsv" | "table" => Some(OutputFormat::Table),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for OutputFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for OutputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "table" | "tabular" => Ok(OutputFormat::Table),
+            "csv" => Ok(OutputFormat::Csv),
+            "jsonl" => Ok(OutputFormat::Jsonl),
+            "cypherl" => Ok(OutputFormat::Cypherl),
+            other => Err(format!(
+                "unknown format '{other}' (expected csv, jsonl, cypherl, or table)"
+            )),
+        }
+    }
 }
 
 /// When to colour interactive input (ADR 0009). `auto` — the default — means on
@@ -112,7 +167,7 @@ pub struct Cli {
     pub read_only: bool,
 
     /// Output format for query results.
-    #[arg(long, value_enum, default_value_t = OutputFormat::Tabular)]
+    #[arg(long, value_enum, default_value_t = OutputFormat::Table)]
     pub output_format: OutputFormat,
 
     /// Truncate tabular output to fit the terminal width.
@@ -387,7 +442,7 @@ mod tests {
         assert_eq!(cli.password, "");
         assert!(cli.use_ssl);
         assert!(!cli.read_only, "read-only is opt-in");
-        assert_eq!(cli.output_format, OutputFormat::Tabular);
+        assert_eq!(cli.output_format, OutputFormat::Table);
         assert!(!cli.fit_to_screen);
         assert_eq!(cli.display, None, "no --display flag: the built-in default applies");
         assert!(!cli.plain, "the workbench is the default; --plain is opt-in");
@@ -625,7 +680,7 @@ mod tests {
     #[test]
     fn every_output_format_parses() {
         for (text, want) in [
-            ("tabular", OutputFormat::Tabular),
+            ("tabular", OutputFormat::Table),
             ("csv", OutputFormat::Csv),
             ("jsonl", OutputFormat::Jsonl),
             ("cypherl", OutputFormat::Cypherl),
@@ -689,6 +744,26 @@ mod tests {
         let err = resolve_password("alice", "", || Ok(String::new()))
             .expect_err("empty password rejected");
         assert!(err.contains("alice"), "message names the user: {err}");
+    }
+
+    #[test]
+    fn output_format_vocabulary_parses_and_infers() {
+        use std::path::Path;
+        // FromStr accepts the shared vocabulary (and the `tabular` alias).
+        assert_eq!("csv".parse(), Ok(OutputFormat::Csv));
+        assert_eq!("table".parse(), Ok(OutputFormat::Table));
+        assert_eq!("tabular".parse(), Ok(OutputFormat::Table));
+        assert!("xml".parse::<OutputFormat>().is_err());
+        // Extension inference.
+        assert_eq!(OutputFormat::from_extension(Path::new("a.csv")), Some(OutputFormat::Csv));
+        assert_eq!(OutputFormat::from_extension(Path::new("a.jsonl")), Some(OutputFormat::Jsonl));
+        assert_eq!(
+            OutputFormat::from_extension(Path::new("a.cypherl")),
+            Some(OutputFormat::Cypherl)
+        );
+        assert_eq!(OutputFormat::from_extension(Path::new("a.weird")), None);
+        // Display round-trips.
+        assert_eq!(OutputFormat::Cypherl.to_string(), "cypherl");
     }
 
     #[test]

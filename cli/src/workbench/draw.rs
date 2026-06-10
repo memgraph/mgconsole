@@ -299,7 +299,7 @@ fn draw_export(frame: &mut Frame, prompt: &ExportPrompt) {
         .title("Export result (Tab: format · Enter: write · Esc: cancel)");
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let text = format!("Format: {}\nPath:   {}_", prompt.format.label(), prompt.path);
+    let text = format!("Format: {}\nPath:   {}_", prompt.format.as_str(), prompt.path);
     frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
 }
 

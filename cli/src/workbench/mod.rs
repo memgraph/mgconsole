@@ -44,7 +44,7 @@ use mgconsole_core::{Error, Record, Session, Value};
 use rustyline::history::{FileHistory, History, SearchDirection};
 
 use crate::history::HistoryFile;
-use effect::ExportFormat;
+use crate::OutputFormat;
 use schema::{parse_schema, NODE_PROPERTIES_QUERY, REL_PROPERTIES_QUERY};
 use terminal::TerminalGuard;
 
@@ -189,6 +189,18 @@ pub async fn run(
                         Err(message) => Err(message),
                     };
                     let _ = tx.send(Event::Connected(outcome));
+                }
+                Effect::RunQueryToFile { id, query, params, format, path } => {
+                    // Stream the query's result to a file (issue 12) off the render
+                    // loop; report rows written via the tagged Redirected event.
+                    if let Some(task) = running.take() {
+                        task.abort();
+                    }
+                    let session = Arc::clone(&session);
+                    let tx = tx.clone();
+                    running = Some(tokio::spawn(run_query_to_file(
+                        session, tx, id, query, params, format, path,
+                    )));
                 }
                 Effect::Source(path) => {
                     // Read the file off the render loop; the reducer runs its
@@ -386,9 +398,10 @@ async fn evaluate_param(
 }
 
 /// Write the on-screen result to `path` in `format`, reusing the Core's streaming
-/// row writers (slice 09). Returns a human-readable message on failure.
+/// row writers (slice 09) and the shared format vocabulary (issue 12). Returns a
+/// human-readable message on failure.
 fn write_export(
-    format: ExportFormat,
+    format: OutputFormat,
     path: &Path,
     header: &[String],
     rows: &[Record],
@@ -397,15 +410,106 @@ fn write_export(
     let mut sink = BufWriter::new(file);
     let header = Header::new(header.to_vec());
     match format {
-        ExportFormat::Csv => write_rows(
+        OutputFormat::Csv => write_rows(
             &mut CsvWriter::new(&mut sink, &CsvOptions::default()),
             &header,
             rows,
         )?,
-        ExportFormat::Jsonl => write_rows(&mut JsonlWriter::new(&mut sink), &header, rows)?,
-        ExportFormat::Cypherl => write_rows(&mut CypherlWriter::new(&mut sink), &header, rows)?,
+        OutputFormat::Jsonl => write_rows(&mut JsonlWriter::new(&mut sink), &header, rows)?,
+        OutputFormat::Cypherl => write_rows(&mut CypherlWriter::new(&mut sink), &header, rows)?,
+        // The export prompt never offers `table`, but render the layout if asked.
+        OutputFormat::Table => {
+            let fields: Vec<Vec<Value>> = rows.iter().map(|r| r.fields().to_vec()).collect();
+            let opts = mgconsole_core::RenderOptions {
+                mode: mgconsole_core::DisplayMode::Tabular,
+                ..mgconsole_core::RenderOptions::default()
+            };
+            write!(sink, "{}", mgconsole_core::render_records(&header, &fields, &opts))
+                .map_err(|e| e.to_string())?;
+        }
     }
     sink.flush().map_err(|e| e.to_string())
+}
+
+/// Run a query and stream its result to a file (`:o`, issue 12), reporting the
+/// rows written via a tagged [`Event::Redirected`]. Streams row-by-row for the
+/// streaming formats (bounded memory); `table` buffers as it must.
+async fn run_query_to_file(
+    session: Arc<Mutex<Session>>,
+    tx: mpsc::UnboundedSender<Event>,
+    id: u64,
+    query: String,
+    params: BTreeMap<String, Value>,
+    format: OutputFormat,
+    path: std::path::PathBuf,
+) {
+    let result = stream_query_to_file(&session, &query, &params, format, &path).await;
+    let _ = tx.send(Event::Redirected {
+        id,
+        result: result.map(|rows| (path, rows)),
+    });
+}
+
+/// The async body of `:o`: run the query and write its result to `path`.
+async fn stream_query_to_file(
+    session: &Arc<Mutex<Session>>,
+    query: &str,
+    params: &BTreeMap<String, Value>,
+    format: OutputFormat,
+    path: &Path,
+) -> Result<usize, String> {
+    let mut session = session.lock().await;
+    let mut result = session
+        .run_with_params(query, params)
+        .await
+        .map_err(|e| e.to_string())?;
+    let header = Header::new(result.header().to_vec());
+    let file = File::create(path).map_err(|e| e.to_string())?;
+    let mut sink = BufWriter::new(file);
+    // Stream row-by-row through a concrete writer (no trait object, so the spawned
+    // future stays `Send`); `table` buffers as the documented exception.
+    let rows = match format {
+        OutputFormat::Csv => {
+            stream_rows(CsvWriter::new(&mut sink, &CsvOptions::default()), &header, &mut result)
+                .await?
+        }
+        OutputFormat::Jsonl => {
+            stream_rows(JsonlWriter::new(&mut sink), &header, &mut result).await?
+        }
+        OutputFormat::Cypherl => {
+            stream_rows(CypherlWriter::new(&mut sink), &header, &mut result).await?
+        }
+        OutputFormat::Table => {
+            let records = result.records().collect().await.map_err(|e| e.to_string())?;
+            let fields: Vec<Vec<Value>> = records.into_iter().map(Record::into_fields).collect();
+            let opts = mgconsole_core::RenderOptions {
+                mode: mgconsole_core::DisplayMode::Tabular,
+                ..mgconsole_core::RenderOptions::default()
+            };
+            write!(sink, "{}", mgconsole_core::render_records(&header, &fields, &opts))
+                .map_err(|e| e.to_string())?;
+            fields.len()
+        }
+    };
+    sink.flush().map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// Drive a query's record stream through one concrete [`RowWriter`], returning the
+/// rows written. Generic (not a trait object) so the spawned `:o` task is `Send`.
+async fn stream_rows<W: RowWriter>(
+    mut writer: W,
+    header: &Header,
+    result: &mut mgconsole_core::QueryResult,
+) -> Result<usize, String> {
+    writer.write_header(header).map_err(|e| e.to_string())?;
+    let mut rows = 0usize;
+    while let Some(record) = result.records().next().await.map_err(|e| e.to_string())? {
+        writer.write_row(record.fields()).map_err(|e| e.to_string())?;
+        rows += 1;
+    }
+    writer.finish().map_err(|e| e.to_string())?;
+    Ok(rows)
 }
 
 /// Drive the in-memory rows through a [`RowWriter`]: header, then each row.

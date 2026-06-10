@@ -15,9 +15,12 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::time::Duration;
 
+use std::path::PathBuf;
+
 use mgconsole_core::{render, tabular, DisplayMode, Error, QueryAssembler, TransactionState, Value};
 
 use crate::settings::Settings;
+use crate::OutputFormat;
 
 /// Whether a buffer the user has entered is a complete submission, or still
 /// needs a continuation line. Drives rustyline's `Validator`: incomplete input
@@ -76,6 +79,9 @@ pub enum MetaCommand {
     /// `:watch [interval] [query]` — re-run a query on a timer (issue 11). The
     /// raw argument is parsed at dispatch time, where the last query is known.
     Watch(String),
+    /// `:o [format] <file>` — redirect the next query's result to a file (issue
+    /// 12). The raw argument is parsed at dispatch time.
+    Redirect(String),
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -127,6 +133,15 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
             }
         }
         "watch" => MetaCommand::Watch(args.to_string()),
+        "o" => {
+            if args.is_empty() {
+                MetaCommand::Invalid(
+                    ":o needs a file path, e.g. ':o out.csv' or ':o csv out.txt'".to_string(),
+                )
+            } else {
+                MetaCommand::Redirect(args.to_string())
+            }
+        }
         _ => MetaCommand::Unknown(trimmed.to_string()),
     })
 }
@@ -260,7 +275,8 @@ pub fn help_text() -> &'static str {
      \t:use <db>              Switch the active database (multi-tenancy)\n\
      \t:sysinfo               Show server version and storage/runtime info\n\
      \t:source <file>         Run a file's queries and commands in this session\n\
-     \t:watch [interval] [q]  Re-run a query on a timer (default 2s; Enter stops)"
+     \t:watch [interval] [q]  Re-run a query on a timer (default 2s; Enter stops)\n\
+     \t:o [format] <file>     Redirect the next query's result to a file (csv/jsonl/cypherl/table)"
 }
 
 /// Documentation pointers, printed by `:docs`. Carried over from `mgconsole`.
@@ -379,6 +395,17 @@ pub trait QueryRunner {
         display: DisplayMode,
         out: &mut dyn Write,
     ) -> io::Result<()>;
+
+    /// Run `query` and stream its result to `path` in `format` (`:o`, issue 12),
+    /// returning the number of rows written. Streams row-by-row for the streaming
+    /// formats (bounded memory); `table` buffers as it must.
+    fn run_to_file(
+        &mut self,
+        query: &str,
+        params: &BTreeMap<String, Value>,
+        format: OutputFormat,
+        path: &std::path::Path,
+    ) -> Result<usize, Error>;
 }
 
 /// Frontend-local REPL configuration.
@@ -434,6 +461,33 @@ pub fn parse_watch(args: &str, last_query: Option<&str>) -> Result<WatchSpec, St
         rest.to_string()
     };
     Ok(WatchSpec { interval, query })
+}
+
+/// Parse `:o [format] <file>` (issue 12). A leading token that names a format
+/// (`csv`/`jsonl`/`cypherl`/`table`) sets it and the rest is the path; otherwise
+/// the whole argument is the path and the format is inferred from its extension.
+/// An unknown format/extension is a clear error.
+pub fn parse_redirect(args: &str) -> Result<(OutputFormat, PathBuf), String> {
+    let args = args.trim();
+    if args.is_empty() {
+        return Err(":o needs a file path".to_string());
+    }
+    let (first, rest) = split_first_word(args);
+    if let Ok(format) = first.parse::<OutputFormat>() {
+        if rest.is_empty() {
+            return Err(format!(":o {first} needs a file path, e.g. ':o {first} out.{first}'"));
+        }
+        return Ok((format, PathBuf::from(rest)));
+    }
+    let path = PathBuf::from(args);
+    let format = OutputFormat::from_extension(&path).ok_or_else(|| {
+        format!(
+            "cannot infer a format from '{}'; name one: ':o csv {}'",
+            path.display(),
+            path.display()
+        )
+    })?;
+    Ok((format, path))
 }
 
 /// Parse a `:watch` interval token: a plain number or `Ns` is seconds (fractions
@@ -509,6 +563,7 @@ fn dispatch_meta(
     settings: &mut Settings,
     params: &mut BTreeMap<String, Value>,
     last_query: Option<&str>,
+    pending_redirect: &mut Option<(OutputFormat, PathBuf)>,
     row_cap: usize,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -611,6 +666,14 @@ fn dispatch_meta(
                 writeln!(err, "error: :watch is refused while a transaction is open")?;
             }
         }
+        // `:o` arms the next query to redirect to a file (issue 12); one-shot.
+        MetaCommand::Redirect(args) => match parse_redirect(&args) {
+            Ok((format, path)) => {
+                writeln!(out, "next query → {} ({format})", path.display())?;
+                *pending_redirect = Some((format, path));
+            }
+            Err(message) => writeln!(err, "error: {message}")?,
+        },
         MetaCommand::Invalid(message) => writeln!(err, "error: {message}")?,
         MetaCommand::Unknown(cmd) => writeln!(err, "error: unknown command '{cmd}'")?,
     }
@@ -631,6 +694,7 @@ fn source_content(
     err: &mut dyn Write,
 ) -> io::Result<()> {
     let mut assembler = QueryAssembler::new();
+    let mut pending_redirect: Option<(OutputFormat, PathBuf)> = None;
     for line in content.lines() {
         if !assembler.has_pending() {
             if let Some(cmd) = meta_command(line) {
@@ -638,13 +702,29 @@ fn source_content(
                 if matches!(cmd, MetaCommand::Quit) {
                     return Ok(());
                 }
-                dispatch_meta(cmd, runner, settings, params, None, row_cap, out, err)?;
+                dispatch_meta(
+                    cmd,
+                    runner,
+                    settings,
+                    params,
+                    None,
+                    &mut pending_redirect,
+                    row_cap,
+                    out,
+                    err,
+                )?;
                 continue;
             }
         }
         for query in assembler.push(&format!("{line}\n")) {
             writeln!(out, "{query}")?;
-            if !execute_query(runner, &query, params, settings.display, row_cap, out, err)? {
+            if let Some((format, path)) = pending_redirect.take() {
+                if let Err(e) = runner.run_to_file(&query, params, format, &path) {
+                    writeln!(err, "error: {e}")?;
+                    writeln!(err, "source stopped at the failed statement")?;
+                    return Ok(());
+                }
+            } else if !execute_query(runner, &query, params, settings.display, row_cap, out, err)? {
                 writeln!(err, "source stopped at the failed statement")?;
                 return Ok(());
             }
@@ -655,7 +735,13 @@ fn source_content(
         let query = assembler.pending().trim().to_string();
         if !query.is_empty() {
             writeln!(out, "{query}")?;
-            execute_query(runner, &query, params, settings.display, row_cap, out, err)?;
+            if let Some((format, path)) = pending_redirect.take() {
+                if let Err(e) = runner.run_to_file(&query, params, format, &path) {
+                    writeln!(err, "error: {e}")?;
+                }
+            } else {
+                execute_query(runner, &query, params, settings.display, row_cap, out, err)?;
+            }
         }
     }
     Ok(())
@@ -676,6 +762,8 @@ pub fn run_loop(
     let mut settings = config.settings.clone();
     // The most recently run query, so `:watch` with no query reuses it (issue 11).
     let mut last_query: Option<String> = None;
+    // A one-shot `:o` redirect armed for the next query (issue 12).
+    let mut pending_redirect: Option<(OutputFormat, PathBuf)> = None;
     loop {
         let continued = assembler.has_pending();
         let text = match source.read(continued)? {
@@ -699,6 +787,7 @@ pub fn run_loop(
                     &mut settings,
                     &mut params,
                     last_query.as_deref(),
+                    &mut pending_redirect,
                     config.row_cap,
                     out,
                     err,
@@ -712,7 +801,18 @@ pub fn run_loop(
         // The trailing newline lets a line comment close and separates physical
         // lines when assembling across reads.
         for query in assembler.push(&format!("{text}\n")) {
-            execute_query(runner, &query, &params, settings.display, config.row_cap, out, err)?;
+            // A `:o` redirect (issue 12) sends the next query's result to a file
+            // (one-shot); otherwise it renders to the screen.
+            if let Some((format, path)) = pending_redirect.take() {
+                match runner.run_to_file(&query, &params, format, &path) {
+                    Ok(rows) => {
+                        writeln!(out, "wrote {rows} row(s) to {} ({format})", path.display())?;
+                    }
+                    Err(e) => writeln!(err, "error: {e}")?,
+                }
+            } else {
+                execute_query(runner, &query, &params, settings.display, config.row_cap, out, err)?;
+            }
             last_query = Some(query);
         }
     }
@@ -1041,6 +1141,44 @@ mod tests {
     }
 
     #[test]
+    fn parse_redirect_infers_or_takes_an_explicit_format() {
+        // Explicit format + path.
+        let (fmt, path) = parse_redirect("csv /tmp/out.txt").expect("explicit");
+        assert_eq!(fmt, OutputFormat::Csv);
+        assert_eq!(path, PathBuf::from("/tmp/out.txt"));
+        // Inferred from the extension.
+        let (fmt, path) = parse_redirect("/tmp/data.jsonl").expect("inferred");
+        assert_eq!(fmt, OutputFormat::Jsonl);
+        assert_eq!(path, PathBuf::from("/tmp/data.jsonl"));
+        // Unknown extension with no explicit format is an error.
+        assert!(parse_redirect("/tmp/data.weird").is_err());
+        assert!(parse_redirect("").is_err());
+    }
+
+    #[test]
+    fn redirect_sends_only_the_next_query_to_a_file() {
+        let (_src, runner, out, _err) = drive(
+            vec![
+                Line::Text(":o csv /tmp/mg_o_test.csv".into()),
+                Line::Text("RETURN 1;".into()),
+                Line::Text("RETURN 2;".into()),
+            ],
+            vec![Ok(ok_result("a", 1))], // only the screen query consumes a result
+        );
+        // The first query went to the file; the second rendered to screen.
+        assert_eq!(
+            runner.redirected,
+            vec![(
+                "RETURN 1".to_string(),
+                OutputFormat::Csv,
+                PathBuf::from("/tmp/mg_o_test.csv")
+            )]
+        );
+        assert_eq!(runner.seen, vec!["RETURN 2".to_string()], "only the 2nd hit the screen path");
+        assert!(out.contains("next query →"), "redirect armed: {out}");
+    }
+
+    #[test]
     fn format_params_reads_clearly_when_empty() {
         assert_eq!(format_params(&BTreeMap::new()), "No parameters set.");
     }
@@ -1116,6 +1254,7 @@ mod tests {
         connected: Vec<String>,
         used: Vec<String>,
         watched: Vec<(String, Duration)>,
+        redirected: Vec<(String, OutputFormat, PathBuf)>,
     }
 
     impl ScriptedRunner {
@@ -1132,6 +1271,7 @@ mod tests {
                 connected: Vec::new(),
                 used: Vec::new(),
                 watched: Vec::new(),
+                redirected: Vec::new(),
             }
         }
 
@@ -1216,6 +1356,18 @@ mod tests {
             // scripted loop never blocks on real time/stdin.
             self.watched.push((query.to_string(), interval));
             Ok(())
+        }
+
+        fn run_to_file(
+            &mut self,
+            query: &str,
+            _params: &BTreeMap<String, Value>,
+            format: OutputFormat,
+            path: &std::path::Path,
+        ) -> Result<usize, Error> {
+            self.redirected
+                .push((query.to_string(), format, path.to_path_buf()));
+            Ok(0)
         }
     }
 

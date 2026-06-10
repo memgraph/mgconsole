@@ -13,33 +13,18 @@ use std::path::PathBuf;
 
 use mgconsole_core::{Record, Value};
 
-/// The on-screen result can be exported in any of the Core's streaming formats
-/// (slice 09); tabular is the buffered REPL format and not an export target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExportFormat {
-    Csv,
-    Jsonl,
-    Cypherl,
-}
+use crate::OutputFormat;
 
-impl ExportFormat {
-    /// Cycle to the next format (the export prompt's Tab).
-    #[must_use]
-    pub fn next(self) -> Self {
-        match self {
-            ExportFormat::Csv => ExportFormat::Jsonl,
-            ExportFormat::Jsonl => ExportFormat::Cypherl,
-            ExportFormat::Cypherl => ExportFormat::Csv,
-        }
-    }
-
-    /// The format's display name.
-    pub fn label(self) -> &'static str {
-        match self {
-            ExportFormat::Csv => "csv",
-            ExportFormat::Jsonl => "jsonl",
-            ExportFormat::Cypherl => "cypherl",
-        }
+/// Cycle the export prompt through the streaming formats only (issue 12): the
+/// on-screen export targets are `csv | jsonl | cypherl`; `table` is the buffered
+/// REPL/screen layout and not an export target, so it is skipped.
+#[must_use]
+pub fn next_export_format(format: OutputFormat) -> OutputFormat {
+    match format {
+        OutputFormat::Csv => OutputFormat::Jsonl,
+        OutputFormat::Jsonl => OutputFormat::Cypherl,
+        // Cypherl wraps round; `table` (never offered) normalises to csv.
+        OutputFormat::Cypherl | OutputFormat::Table => OutputFormat::Csv,
     }
 }
 
@@ -90,7 +75,7 @@ pub enum Effect {
     /// streaming writers (slice 09). Carries the loaded rows (including a partial
     /// result after a cancel), so the export reflects exactly what is shown.
     Export {
-        format: ExportFormat,
+        format: OutputFormat,
         path: PathBuf,
         header: Vec<String>,
         rows: Vec<Record>,
@@ -110,6 +95,15 @@ pub enum Effect {
     /// Read a file for `:source` (issue 10); its statements then run as a
     /// stop-on-error batch.
     Source(PathBuf),
+    /// Run `query` and stream its result to a file (`:o`, issue 12) instead of the
+    /// result pane; `id` matches the lifecycle like a normal run.
+    RunQueryToFile {
+        id: u64,
+        query: String,
+        params: BTreeMap<String, Value>,
+        format: OutputFormat,
+        path: PathBuf,
+    },
     /// Leave the workbench and restore the terminal.
     Quit,
 }

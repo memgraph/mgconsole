@@ -16,7 +16,7 @@ use tui_textarea::{Input, Key as TaKey, TextArea};
 use crate::settings::Settings;
 use crate::syntax::{word_start, Completer};
 
-use super::effect::ExportFormat;
+use crate::OutputFormat;
 use super::event::{Key, KeyCode};
 use super::plan::Plan;
 use super::schema::Schema;
@@ -35,14 +35,14 @@ pub struct Completion {
 /// path being typed.
 #[derive(Debug, Clone)]
 pub struct ExportPrompt {
-    pub format: ExportFormat,
+    pub format: OutputFormat,
     pub path: String,
 }
 
 impl Default for ExportPrompt {
     fn default() -> Self {
         Self {
-            format: ExportFormat::Csv,
+            format: OutputFormat::Csv,
             path: String::new(),
         }
     }
@@ -143,6 +143,8 @@ pub struct WorkbenchState {
     pub watch: Option<WatchState>,
     /// The most recently submitted query, so `:watch` with no query reuses it.
     pub last_query: Option<String>,
+    /// A one-shot `:o` redirect armed for the next submitted query (issue 12).
+    pub redirect: Option<(crate::OutputFormat, std::path::PathBuf)>,
     /// Frontend-local configuration.
     pub config: WorkbenchConfig,
 }
@@ -183,6 +185,7 @@ impl WorkbenchState {
             source_halt: false,
             watch: None,
             last_query: None,
+            redirect: None,
             config,
         }
     }
