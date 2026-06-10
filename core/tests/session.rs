@@ -2,7 +2,7 @@
 
 mod common;
 
-use mgconsole_core::{Credentials, Error, Session, Value};
+use mgconsole_core::{ConnectOptions, Credentials, Error, Session, Value};
 
 #[tokio::test]
 async fn runs_a_scalar_query_against_live_memgraph() {
@@ -68,11 +68,14 @@ async fn authenticates_with_valid_credentials_and_rejects_bad_ones() {
         created.records().discard().await.expect("commit create user");
     }
 
-    let good = Credentials {
-        username: "tester".to_string(),
-        password: "secret".to_string(),
+    let good = ConnectOptions {
+        credentials: Some(Credentials {
+            username: "tester".to_string(),
+            password: "secret".to_string(),
+        }),
+        ..ConnectOptions::default()
     };
-    let mut session = Session::connect_with(&mg.host, mg.port, Some(&good))
+    let mut session = Session::connect_with(&mg.host, mg.port, &good)
         .await
         .expect("valid credentials authenticate");
     let mut result = session.run("RETURN 1 AS n").await.expect("authed query runs");
@@ -84,14 +87,44 @@ async fn authenticates_with_valid_credentials_and_rejects_bad_ones() {
         .expect("one record");
     assert_eq!(record.fields(), &[Value::Integer(1)]);
 
-    let bad = Credentials {
-        username: "tester".to_string(),
-        password: "wrong".to_string(),
+    let bad = ConnectOptions {
+        credentials: Some(Credentials {
+            username: "tester".to_string(),
+            password: "wrong".to_string(),
+        }),
+        ..ConnectOptions::default()
     };
-    match Session::connect_with(&mg.host, mg.port, Some(&bad)).await {
+    match Session::connect_with(&mg.host, mg.port, &bad).await {
         Err(Error::Auth(_)) => {}
         Err(other) => panic!("expected an auth error, got {other:?}"),
         Ok(_) => panic!("bad credentials must not authenticate"),
+    }
+}
+
+#[tokio::test]
+async fn connects_over_tls_to_an_ssl_configured_container() {
+    let mg = common::start_memgraph_tls().await;
+
+    let tls = ConnectOptions {
+        use_tls: true,
+        ..ConnectOptions::default()
+    };
+    let mut session = Session::connect_with(&mg.host, mg.port, &tls)
+        .await
+        .expect("TLS connection established");
+    let mut result = session.run("RETURN 42 AS n").await.expect("query over TLS");
+    let record = result
+        .records()
+        .next()
+        .await
+        .expect("stream ok")
+        .expect("one record");
+    assert_eq!(record.fields(), &[Value::Integer(42)]);
+
+    // A plaintext connection to the same (TLS-only) port must fail, not panic.
+    match Session::connect(&mg.host, mg.port).await {
+        Err(_) => {}
+        Ok(_) => panic!("plaintext must not connect to a TLS-only Bolt port"),
     }
 }
 

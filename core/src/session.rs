@@ -12,15 +12,15 @@ use std::sync::Arc;
 use bolt_client::{Client, Metadata};
 use bolt_proto::{version::*, Message};
 use tokio::io::BufStream;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt};
 
 use crate::error::Error;
 use crate::proto;
 use crate::result::{QueryResult, RecordStream, Summary, DEFAULT_BATCH_SIZE};
+use crate::transport::{self, MaybeTlsStream};
 
-pub(crate) type Conn = Client<Compat<BufStream<TcpStream>>>;
+pub(crate) type Conn = Client<Compat<BufStream<MaybeTlsStream>>>;
 pub(crate) type SharedConn = Arc<Mutex<Conn>>;
 
 const USER_AGENT: &str = concat!("mgconsole/", env!("CARGO_PKG_VERSION"));
@@ -31,35 +31,44 @@ pub struct Credentials {
     pub password: String,
 }
 
+/// How a [`Session`] is opened: authentication and transport security.
+#[derive(Default)]
+pub struct ConnectOptions {
+    /// Basic-auth credentials, or `None` for an anonymous connection.
+    pub credentials: Option<Credentials>,
+    /// Encrypt the Bolt stream with TLS (rustls; ADR 0007).
+    pub use_tls: bool,
+}
+
 pub struct Session {
     conn: SharedConn,
 }
 
 impl Session {
-    /// Connect unauthenticated (HELLO with `scheme: none`).
+    /// Connect unauthenticated over plaintext (HELLO with `scheme: none`).
     pub async fn connect(host: &str, port: u16) -> Result<Self, Error> {
-        Self::connect_with(host, port, None).await
+        Self::connect_with(host, port, &ConnectOptions::default()).await
     }
 
     /// Connect to a Memgraph server and perform the Bolt handshake + HELLO,
-    /// authenticating with `credentials` when supplied (`scheme: basic`).
+    /// honouring `options`: TLS when requested, and basic auth when credentials
+    /// are supplied (`scheme: basic`).
     ///
     /// A HELLO refusal is reported as [`Error::Auth`] so the Frontend can tell a
-    /// rejected password apart from a transport failure.
+    /// rejected password apart from a transport failure; a TLS handshake failure
+    /// surfaces as [`Error::Connection`].
     pub async fn connect_with(
         host: &str,
         port: u16,
-        credentials: Option<&Credentials>,
+        options: &ConnectOptions,
     ) -> Result<Self, Error> {
-        let tcp = TcpStream::connect((host, port))
-            .await
-            .map_err(|e| Error::Connection(e.to_string()))?;
-        let mut client = Client::new(BufStream::new(tcp).compat(), &[V4_4, V4_3, V4_2, V4_1])
+        let stream = transport::connect_stream(host, port, options.use_tls).await?;
+        let mut client = Client::new(BufStream::new(stream).compat(), &[V4_4, V4_3, V4_2, V4_1])
             .await
             .map_err(|e| Error::Connection(e.to_string()))?;
 
         let mut entries: Vec<(&str, &str)> = vec![("user_agent", USER_AGENT)];
-        match credentials {
+        match &options.credentials {
             Some(creds) => {
                 entries.push(("scheme", "basic"));
                 entries.push(("principal", &creds.username));

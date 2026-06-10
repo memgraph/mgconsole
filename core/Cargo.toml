@@ -20,7 +20,9 @@ thiserror = { workspace = true }
 comfy-table = "7.2.2"
 csv = "1.4.0"
 serde_json = "1.0.150"
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12", "logging"] }
 
 [dev-dependencies]
+rcgen = "0.14.8"
 testcontainers = "0.27"
 tokio = { version = "1", features = ["full"] }

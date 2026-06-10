@@ -15,6 +15,7 @@ pub mod render;
 pub mod result;
 pub mod session;
 pub mod tabular;
+mod transport;
 pub mod value;
 
 pub use clause::{scan_clauses, Clause};
@@ -22,5 +23,5 @@ pub use error::Error;
 pub use parse::QueryAssembler;
 pub use result::{QueryResult, Record, RecordStream, Summary};
 pub use tabular::{render_table, TableOptions, DEFAULT_ROW_CAP};
-pub use session::{Credentials, Session};
+pub use session::{ConnectOptions, Credentials, Session};
 pub use value::Value;

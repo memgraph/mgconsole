@@ -14,11 +14,11 @@
 
 use std::time::Duration;
 
-use mgconsole_core::Session;
+use mgconsole_core::{ConnectOptions, Session};
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     runners::AsyncRunner,
-    ContainerAsync, GenericImage,
+    ContainerAsync, GenericImage, ImageExt,
 };
 
 /// Pinned for reproducibility — the version the ADR-0001 fidelity spike used.
@@ -71,4 +71,54 @@ pub async fn connect(mg: &Memgraph) -> Session {
     Session::connect(&mg.host, mg.port)
         .await
         .expect("connect session")
+}
+
+/// Start a Memgraph configured for Bolt TLS, using a freshly generated
+/// self-signed certificate copied into the container. The cert is self-signed
+/// and never verified (ADR 0007), so the SAN does not need to match the host.
+pub async fn start_memgraph_tls() -> Memgraph {
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+        .expect("generate self-signed cert");
+    let cert_pem = cert.cert.pem().into_bytes();
+    let key_pem = cert.signing_key.serialize_pem().into_bytes();
+
+    let container = GenericImage::new("memgraph/memgraph", MEMGRAPH_TAG)
+        .with_exposed_port(7687.tcp())
+        .with_wait_for(WaitFor::message_on_stdout("You are running Memgraph"))
+        .with_copy_to("/etc/memgraph/cert.pem", cert_pem)
+        .with_copy_to("/etc/memgraph/key.pem", key_pem)
+        .with_cmd([
+            "--bolt-cert-file=/etc/memgraph/cert.pem",
+            "--bolt-key-file=/etc/memgraph/key.pem",
+        ])
+        .start()
+        .await
+        .expect("start memgraph (tls) container");
+    let host = container
+        .get_host()
+        .await
+        .expect("container host")
+        .to_string();
+    let port = container
+        .get_host_port_ipv4(7687.tcp())
+        .await
+        .expect("mapped bolt port");
+
+    let mg = Memgraph {
+        _container: container,
+        host,
+        port,
+    };
+    let tls = ConnectOptions {
+        use_tls: true,
+        ..ConnectOptions::default()
+    };
+    for attempt in 0..30 {
+        match Session::connect_with(&mg.host, mg.port, &tls).await {
+            Ok(_) => return mg,
+            Err(e) if attempt == 29 => panic!("memgraph never accepted a TLS session: {e}"),
+            Err(_) => tokio::time::sleep(Duration::from_millis(300)).await,
+        }
+    }
+    mg
 }

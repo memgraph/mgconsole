@@ -10,7 +10,8 @@ use std::io::Read;
 use clap::Parser;
 use mgconsole::{resolve_password, Cli};
 use mgconsole_core::{
-    render_table, tabular, Credentials, Error, Session, TableOptions, Value, DEFAULT_ROW_CAP,
+    render_table, tabular, ConnectOptions, Credentials, Error, Session, TableOptions, Value,
+    DEFAULT_ROW_CAP,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,10 +32,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(2);
         }
     };
-    let credentials = (!cli.username.is_empty()).then(|| Credentials {
-        username: cli.username.clone(),
-        password,
-    });
+    let options = ConnectOptions {
+        credentials: (!cli.username.is_empty()).then(|| Credentials {
+            username: cli.username.clone(),
+            password,
+        }),
+        use_tls: cli.use_ssl,
+    };
 
     let mut query = String::new();
     std::io::stdin().read_to_string(&mut query)?;
@@ -48,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     runtime.block_on(async {
-        let mut session = Session::connect_with(&cli.host, cli.port, credentials.as_ref()).await?;
+        let mut session = Session::connect_with(&cli.host, cli.port, &options).await?;
         let mut result = session.run(query).await?;
         let header = result.header().to_vec();
         let (records, overflowed) = result.records().collect_capped(DEFAULT_ROW_CAP).await?;
