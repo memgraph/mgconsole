@@ -32,7 +32,7 @@ use std::time::Instant;
 
 use crossterm::event::{
     Event as CrosstermEvent, EventStream, KeyCode as CrosstermKeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers,
+    KeyModifiers, MouseButton, MouseEventKind,
 };
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
@@ -544,8 +544,26 @@ fn to_event(raw: &CrosstermEvent) -> Option<Event> {
             Some(Event::Key(translate_key(*key)))
         }
         CrosstermEvent::Resize(width, height) => Some(Event::Resize(*width, *height)),
+        CrosstermEvent::Mouse(mouse) => translate_mouse(*mouse),
         _ => None,
     }
+}
+
+/// Translate a crossterm mouse event into a workbench [`Event::Mouse`], or `None`
+/// for one the workbench ignores (drag, move, release, non-left buttons). Only a
+/// left-button press and the scroll wheel drive the workbench (issue 17).
+fn translate_mouse(mouse: crossterm::event::MouseEvent) -> Option<Event> {
+    let kind = match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => event::MouseKind::Down,
+        MouseEventKind::ScrollUp => event::MouseKind::ScrollUp,
+        MouseEventKind::ScrollDown => event::MouseKind::ScrollDown,
+        _ => return None,
+    };
+    Some(Event::Mouse(event::MouseEvent {
+        kind,
+        column: mouse.column,
+        row: mouse.row,
+    }))
 }
 
 /// Translate a crossterm key event into the Frontend-neutral [`Key`]. Keys

@@ -77,6 +77,8 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
         .title("Query");
     let editor_inner = editor_block.inner(editor_area);
     frame.render_widget(editor_block, editor_area);
+    // Cache the editor's inner rect for mouse hit-testing (issue 17).
+    state.editor_area = editor_inner;
     let editor_cursor = draw_editor(frame, editor_inner, state, editor_focused);
 
     // Results pane: a native table with a pinned header and a lazily-rendered
@@ -103,8 +105,10 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
         .title(title);
     let results_inner = results_block.inner(results_area);
     frame.render_widget(results_block, results_area);
-    // Cache the data-row viewport (height minus the pinned header row).
+    // Cache the data-row viewport (height minus the pinned header row) and the
+    // results rect for mouse hit-testing (issue 17).
     state.viewport_rows = results_inner.height.saturating_sub(1) as usize;
+    state.results_area = results_inner;
     let search = state.search.as_ref();
     if let Some(result) = state.shown() {
         draw_result(frame, results_inner, result, results_focused, search);

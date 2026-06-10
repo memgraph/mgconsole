@@ -13,6 +13,7 @@ use mgconsole_core::{ConnectOptions, Record, Summary, TransactionState, Value};
 use crate::config::Config;
 use crate::queries::NamedQueries;
 use crate::theme::{builtin_palette, KeyBindings, Palette};
+use ratatui::layout::Rect;
 use tui_textarea::{Input, Key as TaKey, TextArea};
 
 use crate::settings::Settings;
@@ -112,6 +113,13 @@ pub struct WorkbenchState {
     /// the reducer can page and keep the selection visible without re-deriving the
     /// layout. The draw is the only writer.
     pub viewport_rows: usize,
+    /// The editor pane's inner rectangle from the last draw (issue 17), cached so
+    /// the reducer can hit-test a mouse click without knowing the layout. The draw
+    /// is the only writer; the reducer only reads.
+    pub editor_area: Rect,
+    /// The results pane's inner rectangle from the last draw (issue 17), header row
+    /// included; cached for mouse hit-testing as above.
+    pub results_area: Rect,
     /// The `:param` store bound to every query (populated in slice 16).
     pub params: BTreeMap<String, Value>,
     /// Monotonic id stamped on each query, so its lifecycle events match.
@@ -200,6 +208,8 @@ impl WorkbenchState {
             schema: None,
             drawer: None,
             viewport_rows: 0,
+            editor_area: Rect::default(),
+            results_area: Rect::default(),
             params: BTreeMap::new(),
             next_id: 0,
             running_statement: None,

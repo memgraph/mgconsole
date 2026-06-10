@@ -17,7 +17,7 @@ use crate::syntax::Completer;
 use crate::theme::{Chord, ChordKey, Gesture};
 
 use super::effect::{Effect, TxOp};
-use super::event::{Event, Key, KeyCode};
+use super::event::{Event, Key, KeyCode, MouseEvent, MouseKind};
 use super::plan::{is_plan_query, Plan};
 use super::schema::{Schema, SchemaSource};
 use super::state::{
@@ -39,6 +39,7 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
         // state change today; the event exists for layouts that will.
         Event::Resize(_, _) => Vec::new(),
         Event::Key(key) => update_key(state, key),
+        Event::Mouse(mouse) => update_mouse(state, mouse),
         Event::QueryStarted { id, header } => {
             on_started(state, id, header);
             Vec::new()
@@ -369,6 +370,85 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
         Focus::Editor => editor_key(state, key),
         Focus::Results => results_key(state, key),
     }
+}
+
+/// Handle a mouse event (issue 17) by translating it into the existing reducer
+/// paths — focus, selection, cell-expand, and scroll — so there is no parallel
+/// mouse state. Hit-testing uses the pane rectangles the draw cached. While a
+/// modal overlay (cell-detail, export, completion) is open, the mouse is ignored
+/// so it never fights the keyboard-driven overlay.
+fn update_mouse(state: &mut WorkbenchState, mouse: MouseEvent) -> Vec<Effect> {
+    if state.detail.is_some() || state.export.is_some() || state.completion.is_some() {
+        return Vec::new();
+    }
+    let (col, row) = (mouse.column, mouse.row);
+    match mouse.kind {
+        // Scroll over a pane drives that pane: result rows (the existing row-nav
+        // path) or the editor cursor (which scrolls its viewport).
+        MouseKind::ScrollUp | MouseKind::ScrollDown => {
+            let down = matches!(mouse.kind, MouseKind::ScrollDown);
+            if in_rect(state.results_area, col, row) {
+                return results_key(state, Key::plain(if down { KeyCode::Down } else { KeyCode::Up }));
+            }
+            if in_rect(state.editor_area, col, row) {
+                state.editor.edit(Key::plain(if down { KeyCode::Down } else { KeyCode::Up }));
+            }
+            Vec::new()
+        }
+        // A click focuses the pane under the cursor; over a result cell it also
+        // selects that cell and opens the cell-detail overlay (the existing
+        // cell-expand path). The tab bar (issue 18) is handled where it is drawn.
+        MouseKind::Down => {
+            if in_rect(state.results_area, col, row) {
+                state.focus = Focus::Results;
+                click_result_cell(state, col, row);
+            } else if in_rect(state.editor_area, col, row) {
+                state.focus = Focus::Editor;
+            }
+            Vec::new()
+        }
+    }
+}
+
+/// Whether `(col, row)` falls inside `rect`.
+fn in_rect(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
+}
+
+/// Select the result cell a click landed on and open its cell-detail overlay
+/// (issue 17 → the slice-08 cell-expand path). The header occupies the first row
+/// of the results rect; columns share the width equally. A click on the header row
+/// or below the loaded rows only focuses the pane (handled by the caller). Skipped
+/// while the filtered search view is active, where the visible rows are a subset.
+fn click_result_cell(state: &mut WorkbenchState, col: u16, row: u16) {
+    if state.search.as_ref().is_some_and(|s| s.filter_only) {
+        return;
+    }
+    let area = state.results_area;
+    // The first row is the pinned header; data rows start one below it.
+    if row <= area.y {
+        return;
+    }
+    let row_in_view = (row - area.y - 1) as usize;
+    let Some(result) = state.shown() else {
+        return;
+    };
+    if result.plan.is_some() || result.header.is_empty() {
+        return;
+    }
+    let ncols = result.header.len();
+    let absolute = result.scroll + row_in_view;
+    if absolute >= result.rows.len() {
+        return; // a click below the last loaded row only focuses the pane
+    }
+    let rel = (col - area.x) as usize;
+    let width = area.width.max(1) as usize;
+    let column = (rel * ncols / width).min(ncols - 1);
+    if let Some(result) = state.shown_mut() {
+        result.selected_row = absolute;
+        result.selected_col = column;
+    }
+    open_detail(state);
 }
 
 /// Map a workbench [`Key`] onto a neutral [`Chord`] for keybinding lookup (issue
@@ -2737,6 +2817,95 @@ mod tests {
         open_search_overlay(&mut s);
         assert!(s.search.is_none(), "nothing to search");
         assert!(s.status.message.contains("no result"));
+    }
+
+    // --- Mouse support (issue 17) ---------------------------------------------
+
+    use super::super::event::{MouseEvent, MouseKind};
+    use ratatui::layout::Rect;
+
+    /// A result with known editor/results rectangles cached, as the draw would set
+    /// them, so the mouse hit-tests have geometry to work with.
+    fn with_mouse_layout(cells: &[&str]) -> WorkbenchState {
+        let mut s = with_text_rows(cells, 10);
+        s.focus = Focus::Editor;
+        s.editor_area = Rect::new(0, 0, 40, 5);
+        // Results sit below the editor; header at row 6, data rows from row 7.
+        s.results_area = Rect::new(0, 6, 40, 8);
+        s
+    }
+
+    fn click(state: &mut WorkbenchState, column: u16, row: u16) {
+        update(state, Event::Mouse(MouseEvent { kind: MouseKind::Down, column, row }));
+    }
+
+    fn scroll(state: &mut WorkbenchState, kind: MouseKind, column: u16, row: u16) {
+        update(state, Event::Mouse(MouseEvent { kind, column, row }));
+    }
+
+    #[test]
+    fn clicking_a_pane_focuses_it() {
+        let mut s = with_mouse_layout(&["apple", "banana"]);
+        // Click in the results rect focuses Results.
+        click(&mut s, 1, 6);
+        assert_eq!(s.focus, Focus::Results);
+        // Click back in the editor rect focuses Editor.
+        click(&mut s, 1, 1);
+        assert_eq!(s.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn clicking_a_result_cell_selects_it_and_opens_cell_detail() {
+        let mut s = with_mouse_layout(&["apple", "banana", "cherry"]);
+        // results_area.y = 6 (header), so data row 1 is at terminal row 8.
+        click(&mut s, 3, 8);
+        assert_eq!(s.focus, Focus::Results);
+        assert_eq!(s.shown().unwrap().selected_row, 1, "second data row selected");
+        assert!(s.detail.is_some(), "the cell-expand overlay opened");
+    }
+
+    #[test]
+    fn clicking_the_header_row_only_focuses_without_selecting() {
+        let mut s = with_mouse_layout(&["apple", "banana"]);
+        click(&mut s, 1, 6); // the header row
+        assert_eq!(s.focus, Focus::Results);
+        assert!(s.detail.is_none(), "no cell expanded from a header click");
+    }
+
+    #[test]
+    fn the_scroll_wheel_moves_through_result_rows() {
+        let mut s = with_mouse_layout(&["a", "b", "c", "d"]);
+        s.focus = Focus::Results;
+        scroll(&mut s, MouseKind::ScrollDown, 1, 8);
+        assert_eq!(s.shown().unwrap().selected_row, 1);
+        scroll(&mut s, MouseKind::ScrollDown, 1, 8);
+        assert_eq!(s.shown().unwrap().selected_row, 2);
+        scroll(&mut s, MouseKind::ScrollUp, 1, 8);
+        assert_eq!(s.shown().unwrap().selected_row, 1);
+    }
+
+    #[test]
+    fn the_scroll_wheel_moves_the_editor_viewport() {
+        let mut s = with_mouse_layout(&["a"]);
+        s.editor.set_text("line one\nline two");
+        // Put the cursor on the first line deterministically.
+        s.editor.edit(Key::plain(KeyCode::Up));
+        let before = s.editor.cursor().0;
+        scroll(&mut s, MouseKind::ScrollDown, 1, 1); // over the editor rect
+        assert_eq!(
+            s.editor.cursor().0,
+            before + 1,
+            "scroll moved the editor cursor down a line"
+        );
+    }
+
+    #[test]
+    fn the_mouse_is_ignored_while_an_overlay_is_open() {
+        let mut s = with_mouse_layout(&["apple", "banana"]);
+        s.detail = Some(Value::Integer(1));
+        click(&mut s, 1, 8);
+        // Focus unchanged and no new selection — the overlay owns input.
+        assert_eq!(s.focus, Focus::Editor);
     }
 
     #[test]

@@ -60,6 +60,28 @@ impl Key {
     }
 }
 
+/// A mouse action the reducer acts on (issue 17): a left-button press or a scroll
+/// tick, with the terminal cell it occurred over. The crossterm adapter at the IO
+/// edge translates a `crossterm::MouseEvent` into this neutral form, so the
+/// reducer hit-tests against the cached pane rectangles with no crossterm
+/// dependency and is driven by hand-built events in tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseEvent {
+    pub kind: MouseKind,
+    pub column: u16,
+    pub row: u16,
+}
+
+/// The mouse actions the workbench distinguishes; every other mouse event (drag,
+/// move, right/middle button, release) is ignored at the IO edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseKind {
+    /// Left-button press.
+    Down,
+    ScrollUp,
+    ScrollDown,
+}
+
 /// The keys the workbench distinguishes. A neutral subset of crossterm's
 /// `KeyCode`; unmapped keys translate to [`KeyCode::Other`] and are ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,6 +116,8 @@ pub enum KeyCode {
 pub enum Event {
     /// A terminal key press.
     Key(Key),
+    /// A mouse press or scroll (issue 17).
+    Mouse(MouseEvent),
     /// The terminal was resized.
     Resize(u16, u16),
     /// A periodic timer tick, advancing the running-query spinner (slice 07).

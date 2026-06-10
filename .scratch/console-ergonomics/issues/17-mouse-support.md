@@ -1,6 +1,6 @@
 # 17 — Mouse support (Workbench)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

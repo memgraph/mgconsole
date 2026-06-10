@@ -16,7 +16,8 @@
 use std::io::{self, stdout};
 
 use ratatui::crossterm::event::{
-    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
@@ -37,7 +38,10 @@ impl TerminalGuard {
     /// and arm panic-time restoration.
     pub fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
-        execute!(stdout(), EnterAlternateScreen)?;
+        // Capture mouse events (issue 17). Most terminals still pass Shift+drag
+        // through to native text selection while capture is on, so copy/paste keeps
+        // working via the Shift modifier (the documented fallback).
+        execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
         // Negotiated, not assumed: only push flags when the terminal reports
         // support, so Shift/Ctrl+Enter become distinguishable where possible.
         let enhanced = supports_keyboard_enhancement().unwrap_or(false);
@@ -58,7 +62,7 @@ impl TerminalGuard {
         if enhanced {
             let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
         }
-        let _ = execute!(stdout(), LeaveAlternateScreen);
+        let _ = execute!(stdout(), DisableMouseCapture, LeaveAlternateScreen);
         let _ = disable_raw_mode();
     }
 }
