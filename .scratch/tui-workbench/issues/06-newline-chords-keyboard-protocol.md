@@ -1,6 +1,6 @@
 # 06 — Shift/Ctrl+Enter newline chords
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -17,13 +17,17 @@ meaning (submit) is invariant across all terminals.
 
 ## Acceptance criteria
 
-- [ ] On a keyboard-protocol-capable terminal, Shift+Enter and Ctrl+Enter insert
-      a newline; plain Enter submits.
-- [ ] On a terminal without the protocol, Enter still submits and the universal
-      newline key still works; nothing regresses.
-- [ ] Capability is detected at startup (negotiated, not assumed).
-- [ ] The key-event → editor-action mapping is covered at the reducer seam for
-      both the capable and incapable cases.
+- [x] On a keyboard-protocol-capable terminal, Shift+Enter and Ctrl+Enter insert
+      a newline; plain Enter submits. (reducer Enter arms; `TerminalGuard` pushes
+      `DISAMBIGUATE_ESCAPE_CODES` so the chords arrive distinctly; tests.)
+- [x] On a terminal without the protocol, Enter still submits and the universal
+      newline key still works; nothing regresses. (Alt+Enter / Ctrl+J still
+      newline; plain Enter still submits — the chords simply never arrive.)
+- [x] Capability is detected at startup (negotiated, not assumed).
+      (`supports_keyboard_enhancement()` gates the flag push and matching pop.)
+- [x] The key-event → editor-action mapping is covered at the reducer seam for
+      both the capable and incapable cases. (Shift/Ctrl+Enter→newline tests and
+      the plain-Enter→submit test.)
 
 ## Blocked by
 

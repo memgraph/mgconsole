@@ -154,12 +154,25 @@ fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             state.focus = Focus::Results;
             Vec::new()
         }
-        // The universal newline gesture (slice 01): Alt+Enter or Ctrl+J insert a
-        // newline; plain Enter (below) submits. Ctrl/Shift+Enter on capable
-        // terminals is negotiated in slice 06.
+        // Newline gestures. The universal keys (everywhere): Alt+Enter, Ctrl+J.
+        // On a keyboard-enhancement-capable terminal (negotiated at startup,
+        // slice 06) Shift+Enter and Ctrl+Enter also arrive distinctly and insert
+        // a newline; on terminals that cannot distinguish them, those events
+        // never arrive and plain Enter (below) submits. Enter's meaning (submit)
+        // is invariant across all terminals.
         Key {
             code: KeyCode::Enter,
             alt: true,
+            ..
+        }
+        | Key {
+            code: KeyCode::Enter,
+            ctrl: true,
+            ..
+        }
+        | Key {
+            code: KeyCode::Enter,
+            shift: true,
             ..
         }
         | Key {
@@ -170,12 +183,12 @@ fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             state.editor.insert_newline();
             Vec::new()
         }
-        // Plain Enter submits the buffer.
+        // Plain Enter (no modifiers) submits the buffer.
         Key {
             code: KeyCode::Enter,
             ctrl: false,
             alt: false,
-            ..
+            shift: false,
         } => submit(state),
         // Everything else is ordinary editing, delegated to the editor widget.
         other => {
@@ -329,6 +342,32 @@ mod tests {
         type_str(&mut s, "cd");
         assert_eq!(s.editor.buffer(), "ab\ncd");
         assert!(effects.is_empty(), "a newline produces no effect");
+    }
+
+    #[test]
+    fn shift_enter_inserts_a_newline_on_a_capable_terminal() {
+        // On a keyboard-enhancement-capable terminal this chord arrives distinctly.
+        let mut s = wb();
+        type_str(&mut s, "ab");
+        let shift_enter = Key {
+            code: KeyCode::Enter,
+            ctrl: false,
+            alt: false,
+            shift: true,
+        };
+        let effects = update(&mut s, Event::Key(shift_enter));
+        type_str(&mut s, "cd");
+        assert_eq!(s.editor.buffer(), "ab\ncd");
+        assert!(effects.is_empty(), "a newline produces no effect");
+    }
+
+    #[test]
+    fn ctrl_enter_inserts_a_newline_on_a_capable_terminal() {
+        let mut s = wb();
+        type_str(&mut s, "ab");
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Enter)));
+        type_str(&mut s, "cd");
+        assert_eq!(s.editor.buffer(), "ab\ncd");
     }
 
     #[test]
