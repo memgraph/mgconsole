@@ -1,6 +1,6 @@
 # 04 — Query-parameter colour ($x)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

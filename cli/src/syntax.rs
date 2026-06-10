@@ -122,6 +122,7 @@ const CYAN: &str = "\x1b[36m";
 const GREEN: &str = "\x1b[32m";
 const MAGENTA: &str = "\x1b[35m";
 const GREY: &str = "\x1b[90m"; // bright-black
+const BLUE: &str = "\x1b[34m";
 const RESET: &str = "\x1b[0m";
 
 /// Re-emit `line` with Cypher syntax coloured for the interactive REPL, driven
@@ -162,10 +163,12 @@ fn colour_for(token: &Token, text: &str) -> Option<&'static str> {
         TokenKind::String => Some(GREEN),
         TokenKind::Number => Some(MAGENTA),
         TokenKind::Comment => Some(GREY),
+        // A `$name` reference (the `:param` family, slice 20) gets its own colour
+        // so a writer sees at a glance which `$name`s are bound vs typos.
+        TokenKind::Parameter => Some(BLUE),
         // Punctuation and identifier words stay terminal-default so the coloured
-        // categories pop and a typo'd keyword stands out by contrast. Parameters
-        // gain their colour in slice 04.
-        TokenKind::Parameter | TokenKind::Punct | TokenKind::Whitespace => None,
+        // categories pop and a typo'd keyword stands out by contrast.
+        TokenKind::Punct | TokenKind::Whitespace => None,
     }
 }
 
@@ -331,5 +334,22 @@ mod tests {
             highlight("RETURN 'foo").contains("\x1b[32m'foo\x1b[0m"),
             "unterminated string colours green to end"
         );
+    }
+
+    #[test]
+    fn a_parameter_reference_is_coloured_blue() {
+        assert!(
+            highlight("RETURN $age").contains("\x1b[34m$age\x1b[0m"),
+            "parameter blue"
+        );
+    }
+
+    #[test]
+    fn a_dollar_inside_a_string_is_not_coloured_as_a_parameter() {
+        // '$x' is part of a String token, not a Parameter — it colours green,
+        // never blue.
+        let out = highlight("RETURN '$x'");
+        assert!(out.contains("\x1b[32m'$x'\x1b[0m"), "the string is green: {out:?}");
+        assert!(!out.contains("\x1b[34m"), "no parameter blue: {out:?}");
     }
 }
