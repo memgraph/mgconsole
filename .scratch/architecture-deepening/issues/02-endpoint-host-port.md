@@ -1,6 +1,6 @@
 # 02 — Endpoint cohesion type for host + port
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -79,3 +79,7 @@ A glossary entry for **Endpoint** has already been added to `CONTEXT.md`.
 
 Touches `core/src/session.rs`. Overlaps issue 03 (`session.rs` `map_err` sites
 and the `reconnect`/`establish` bodies). Apply sequentially.
+
+## Comments
+
+- Done in commit `3d533b7` on `plan/rust-console`. All acceptance criteria met; `cargo test`, `cargo clippy --workspace --tests`, and `cargo fmt --check` clean.

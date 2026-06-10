@@ -1,6 +1,6 @@
 # 04 — Header type at the format seam
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -69,3 +69,7 @@ A `Header` type for column names, scoped to the **format seam only**.
 Isolated to `core/src/format/` + `core/src/tabular.rs` and the `write_stream` /
 `render_table` call sites. Independent of issues 01–03; can run in its own
 worktree.
+
+## Comments
+
+- Done in commit `91947a3` on `plan/rust-console`. All acceptance criteria met; `cargo test`, `cargo clippy --workspace --tests`, and `cargo fmt --check` clean.

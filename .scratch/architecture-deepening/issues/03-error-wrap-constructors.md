@@ -1,6 +1,6 @@
 # 03 — Error wrap constructors
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -68,3 +68,7 @@ Touches `core/src/error.rs`, `core/src/session.rs`, `core/src/result.rs`.
 Overlaps issues 01 (`result.rs`) and 02 (`session.rs`). Apply sequentially —
 landing this **last** is easiest, since the constructors slot into whatever the
 other two leave behind.
+
+## Comments
+
+- Done in commit `3927b1b` on `plan/rust-console`. All acceptance criteria met; `cargo test`, `cargo clippy --workspace --tests`, and `cargo fmt --check` clean.

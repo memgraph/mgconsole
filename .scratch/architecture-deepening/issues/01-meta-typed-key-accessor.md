@@ -1,6 +1,6 @@
 # 01 — Typed-key Bolt metadata accessor
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -75,3 +75,7 @@ closed, typed schema and the match-and-default lives in exactly one place.
 
 Touches `core/src/proto.rs` and `core/src/result.rs`. Overlaps issue 03 in
 `result.rs` (`pull_batch`/`discard` `map_err`). Apply sequentially.
+
+## Comments
+
+- Done in commit `27326f0` on `plan/rust-console`. All acceptance criteria met; `cargo test`, `cargo clippy --workspace --tests`, and `cargo fmt --check` clean.
