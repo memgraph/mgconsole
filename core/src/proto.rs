@@ -6,6 +6,8 @@ use std::collections::HashMap;
 
 use bolt_proto::Value as BValue;
 
+use crate::error::QueryError;
+
 /// Column names from a RUN `SUCCESS` (`fields`).
 pub(crate) fn fields(meta: &HashMap<String, BValue>) -> Vec<String> {
     match meta.get("fields") {
@@ -25,6 +27,23 @@ pub(crate) fn failure_message(meta: &HashMap<String, BValue>) -> String {
     match meta.get("message") {
         Some(BValue::String(s)) => s.clone(),
         _ => "unknown query error".to_string(),
+    }
+}
+
+/// The full dotted error code from a `FAILURE` (e.g.
+/// `Memgraph.ClientError.MemgraphError.SyntaxError`).
+pub(crate) fn failure_code(meta: &HashMap<String, BValue>) -> String {
+    match meta.get("code") {
+        Some(BValue::String(s)) => s.clone(),
+        _ => String::new(),
+    }
+}
+
+/// Build a [`QueryError`] (code + message) from a `FAILURE`'s metadata.
+pub(crate) fn query_error(meta: &HashMap<String, BValue>) -> QueryError {
+    QueryError {
+        code: failure_code(meta),
+        message: failure_message(meta),
     }
 }
 

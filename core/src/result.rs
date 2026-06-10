@@ -8,6 +8,8 @@
 //! Slice 13 fills the `Summary`.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use bolt_client::Metadata;
 use bolt_proto::Message;
@@ -19,6 +21,26 @@ use crate::value::Value;
 
 /// Default number of records pulled per batch on the lazy path.
 pub(crate) const DEFAULT_BATCH_SIZE: i64 = 1000;
+
+/// Liveness token shared between a Session and the `RecordStream` it issued
+/// (ADR 0005). The Session keeps a clone so it can tell, on the next `run()`,
+/// a cleanly finished result (`done`) from one still being read (the stream's
+/// clone is still alive) or one abandoned (the stream was dropped before
+/// draining — the Session's clone is then the only one left).
+#[derive(Default)]
+pub(crate) struct ResultGuard {
+    done: AtomicBool,
+}
+
+impl ResultGuard {
+    fn mark_done(&self) {
+        self.done.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_done(&self) -> bool {
+        self.done.load(Ordering::Acquire)
+    }
+}
 
 /// One row of a result: an ordered set of Values, one per column.
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +72,9 @@ pub struct RecordStream {
     /// Filled from the RUN reply, then completed from the trailing `SUCCESS`
     /// once the stream drains (or is discarded). Readable via [`QueryResult`].
     summary: Summary,
+    /// Marked done when the stream drains or is discarded, so the Session knows
+    /// the result finished cleanly (ADR 0005).
+    guard: Arc<ResultGuard>,
 }
 
 enum Inner {
@@ -74,10 +99,16 @@ impl RecordStream {
         Self {
             inner: Inner::Buffered(records.into()),
             summary: Summary::default(),
+            guard: Arc::new(ResultGuard::default()),
         }
     }
 
-    pub(crate) fn lazy(conn: SharedConn, batch_size: i64, summary: Summary) -> Self {
+    pub(crate) fn lazy(
+        conn: SharedConn,
+        batch_size: i64,
+        summary: Summary,
+        guard: Arc<ResultGuard>,
+    ) -> Self {
         Self {
             inner: Inner::Lazy(Lazy {
                 conn,
@@ -86,6 +117,7 @@ impl RecordStream {
                 batch_size,
             }),
             summary,
+            guard,
         }
     }
 
@@ -95,24 +127,33 @@ impl RecordStream {
         &self.summary
     }
 
-    /// The next Record, or `None` when the stream is exhausted.
+    /// The next Record, or `None` when the stream is exhausted. Exhaustion marks
+    /// the result done so the Session can issue the next query (ADR 0005).
     pub async fn next(&mut self) -> Result<Option<Record>, Error> {
-        match &mut self.inner {
+        let item = match &mut self.inner {
             Inner::Buffered(b) => Ok(b.pop_front()),
             Inner::Lazy(l) => l.next(&mut self.summary).await,
+        };
+        if matches!(item, Ok(None)) {
+            self.guard.mark_done();
         }
+        item
     }
 
     /// Discard any records not yet consumed, leaving the connection ready for
     /// the next query. A no-op once the stream is exhausted.
     pub async fn discard(&mut self) -> Result<(), Error> {
-        match &mut self.inner {
+        let result = match &mut self.inner {
             Inner::Buffered(b) => {
                 b.clear();
                 Ok(())
             }
             Inner::Lazy(l) => l.discard(&mut self.summary).await,
+        };
+        if result.is_ok() {
+            self.guard.mark_done();
         }
+        result
     }
 
     /// Drain the remaining Records into a Vec (used by the buffered/tabular path).
@@ -174,7 +215,7 @@ impl Lazy {
             }
             Message::Failure(f) => {
                 self.more = false;
-                return Err(Error::Query(proto::failure_message(f.metadata())));
+                return Err(Error::Query(proto::query_error(f.metadata())));
             }
             other => {
                 self.more = false;
@@ -204,7 +245,7 @@ impl Lazy {
         // DISCARD's SUCCESS carries the same summary the final PULL would have.
         match end {
             Message::Success(s) => summary.absorb_terminal(s.metadata()),
-            Message::Failure(f) => return Err(Error::Query(proto::failure_message(f.metadata()))),
+            Message::Failure(f) => return Err(Error::Query(proto::query_error(f.metadata()))),
             other => return Err(Error::Protocol(format!("unexpected DISCARD reply: {other:?}"))),
         }
         Ok(())

@@ -8,7 +8,7 @@ license = "MIT"
 rust-version = "1.96"
 
 [workspace.dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 bolt-client = "0.11"
 bolt-proto = "0.12"

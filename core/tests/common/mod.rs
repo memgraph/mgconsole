@@ -12,6 +12,7 @@
 //! parallel import) keep their own dedicated container. `start_memgraph()` below
 //! stays available for those dedicated cases.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use mgconsole_core::{ConnectOptions, Session};
@@ -20,7 +21,9 @@ use testcontainers::{
     runners::AsyncRunner,
     ContainerAsync, GenericImage, ImageExt,
 };
-use tokio::sync::{Mutex, MutexGuard, OnceCell};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{Mutex, MutexGuard, Notify, OnceCell};
+use tokio::task::AbortHandle;
 
 /// Pinned for reproducibility — the version the ADR-0001 fidelity spike used.
 pub const MEMGRAPH_TAG: &str = "3.10.1";
@@ -129,6 +132,75 @@ async fn reset(session: &mut Session) {
         .await
         .expect("reset: delete all");
     result.records().discard().await.expect("reset: drain");
+}
+
+// --- TCP proxy (issue 14) --------------------------------------------------
+//
+// A plaintext TCP proxy in front of Memgraph so a test can sever the live
+// connection (`cut`) while leaving the server up, exercising reconnect, or tear
+// the proxy down entirely (`shutdown`) so reconnect attempts fail and the
+// Session surfaces a terminal error.
+
+/// A TCP proxy forwarding `host:port` to an upstream Memgraph.
+pub struct Proxy {
+    pub host: String,
+    pub port: u16,
+    cut: Arc<Notify>,
+    accept_task: AbortHandle,
+}
+
+impl Proxy {
+    /// Sever the currently-piped connection (both halves close), while the proxy
+    /// keeps listening so a reconnect re-establishes through it.
+    pub fn cut(&self) {
+        self.cut.notify_waiters();
+    }
+
+    /// Stop listening entirely, so further connection attempts are refused.
+    pub fn shutdown(&self) {
+        self.cut.notify_waiters();
+        self.accept_task.abort();
+    }
+}
+
+/// Start a proxy in front of `upstream_host:upstream_port`.
+pub async fn start_proxy(upstream_host: String, upstream_port: u16) -> Proxy {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind proxy listener");
+    let addr = listener.local_addr().expect("proxy addr");
+    let cut = Arc::new(Notify::new());
+
+    let cut_loop = cut.clone();
+    let task = tokio::spawn(async move {
+        loop {
+            let Ok((client, _)) = listener.accept().await else {
+                break;
+            };
+            let Ok(upstream) = TcpStream::connect((upstream_host.as_str(), upstream_port)).await
+            else {
+                continue;
+            };
+            let cut = cut_loop.clone();
+            tokio::spawn(async move {
+                let (mut cr, mut cw) = client.into_split();
+                let (mut ur, mut uw) = upstream.into_split();
+                tokio::select! {
+                    _ = tokio::io::copy(&mut cr, &mut uw) => {}
+                    _ = tokio::io::copy(&mut ur, &mut cw) => {}
+                    // On cut, return — dropping all four halves closes both sockets.
+                    _ = cut.notified() => {}
+                }
+            });
+        }
+    });
+
+    Proxy {
+        host: addr.ip().to_string(),
+        port: addr.port(),
+        cut,
+        accept_task: task.abort_handle(),
+    }
 }
 
 /// Start a Memgraph configured for Bolt TLS, using a freshly generated

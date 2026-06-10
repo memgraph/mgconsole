@@ -270,6 +270,120 @@ async fn connects_over_tls_to_an_ssl_configured_container() {
 }
 
 #[tokio::test]
+async fn query_error_leaves_session_usable() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    // A syntactically invalid query is a recoverable query error.
+    match session.run("RETURN ($").await {
+        Err(Error::Query(e)) => assert!(!e.code.is_empty(), "query error carries a code"),
+        Err(other) => panic!("expected a query error, got {other:?}"),
+        Ok(_) => panic!("invalid query must not succeed"),
+    }
+
+    // The Session survives it (RESET cleared the FAILED state): the next query runs.
+    let mut ok = session.run("RETURN 1 AS n").await.expect("session still usable");
+    let record = ok.records().next().await.expect("ok").expect("one row");
+    assert_eq!(record.fields(), &[Value::Integer(1)]);
+}
+
+#[tokio::test]
+async fn run_errors_while_a_result_is_still_open() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    // Open a result and partially read it, so it is still live.
+    let mut open = session
+        .run("UNWIND range(1, 100) AS i RETURN i")
+        .await
+        .expect("first query");
+    let _ = open.records().next().await.expect("read one row");
+
+    // A second run while the first result is open is rejected.
+    match session.run("RETURN 1").await {
+        Err(Error::ResultStillOpen) => {}
+        Err(other) => panic!("expected ResultStillOpen, got {other:?}"),
+        Ok(_) => panic!("run must be rejected while a result is open"),
+    }
+
+    // Draining the open result clears the guard; the Session is usable again.
+    open.records().discard().await.expect("drain open result");
+    let mut next = session.run("RETURN 2 AS n").await.expect("usable after drain");
+    let record = next.records().next().await.expect("ok").expect("one row");
+    assert_eq!(record.fields(), &[Value::Integer(2)]);
+}
+
+#[tokio::test]
+async fn recovers_from_an_abandoned_result_via_reset() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    {
+        // Open a large result, pull one batch, then drop it without draining.
+        let mut abandoned = session
+            .run("UNWIND range(1, 100000) AS i RETURN i")
+            .await
+            .expect("open result");
+        let _ = abandoned.records().next().await.expect("pull a batch");
+    } // dropped here, still with records pending on the wire
+
+    // The next run detects the abandoned result and RESETs before running.
+    let mut next = session.run("RETURN 7 AS n").await.expect("recovered via reset");
+    let record = next.records().next().await.expect("ok").expect("one row");
+    assert_eq!(record.fields(), &[Value::Integer(7)]);
+}
+
+#[tokio::test]
+async fn reconnects_after_a_dropped_connection() {
+    // Dedicated container behind a proxy we can sever (the shared lease's
+    // container is not reachable through a proxy).
+    let mg = common::start_memgraph().await;
+    let proxy = common::start_proxy(mg.host.clone(), mg.port).await;
+    let mut session = Session::connect(&proxy.host, proxy.port)
+        .await
+        .expect("connect via proxy");
+
+    let mut first = session.run("RETURN 1 AS n").await.expect("first query");
+    first.records().discard().await.expect("drain");
+
+    // Sever the live connection; the server stays up behind the proxy.
+    proxy.cut();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // The next query hits the dead socket, reconnects through the proxy, and runs.
+    let mut second = session
+        .run("RETURN 2 AS n")
+        .await
+        .expect("reconnect and run");
+    let record = second.records().next().await.expect("ok").expect("one row");
+    assert_eq!(record.fields(), &[Value::Integer(2)]);
+}
+
+#[tokio::test]
+async fn exhausting_reconnect_retries_surfaces_a_terminal_error() {
+    let mg = common::start_memgraph().await;
+    let proxy = common::start_proxy(mg.host.clone(), mg.port).await;
+    let mut session = Session::connect(&proxy.host, proxy.port)
+        .await
+        .expect("connect via proxy");
+
+    let mut first = session.run("RETURN 1 AS n").await.expect("first query");
+    first.records().discard().await.expect("drain");
+
+    // Tear the proxy down: the live socket dies and reconnect attempts are refused.
+    proxy.shutdown();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    match session.run("RETURN 2").await {
+        Err(Error::Connection(msg)) => {
+            assert!(msg.contains("reconnect"), "terminal error mentions reconnect: {msg}")
+        }
+        Err(other) => panic!("expected a terminal connection error, got {other:?}"),
+        Ok(_) => panic!("query must fail when the server is unreachable"),
+    }
+}
+
+#[tokio::test]
 async fn discard_after_partial_read_leaves_connection_usable() {
     let mut lease = common::lease().await;
     let session = &mut lease.session;
