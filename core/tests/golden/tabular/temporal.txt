@@ -1,0 +1,9 @@
+date	2021-06-15
+local_time	12:34:56.789000
+local_time_whole	09:00:00.000000
+local_datetime	2021-06-15T12:34:56.789000
+duration	P1DT2H3M4.000000S
+duration_fractional	P1DT2H3M4.500000S
+datetime_offset	2021-06-15T12:34:56.000000+02:00
+datetime_zoned	2021-06-15T12:34:56.000000+02:00[Europe/Zagreb]
+time_with_offset	12:34:56.789000+02:00

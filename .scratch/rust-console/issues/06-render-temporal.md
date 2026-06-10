@@ -1,6 +1,6 @@
 # 06 — Render temporal values (tabular)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -21,11 +21,11 @@ and `DateTimeZoned` (a named IANA zone, e.g. `Europe/Zagreb`).
 
 ## Acceptance criteria
 
-- [ ] date, local time, local datetime render correctly
-- [ ] duration renders correctly
-- [ ] both zoned-datetime arms render: `DateTimeOffset` (fixed offset) and `DateTimeZoned` (named IANA zone)
-- [ ] Rendering matches Memgraph's textual conventions for these types
-- [ ] Golden fixtures cover the above; tests are pure (note: Memgraph emits fractional seconds with exactly 3 or 6 digits — fixtures should reflect that)
+- [x] date, local time, local datetime render correctly
+- [x] duration renders correctly
+- [x] both zoned-datetime arms render: `DateTimeOffset` (fixed offset) and `DateTimeZoned` (named IANA zone)
+- [x] Rendering matches Memgraph's textual conventions for these types
+- [x] Golden fixtures cover the above; tests are pure (note: Memgraph emits fractional seconds with exactly 3 or 6 digits — fixtures should reflect that)
 
 ## Blocked by
 

@@ -25,6 +25,25 @@ fn float(f: f64) -> String {
     }
 }
 
+/// Render a duration as Memgraph does: `P{days}DT{h}H{m}M{s}.{micros:06}S`.
+/// The time-of-day part is decomposed from the `seconds` field; `months` (which
+/// Memgraph does not emit) is included only if non-zero, to stay lossless.
+fn duration(d: &crate::value::Duration) -> String {
+    let hours = d.seconds / 3600;
+    let minutes = (d.seconds % 3600) / 60;
+    let seconds = d.seconds % 60;
+    let micros = (d.nanos / 1000).abs();
+    let mut out = String::from("P");
+    if d.months != 0 {
+        out.push_str(&format!("{}M", d.months));
+    }
+    out.push_str(&format!(
+        "{}DT{}H{}M{}.{:06}S",
+        d.days, hours, minutes, seconds, micros
+    ));
+    out
+}
+
 /// Escape control whitespace so a string stays on one tabular line. Quotes are
 /// left literal here; quote-escaping is format-specific (CSV, slice 22).
 fn escape_ws(s: &str) -> String {
@@ -76,14 +95,20 @@ fn render(value: &Value, quote: bool) -> String {
         }
         Value::UnboundRelationship(r) => rel_body(&r.rel_type, &r.properties),
         Value::Path(p) => render_path(p),
-        // Provisional renderings — refined by slices 06–07.
-        Value::Date(d) => d.to_string(),
-        Value::Time(t, off) => format!("{t}{off}"),
-        Value::LocalTime(t) => t.to_string(),
-        Value::LocalDateTime(dt) => dt.to_string(),
-        Value::Duration(d) => format!("{:?}", d),
-        Value::DateTimeOffset(dt) => dt.to_string(),
-        Value::DateTimeZoned(dt) => dt.to_string(),
+        // Temporals match Memgraph's textual conventions: 6-digit microseconds
+        // throughout, and a named-zone datetime shows both offset and [Zone].
+        Value::Date(d) => d.format("%Y-%m-%d").to_string(),
+        Value::Time(t, off) => format!("{}{}", t.format("%H:%M:%S%.6f"), off),
+        Value::LocalTime(t) => t.format("%H:%M:%S%.6f").to_string(),
+        Value::LocalDateTime(dt) => dt.format("%Y-%m-%dT%H:%M:%S%.6f").to_string(),
+        Value::Duration(d) => duration(d),
+        Value::DateTimeOffset(dt) => dt.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string(),
+        Value::DateTimeZoned(dt) => format!(
+            "{}[{}]",
+            dt.format("%Y-%m-%dT%H:%M:%S%.6f%:z"),
+            dt.timezone().name()
+        ),
+        // Provisional renderings — refined by slice 07.
         Value::Point2d(p) => format!("{:?}", p),
         Value::Point3d(p) => format!("{:?}", p),
     }
@@ -280,6 +305,45 @@ mod tests {
                 properties: props(&[]),
             })),
             "[:KNOWS]"
+        );
+    }
+
+    #[test]
+    fn renders_temporals_matching_memgraph() {
+        use chrono::{FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+        use crate::value::Duration as Dur;
+
+        let date = NaiveDate::from_ymd_opt(2021, 6, 15).unwrap();
+        assert_eq!(tabular(&Value::Date(date)), "2021-06-15");
+
+        let lt = NaiveTime::from_hms_micro_opt(12, 34, 56, 789_000).unwrap();
+        assert_eq!(tabular(&Value::LocalTime(lt)), "12:34:56.789000");
+
+        let ldt = NaiveDateTime::new(date, lt);
+        assert_eq!(tabular(&Value::LocalDateTime(ldt)), "2021-06-15T12:34:56.789000");
+
+        assert_eq!(
+            tabular(&Value::Duration(Dur { months: 0, days: 1, seconds: 7384, nanos: 0 })),
+            "P1DT2H3M4.000000S"
+        );
+        assert_eq!(
+            tabular(&Value::Duration(Dur { months: 0, days: 1, seconds: 7384, nanos: 500_000_000 })),
+            "P1DT2H3M4.500000S"
+        );
+
+        let off = FixedOffset::east_opt(2 * 3600).unwrap();
+        let dto = off.with_ymd_and_hms(2021, 6, 15, 12, 34, 56).unwrap();
+        assert_eq!(
+            tabular(&Value::DateTimeOffset(dto)),
+            "2021-06-15T12:34:56.000000+02:00"
+        );
+
+        let dtz = chrono_tz::Europe::Zagreb
+            .with_ymd_and_hms(2021, 6, 15, 12, 34, 56)
+            .unwrap();
+        assert_eq!(
+            tabular(&Value::DateTimeZoned(dtz)),
+            "2021-06-15T12:34:56.000000+02:00[Europe/Zagreb]"
         );
     }
 

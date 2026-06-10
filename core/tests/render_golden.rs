@@ -165,3 +165,40 @@ fn graph_tabular_goldens() {
     ];
     golden::check_tabular("graph", &cases);
 }
+
+#[test]
+fn temporal_tabular_goldens() {
+    use chrono::{FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+    use mgconsole_core::value::Duration;
+
+    let date = NaiveDate::from_ymd_opt(2021, 6, 15).unwrap();
+    let time = NaiveTime::from_hms_micro_opt(12, 34, 56, 789_000).unwrap();
+    let off = FixedOffset::east_opt(2 * 3600).unwrap();
+
+    let cases: Vec<(&str, Value)> = vec![
+        ("date", Value::Date(date)),
+        ("local_time", Value::LocalTime(time)),
+        ("local_time_whole", Value::LocalTime(NaiveTime::from_hms_opt(9, 0, 0).unwrap())),
+        ("local_datetime", Value::LocalDateTime(NaiveDateTime::new(date, time))),
+        ("duration", Value::Duration(Duration { months: 0, days: 1, seconds: 7384, nanos: 0 })),
+        (
+            "duration_fractional",
+            Value::Duration(Duration { months: 0, days: 1, seconds: 7384, nanos: 500_000_000 }),
+        ),
+        (
+            "datetime_offset",
+            Value::DateTimeOffset(off.with_ymd_and_hms(2021, 6, 15, 12, 34, 56).unwrap()),
+        ),
+        (
+            "datetime_zoned",
+            Value::DateTimeZoned(
+                chrono_tz::Europe::Zagreb.with_ymd_and_hms(2021, 6, 15, 12, 34, 56).unwrap(),
+            ),
+        ),
+        (
+            "time_with_offset",
+            Value::Time(time, off),
+        ),
+    ];
+    golden::check_tabular("temporal", &cases);
+}
