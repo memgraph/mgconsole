@@ -558,6 +558,29 @@ fn draw_error(frame: &mut Frame, area: Rect, statement: &str, error: &str) {
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
+/// Render a trimmed Result-history entry (issue 06): the originating query and a
+/// clear "rows no longer held" note in place of the table, plus a pointer to the
+/// summary drawer when a summary was kept. The entry stays navigable as a record
+/// of what ran even though its Records were dropped to bound memory.
+fn draw_trimmed(frame: &mut Frame, area: Rect, statement: &str, summary: Option<&mgconsole_core::Summary>) {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(Span::styled("Query", bold)),
+        Line::from(statement.to_string()),
+        Line::from(""),
+        Line::from(Span::styled(
+            "(rows no longer held — trimmed from history)",
+            Style::default().add_modifier(Modifier::DIM),
+        )),
+    ];
+    if let Some(summary) = summary {
+        if !summary.stats.is_empty() || !summary.notifications.is_empty() {
+            lines.push(Line::from("summary kept — see the drawer"));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+}
+
 /// A one-line, truncated snippet of a query for the results-pane header (issue
 /// 05): runs of whitespace (and newlines) collapsed to single spaces, then cut to
 /// `max` characters with a trailing `…`. Lets every history position show which
@@ -641,9 +664,16 @@ fn draw_result(
         draw_error(frame, area, &result.statement, error);
         return;
     }
-    // An EXPLAIN/PROFILE result renders as an operator tree, not a table.
+    // An EXPLAIN/PROFILE result renders as an operator tree, not a table (its plan
+    // survives trimming, so this comes before the trimmed check).
     if let Some(plan) = &result.plan {
         draw_plan(frame, area, plan, focused);
+        return;
+    }
+    // A trimmed entry (issue 06) has had its Records dropped to bound memory; show
+    // its query and a "rows no longer held" note in place of the table.
+    if result.trimmed {
+        draw_trimmed(frame, area, &result.statement, result.summary.as_ref());
         return;
     }
     if result.header.is_empty() {
@@ -1006,6 +1036,19 @@ mod tests {
         assert!(rendered.contains("error"), "the header marks the failed entry: {rendered:?}");
         assert!(rendered.contains("RETRUN"), "the originating query is shown");
         assert!(rendered.contains("syntax error"), "the error is rendered in the result area");
+    }
+
+    #[test]
+    fn a_trimmed_entry_shows_the_rows_no_longer_held_note() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.history.push(CurrentResult {
+            statement: "MATCH (n) RETURN n".to_string(),
+            trimmed: true,
+            ..CurrentResult::default()
+        });
+        let rendered = render(&mut state);
+        assert!(rendered.contains("no longer held"), "the trim note is shown: {rendered:?}");
+        assert!(rendered.contains("MATCH"), "the originating query is still shown");
     }
 
     #[test]

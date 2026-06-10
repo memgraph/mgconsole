@@ -1,6 +1,6 @@
 # 06 — Bounded Result history
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

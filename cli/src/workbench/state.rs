@@ -461,6 +461,12 @@ pub struct CurrentResult {
     /// entry carrying its originating [`statement`](Self::statement) and error,
     /// not a status message that scrolls away. `None` for a successful query.
     pub error: Option<String>,
+    /// Set when this entry has been trimmed from the bounded Result history (issue
+    /// 06): its Records were dropped to bound memory, but its lightweight
+    /// correlation — statement, summary, error — is kept so it stays navigable as
+    /// a record of *what ran*. The draw then shows a "rows no longer held" note in
+    /// place of the table.
+    pub trimmed: bool,
 }
 
 impl CurrentResult {
@@ -506,6 +512,12 @@ pub struct StatusLine {
 /// is still navigable. Configurable; reached only by a pathological result.
 pub const DEFAULT_ROW_CAP: usize = 1_000_000;
 
+/// A generous cap on the number of *full* Result-history entries held per Buffer
+/// (issue 06). Older entries keep their lightweight correlation (query, summary,
+/// error) but drop their Records. Where [`DEFAULT_ROW_CAP`] bounds one result,
+/// this bounds the count of results so a long session does not grow unbounded.
+pub const DEFAULT_HISTORY_CAP: usize = 100;
+
 /// Frontend-local configuration resolved at startup.
 // Not `Debug`: carries the connect context (ConnectOptions has credentials, and
 // is not `Debug` — nor should secrets be printed).
@@ -518,6 +530,10 @@ pub struct WorkbenchConfig {
     pub newline_hint: &'static str,
     /// The memory backstop on rows held for one result (see [`DEFAULT_ROW_CAP`]).
     pub row_cap: usize,
+    /// The cap on full Result-history entries held per Buffer (issue 06; see
+    /// [`DEFAULT_HISTORY_CAP`]). Older entries keep their correlation but drop
+    /// their Records.
+    pub history_cap: usize,
     /// Whether `--verbose-execution-info` was set: the summary drawer then shows
     /// the per-query execution info (cost/parse/plan/execute) too (slice 18).
     pub verbose: bool,
@@ -569,6 +585,7 @@ impl Default for WorkbenchConfig {
             editor_percent: 40,
             newline_hint: "Alt+Enter",
             row_cap: DEFAULT_ROW_CAP,
+            history_cap: DEFAULT_HISTORY_CAP,
             verbose: false,
             settings: Settings::default(),
             profile: None,

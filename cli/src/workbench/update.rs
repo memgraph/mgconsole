@@ -200,9 +200,26 @@ fn on_started(state: &mut WorkbenchState, id: u64, header: Vec<String>) {
     }
     state.running_started = true;
     let statement = state.running_statement.clone().unwrap_or_default();
+    let cap = state.config.history_cap;
     if let Some((history, view)) = state.running_target() {
         history.push(CurrentResult::new(statement, header));
         *view = history.len() - 1;
+        trim_history(history, cap);
+    }
+}
+
+/// Bound a Buffer's Result history to `cap` full entries (issue 06): every entry
+/// older than the most recent `cap` keeps its query / summary / error but drops
+/// its Records (the memory cost), marked `trimmed` so the draw shows a "rows no
+/// longer held" note. The newest `cap` entries always keep their Records.
+fn trim_history(history: &mut [CurrentResult], cap: usize) {
+    if history.len() <= cap {
+        return;
+    }
+    let keep_from = history.len() - cap;
+    for entry in &mut history[..keep_from] {
+        entry.rows = Vec::new();
+        entry.trimmed = true;
     }
 }
 
@@ -277,6 +294,7 @@ fn on_failed(state: &mut WorkbenchState, id: u64, error: &Error) -> Vec<Effect> 
     let error_text = error.to_string();
     let statement = state.running_statement.clone().unwrap_or_default();
     let started = state.running_started;
+    let cap = state.config.history_cap;
     if let Some((history, view)) = state.running_target() {
         if started {
             if let Some(result) = history.last_mut() {
@@ -287,6 +305,7 @@ fn on_failed(state: &mut WorkbenchState, id: u64, error: &Error) -> Vec<Effect> 
             result.error = Some(error_text.clone());
             history.push(result);
             *view = history.len() - 1;
+            trim_history(history, cap);
         }
     }
     state.status.message = format!("error: {error_text}");
@@ -2061,6 +2080,52 @@ mod tests {
             Some(Value::String(q)) => assert!(q.contains("MATCH (n) WHERE n.x = 1"), "full query: {q}"),
             other => panic!("expected the full query in the detail overlay, got {other:?}"),
         }
+    }
+
+    // --- Bounded Result history (issue 06) ------------------------------------
+
+    /// Run `query` to completion (start → one row → complete) on an idle session.
+    fn run_to_completion(state: &mut WorkbenchState, query: &str) {
+        state.editor.clear(); // submit keeps the editor text; clear leftover first
+        let id = submit_query(state, query);
+        update(state, Event::QueryStarted { id, header: vec!["n".to_string()] });
+        update(state, Event::RecordArrived { id, record: one_row() });
+        update(
+            state,
+            Event::QueryCompleted { id, summary: Summary::default(), elapsed: Duration::from_millis(1) },
+        );
+    }
+
+    #[test]
+    fn the_history_is_bounded_dropping_records_of_older_entries() {
+        let mut s = wb();
+        s.config.history_cap = 2; // keep only the newest two full entries
+        run_to_completion(&mut s, "RETURN 1;");
+        run_to_completion(&mut s, "RETURN 2;");
+        run_to_completion(&mut s, "RETURN 3;");
+        assert_eq!(s.history.len(), 3, "all entries stay navigable");
+        // The oldest entry kept its correlation but dropped its Records.
+        assert_eq!(s.history[0].statement, "RETURN 1");
+        assert!(s.history[0].trimmed, "the oldest entry is trimmed");
+        assert!(s.history[0].rows.is_empty(), "its Records were dropped");
+        // The newest two keep their Records.
+        assert!(!s.history[1].trimmed && s.history[1].rows.len() == 1, "newest-but-one kept");
+        assert!(!s.history[2].trimmed && s.history[2].rows.len() == 1, "newest kept");
+    }
+
+    #[test]
+    fn a_trimmed_entry_keeps_its_query_and_error_correlation() {
+        let mut s = wb();
+        s.config.history_cap = 1;
+        // A failed submission, then a successful one pushes it past the cap.
+        let id = submit_query(&mut s, "BAD;");
+        update(&mut s, Event::QueryFailed { id, error: boom() });
+        run_to_completion(&mut s, "RETURN 1;");
+        assert_eq!(s.history.len(), 2);
+        // The trimmed failure still carries its query and error.
+        assert_eq!(s.history[0].statement, "BAD");
+        assert!(s.history[0].trimmed, "trimmed past the cap");
+        assert!(s.history[0].error.is_some(), "error correlation kept");
     }
 
     // --- results table navigation (slice 03) --------------------------------
