@@ -2,12 +2,15 @@
 //! that matter for import ordering. Used by parser mode (28) and to enforce
 //! vertices-first ordering in parallel import (31).
 //!
-//! It tokenises into lowercased identifier words, skipping string literals
-//! (`'…'`, `"…"`, `` `…` ``) and comments (`// …`, `/* … */`), so a keyword
-//! inside a string or comment is never detected, and word boundaries prevent
-//! `created` from matching `create`. No database.
+//! It reads the Core [`lexer`](crate::lexer)'s `Word` tokens, lowercased (ADR
+//! 0008 deepening, slice 07). A keyword inside a string or comment is part of a
+//! String/Comment token, not a `Word`, so it is never detected; and a `Word` is
+//! a whole identifier, so `created` does not match `create`. One lexical state
+//! machine, shared with `parse.rs` and the highlighter. No database.
 
 use std::collections::BTreeSet;
+
+use crate::lexer::{lex, TokenKind};
 
 /// A clause relevant to import ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -64,84 +67,14 @@ pub fn scan_clauses(query: &str) -> BTreeSet<Clause> {
     out
 }
 
-/// Lowercased identifier words, skipping string literals and comments.
+/// Lowercased `Word` tokens from the Core lexer. Strings and comments lex as
+/// their own kinds, so a keyword inside one is never returned here.
 fn keyword_tokens(query: &str) -> Vec<String> {
-    let chars: Vec<char> = query.chars().collect();
-    let mut words = Vec::new();
-    let mut cur = String::new();
-    let mut i = 0;
-
-    let flush = |cur: &mut String, words: &mut Vec<String>| {
-        if !cur.is_empty() {
-            words.push(std::mem::take(cur));
-        }
-    };
-
-    while i < chars.len() {
-        let c = chars[i];
-        match c {
-            '\'' | '"' | '`' => {
-                flush(&mut cur, &mut words);
-                i = skip_string(&chars, i, c);
-                continue;
-            }
-            '/' if chars.get(i + 1) == Some(&'/') => {
-                flush(&mut cur, &mut words);
-                i = skip_to(&chars, i + 2, '\n');
-                continue;
-            }
-            '/' if chars.get(i + 1) == Some(&'*') => {
-                flush(&mut cur, &mut words);
-                i = skip_block_comment(&chars, i + 2);
-                continue;
-            }
-            _ if c.is_alphanumeric() || c == '_' => cur.push(c.to_ascii_lowercase()),
-            _ => flush(&mut cur, &mut words),
-        }
-        i += 1;
-    }
-    flush(&mut cur, &mut words);
-    words
-}
-
-/// Index just past the closing `quote` (honours `\` escapes; doubled backticks).
-fn skip_string(chars: &[char], open: usize, quote: char) -> usize {
-    let mut i = open + 1;
-    while i < chars.len() {
-        let c = chars[i];
-        if quote != '`' && c == '\\' {
-            i += 2;
-            continue;
-        }
-        if c == quote {
-            if quote == '`' && chars.get(i + 1) == Some(&'`') {
-                i += 2;
-                continue;
-            }
-            return i + 1;
-        }
-        i += 1;
-    }
-    i
-}
-
-fn skip_to(chars: &[char], from: usize, target: char) -> usize {
-    let mut i = from;
-    while i < chars.len() && chars[i] != target {
-        i += 1;
-    }
-    i
-}
-
-fn skip_block_comment(chars: &[char], from: usize) -> usize {
-    let mut i = from;
-    while i < chars.len() {
-        if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
-            return i + 2;
-        }
-        i += 1;
-    }
-    i
+    lex(query)
+        .iter()
+        .filter(|token| token.kind == TokenKind::Word)
+        .map(|token| token.text(query).to_ascii_lowercase())
+        .collect()
 }
 
 #[cfg(test)]

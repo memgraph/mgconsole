@@ -1,6 +1,6 @@
 # 07 — Consolidate `clause.rs` onto the Core lexer
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
