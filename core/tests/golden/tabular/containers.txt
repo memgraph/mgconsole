@@ -1,0 +1,10 @@
+list_empty	[]
+list_ints	[1, 2, 3]
+list_strings	["a", "b"]
+list_mixed	[1, "two", 3.0, Null]
+map_empty	{}
+map_basic	{age: 36, name: "Ada"}
+list_of_maps	[{x: 1}, {x: 2}]
+map_of_lists	{xs: [1, 2]}
+deep_nesting	[{inner: [{k: "v"}]}]
+string_with_quote_nested	["say \"hi\""]

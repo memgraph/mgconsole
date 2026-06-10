@@ -1,6 +1,6 @@
 # 04 — Render lists + maps (tabular)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -14,11 +14,11 @@ slice 03 with new fixtures. Pure function, no database.
 
 ## Acceptance criteria
 
-- [ ] Lists render with their elements, including empty lists
-- [ ] Maps render with their key/value pairs, including empty maps
-- [ ] Nested combinations (list-of-map, map-of-list, deep nesting) render correctly
-- [ ] Values inside containers reuse the scalar/string rendering from slice 03
-- [ ] Golden fixtures cover the above; tests are pure
+- [x] Lists render with their elements, including empty lists
+- [x] Maps render with their key/value pairs, including empty maps
+- [x] Nested combinations (list-of-map, map-of-list, deep nesting) render correctly
+- [x] Values inside containers reuse the scalar/string rendering from slice 03
+- [x] Golden fixtures cover the above; tests are pure
 
 ## Blocked by
 
