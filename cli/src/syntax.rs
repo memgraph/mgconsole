@@ -93,27 +93,59 @@ pub fn word_start(line: &str, pos: usize) -> usize {
     })
 }
 
-/// What a word is, for colouring.
+/// The Frontend-neutral lexical category of a token — the single classification
+/// both colour-owning Frontends share (ADR 0008, extended by ADR 0010). The
+/// Core lexer yields lexical *structure* (tokens); this maps that structure to
+/// the seven colour categories, and each Frontend renders a category its own
+/// way: the REPL to ANSI ([`highlight`]), the workbench to a ratatui `Style`
+/// (slice 05). One classification, two renderings — no terminal or colour leaks
+/// into the classification itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WordKind {
+pub enum HighlightCategory {
     /// A Cypher or Memgraph keyword.
     Keyword,
     /// An awesome-function name.
     Function,
-    /// Anything else (identifiers, literals, punctuation).
+    /// A string literal.
+    String,
+    /// A numeric literal.
+    Number,
+    /// A line or block comment.
+    Comment,
+    /// A `$name` parameter reference (the `:param` family).
+    Parameter,
+    /// Everything else: identifiers, punctuation, whitespace — left
+    /// terminal-default so the coloured categories pop.
     Plain,
 }
 
-/// Classify a single word (case-insensitively). Keywords win over functions when
-/// a name appears in both tables, matching `mgconsole`'s precedence.
-pub fn classify(word: &str) -> WordKind {
+/// Classify one lexer token into its Frontend-neutral [`HighlightCategory`].
+/// A Word token is looked up in the keyword/function tables (keywords winning
+/// over functions when a name is in both, matching `mgconsole`'s precedence); a
+/// keyword or function name inside a String or Comment is *that* token, not a
+/// Word, so it classifies as String/Comment — the false-positive fix. Pure:
+/// token in, category out, no ANSI and no terminal.
+pub fn categorize(token: &Token, text: &str) -> HighlightCategory {
+    match token.kind {
+        TokenKind::Word => classify_word(text),
+        TokenKind::String => HighlightCategory::String,
+        TokenKind::Number => HighlightCategory::Number,
+        TokenKind::Comment => HighlightCategory::Comment,
+        TokenKind::Parameter => HighlightCategory::Parameter,
+        TokenKind::Punct | TokenKind::Whitespace => HighlightCategory::Plain,
+    }
+}
+
+/// Classify a single word (case-insensitively) against the keyword/function
+/// tables. Keywords win over functions when a name appears in both.
+fn classify_word(word: &str) -> HighlightCategory {
     let upper = word.to_uppercase();
     if CYPHER_KEYWORDS.contains(&upper.as_str()) || MEMGRAPH_KEYWORDS.contains(&upper.as_str()) {
-        WordKind::Keyword
+        HighlightCategory::Keyword
     } else if AWESOME_FUNCTIONS.contains(&upper.as_str()) {
-        WordKind::Function
+        HighlightCategory::Function
     } else {
-        WordKind::Plain
+        HighlightCategory::Plain
     }
 }
 
@@ -137,7 +169,7 @@ pub fn highlight(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     for token in lex(line) {
         let text = token.text(line);
-        match colour_for(&token, text) {
+        match ansi_for(categorize(&token, text)) {
             Some(colour) => {
                 out.push_str(colour);
                 out.push_str(text);
@@ -149,26 +181,23 @@ pub fn highlight(line: &str) -> String {
     out
 }
 
-/// The ANSI colour a token is painted, or `None` to leave it terminal-default.
-/// Only Word tokens are classified here (keyword/function); the literal and
-/// comment kinds gain their colours in later slices, so this stays the single
-/// place the palette grows.
-fn colour_for(token: &Token, text: &str) -> Option<&'static str> {
-    match token.kind {
-        TokenKind::Word => match classify(text) {
-            WordKind::Keyword => Some(YELLOW),
-            WordKind::Function => Some(CYAN),
-            WordKind::Plain => None,
-        },
-        TokenKind::String => Some(GREEN),
-        TokenKind::Number => Some(MAGENTA),
-        TokenKind::Comment => Some(GREY),
-        // A `$name` reference (the `:param` family, slice 20) gets its own colour
-        // so a writer sees at a glance which `$name`s are bound vs typos.
-        TokenKind::Parameter => Some(BLUE),
-        // Punctuation and identifier words stay terminal-default so the coloured
-        // categories pop and a typo'd keyword stands out by contrast.
-        TokenKind::Punct | TokenKind::Whitespace => None,
+/// The REPL's rendering of a [`HighlightCategory`]: the ANSI colour it is
+/// painted, or `None` to leave it terminal-default. This is the REPL Frontend's
+/// half of "one classification, two renderings" (ADR 0008/0010) — the workbench
+/// maps the same categories to ratatui styles instead (slice 05). `Plain` stays
+/// terminal-default so the coloured categories pop and a typo'd keyword stands
+/// out by contrast.
+fn ansi_for(category: HighlightCategory) -> Option<&'static str> {
+    match category {
+        HighlightCategory::Keyword => Some(YELLOW),
+        HighlightCategory::Function => Some(CYAN),
+        HighlightCategory::String => Some(GREEN),
+        HighlightCategory::Number => Some(MAGENTA),
+        HighlightCategory::Comment => Some(GREY),
+        // A `$name` reference gets its own colour so a writer sees at a glance
+        // which `$name`s are bound vs typos.
+        HighlightCategory::Parameter => Some(BLUE),
+        HighlightCategory::Plain => None,
     }
 }
 
@@ -249,12 +278,35 @@ mod tests {
         assert_eq!(word_start("MATCH", 5), 0);
     }
 
+    /// Categorise the first token of a single-token input, so the classification
+    /// can be asserted with no ANSI and no terminal (acceptance: pure, ANSI-free).
+    fn category_of(src: &str) -> HighlightCategory {
+        let token = lex(src).into_iter().next().expect("at least one token");
+        categorize(&token, token.text(src))
+    }
+
     #[test]
-    fn classify_recognises_each_kind() {
-        assert_eq!(classify("match"), WordKind::Keyword); // cypher, case-insensitive
-        assert_eq!(classify("DATABASE"), WordKind::Keyword); // memgraph
-        assert_eq!(classify("abs"), WordKind::Function);
-        assert_eq!(classify("myVariable"), WordKind::Plain);
+    fn categorize_classifies_each_token_kind_without_ansi() {
+        assert_eq!(category_of("match"), HighlightCategory::Keyword); // cypher, case-insensitive
+        assert_eq!(category_of("DATABASE"), HighlightCategory::Keyword); // memgraph
+        assert_eq!(category_of("abs"), HighlightCategory::Function);
+        assert_eq!(category_of("myVariable"), HighlightCategory::Plain);
+        assert_eq!(category_of("'hi'"), HighlightCategory::String);
+        assert_eq!(category_of("42"), HighlightCategory::Number);
+        assert_eq!(category_of("// note"), HighlightCategory::Comment);
+        assert_eq!(category_of("$age"), HighlightCategory::Parameter);
+    }
+
+    #[test]
+    fn punctuation_categorizes_as_plain() {
+        assert_eq!(category_of("("), HighlightCategory::Plain);
+    }
+
+    #[test]
+    fn categorize_keyword_wins_over_function_when_a_name_is_in_both() {
+        // POINT is both a Cypher keyword and a function name; keyword precedence
+        // holds (matching mgconsole), independent of any colouring.
+        assert_eq!(category_of("POINT"), HighlightCategory::Keyword);
     }
 
     #[test]

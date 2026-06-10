@@ -1,6 +1,6 @@
 # 04 — Frontend-neutral `HighlightCategory` refactor
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -20,12 +20,14 @@ ANSI output does not change.
 
 ## Acceptance criteria
 
-- [ ] A shared `HighlightCategory` (the seven categories) is produced from the
+- [x] A shared `HighlightCategory` (the seven categories) is produced from the
       Core lexer's tokens + the keyword/function tables, independent of any ANSI
-      or terminal styling.
-- [ ] The REPL highlighter maps `HighlightCategory` to its existing ANSI colours;
+      or terminal styling. (`syntax::categorize` / `HighlightCategory`)
+- [x] The REPL highlighter maps `HighlightCategory` to its existing ANSI colours;
       all existing REPL highlight tests pass unchanged (behaviour-preserving).
-- [ ] The classification is covered by pure unit tests independent of ANSI.
+      (`syntax::ansi_for`; all prior highlight tests green)
+- [x] The classification is covered by pure unit tests independent of ANSI.
+      (`categorize_*` tests via the `category_of` helper)
 
 ## Blocked by
 
