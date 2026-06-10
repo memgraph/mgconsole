@@ -69,6 +69,8 @@ pub enum MetaCommand {
     Connect(String),
     /// `:use <db>` — switch the active Database within the Session (issue 08).
     Use(String),
+    /// `:sysinfo` — run the server-status queries and render them (issue 09).
+    Sysinfo,
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -111,6 +113,7 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
                 MetaCommand::Use(args.to_string())
             }
         }
+        "sysinfo" => MetaCommand::Sysinfo,
         _ => MetaCommand::Unknown(trimmed.to_string()),
     })
 }
@@ -241,7 +244,8 @@ pub fn help_text() -> &'static str {
      \t:commit                Commit the open transaction\n\
      \t:rollback              Roll back the open transaction\n\
      \t:connect <target>      Swap to another server (a profile or host[:port])\n\
-     \t:use <db>              Switch the active database (multi-tenancy)"
+     \t:use <db>              Switch the active database (multi-tenancy)\n\
+     \t:sysinfo               Show server version and storage/runtime info"
 }
 
 /// Documentation pointers, printed by `:docs`. Carried over from `mgconsole`.
@@ -366,6 +370,41 @@ pub struct ReplConfig {
 ///
 /// Generic over its IO seams so it runs identically under rustyline-with-a-
 /// Session and under a test's scripted input with a fake runner.
+/// The server-status queries `:sysinfo` runs and renders (issue 09): the version
+/// and the storage/runtime info Memgraph exposes. Each renders like any other
+/// result, and one that a server does not support degrades to a reported error
+/// without stopping the rest.
+pub const SYSINFO_QUERIES: &[&str] = &["SHOW VERSION", "SHOW STORAGE INFO"];
+
+/// Run one query and print its rendered table, summary, and any overflow warning
+/// — the shared body of the loop's per-query handling and `:sysinfo`. A query
+/// error is reported without ending the loop.
+fn execute_query(
+    runner: &mut dyn QueryRunner,
+    query: &str,
+    params: &BTreeMap<String, Value>,
+    display: DisplayMode,
+    row_cap: usize,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> io::Result<()> {
+    match runner.run(query, params, display) {
+        Ok(result) => {
+            if !result.table.is_empty() {
+                writeln!(out, "{}", result.table)?;
+            }
+            writeln!(out, "{}", format_summary(result.row_count, result.elapsed))?;
+            if result.overflowed {
+                writeln!(err, "{}", tabular::row_cap_warning(row_cap))?;
+            }
+        }
+        // The Session classifies recoverable vs fatal and recovers internally
+        // (slice 14); the REPL reports and keeps going.
+        Err(e) => writeln!(err, "error: {e}")?,
+    }
+    Ok(())
+}
+
 /// Whether a handled meta-command should end the loop or carry on.
 enum MetaFlow {
     /// `:quit` — leave the REPL.
@@ -383,6 +422,7 @@ fn dispatch_meta(
     runner: &mut dyn QueryRunner,
     settings: &mut Settings,
     params: &mut BTreeMap<String, Value>,
+    row_cap: usize,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> io::Result<MetaFlow> {
@@ -456,6 +496,13 @@ fn dispatch_meta(
             Ok(()) => writeln!(out, "using database {database}")?,
             Err(e) => writeln!(err, "error: {e}")?,
         },
+        // `:sysinfo` runs the server-status queries through the normal render
+        // path, honouring the current `display` mode (issue 09).
+        MetaCommand::Sysinfo => {
+            for query in SYSINFO_QUERIES {
+                execute_query(runner, query, params, settings.display, row_cap, out, err)?;
+            }
+        }
         MetaCommand::Invalid(message) => writeln!(err, "error: {message}")?,
         MetaCommand::Unknown(cmd) => writeln!(err, "error: unknown command '{cmd}'")?,
     }
@@ -492,7 +539,8 @@ pub fn run_loop(
         // `:quit` short-circuit; only ordinary query text falls through to run.
         if !continued {
             if let Some(cmd) = meta_command(&text) {
-                match dispatch_meta(cmd, runner, &mut settings, &mut params, out, err)? {
+                match dispatch_meta(cmd, runner, &mut settings, &mut params, config.row_cap, out, err)?
+                {
                     MetaFlow::Quit => break,
                     MetaFlow::Handled => continue,
                 }
@@ -502,20 +550,7 @@ pub fn run_loop(
         // The trailing newline lets a line comment close and separates physical
         // lines when assembling across reads.
         for query in assembler.push(&format!("{text}\n")) {
-            match runner.run(&query, &params, settings.display) {
-                Ok(result) => {
-                    if !result.table.is_empty() {
-                        writeln!(out, "{}", result.table)?;
-                    }
-                    writeln!(out, "{}", format_summary(result.row_count, result.elapsed))?;
-                    if result.overflowed {
-                        writeln!(err, "{}", tabular::row_cap_warning(config.row_cap))?;
-                    }
-                }
-                // The Session classifies recoverable vs fatal and recovers
-                // internally (slice 14); the REPL reports and keeps going.
-                Err(e) => writeln!(err, "error: {e}")?,
-            }
+            execute_query(runner, &query, &params, settings.display, config.row_cap, out, err)?;
         }
     }
     Ok(())
@@ -736,6 +771,18 @@ mod tests {
             drive(vec![Line::Text(":use analytics".into())], vec![]);
         assert_eq!(runner.used, vec!["analytics".to_string()]);
         assert!(out.contains("using database analytics"), "confirmation: {out}");
+    }
+
+    #[test]
+    fn sysinfo_runs_the_status_queries_through_the_render_path() {
+        let results: Vec<_> = SYSINFO_QUERIES.iter().map(|_| Ok(ok_result("t", 1))).collect();
+        let (_src, runner, out, _err) = drive(vec![Line::Text(":sysinfo".into())], results);
+        // Each status query ran, in order, rendering like a normal result.
+        assert_eq!(
+            runner.seen,
+            SYSINFO_QUERIES.iter().map(ToString::to_string).collect::<Vec<_>>()
+        );
+        assert_eq!(out.matches("row in set").count(), SYSINFO_QUERIES.len());
     }
 
     #[test]

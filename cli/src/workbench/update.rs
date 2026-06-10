@@ -834,6 +834,23 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             state.editor.clear();
             vec![Effect::UseDatabase(database)]
         }
+        // `:sysinfo` runs the server-status queries as a normal batch (issue 09):
+        // each result lands in the result pane, rendered like any other.
+        MetaCommand::Sysinfo => {
+            if matches!(state.run, RunState::Running { .. }) {
+                state.status.message = "session busy — cancel first".to_string();
+                return Vec::new();
+            }
+            state.editor.clear();
+            let mut statements = crate::repl::SYSINFO_QUERIES
+                .iter()
+                .map(|q| (*q).to_string());
+            let Some(first) = statements.next() else {
+                return Vec::new();
+            };
+            state.pending = statements.collect();
+            start_query(state, first)
+        }
         MetaCommand::Invalid(message) => {
             state.status.message = format!("error: {message}");
             Vec::new()
@@ -1862,6 +1879,22 @@ mod tests {
         update(&mut s, Event::Connected(Err("refused".to_string())));
         assert_eq!(s.endpoint, "old:7687", "prior connection display intact");
         assert!(s.status.message.contains("error"));
+    }
+
+    #[test]
+    fn sysinfo_runs_the_status_queries_as_a_batch() {
+        let mut s = wb();
+        type_str(&mut s, ":sysinfo");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        // The first status query starts; the rest queue (issue 09).
+        match effects.first() {
+            Some(Effect::RunQuery { query, .. }) => {
+                assert_eq!(query, crate::repl::SYSINFO_QUERIES[0]);
+            }
+            other => panic!("expected a RunQuery, got {other:?}"),
+        }
+        assert_eq!(s.pending.len(), crate::repl::SYSINFO_QUERIES.len() - 1);
+        assert_eq!(s.editor.buffer(), "");
     }
 
     #[test]

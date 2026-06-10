@@ -662,3 +662,21 @@ async fn use_database_surfaces_a_clear_error_and_keeps_the_session_usable() {
     let rec = ok.records().next().await.expect("ok").expect("row");
     assert_eq!(rec.fields(), &[Value::Integer(1)]);
 }
+
+#[tokio::test]
+async fn sysinfo_queries_return_live_server_status() {
+    // The queries `:sysinfo` runs (issue 09) return real version + storage info.
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    let mut version = session.run("SHOW VERSION").await.expect("version");
+    let row = version.records().next().await.expect("ok").expect("a version row");
+    assert!(matches!(row.fields().first(), Some(Value::String(_))), "version is a string");
+    version.records().discard().await.expect("drain version");
+
+    let mut storage = session.run("SHOW STORAGE INFO").await.expect("storage info");
+    let rows = storage.records().collect().await.expect("drain");
+    assert!(!rows.is_empty(), "storage info has rows");
+    // Each row is a (name, value) pair the value renderer handles as-is.
+    assert!(rows.iter().all(|r| r.fields().len() == 2), "storage info is name/value pairs");
+}
