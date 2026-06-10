@@ -106,6 +106,44 @@ async fn pipes_a_cypherl_stream_and_reflects_the_exit_code() {
     );
 }
 
+#[tokio::test]
+async fn batched_parallel_import_loads_data_via_the_cli_flags() {
+    let mg = start_memgraph().await;
+
+    // Pipe 60 independent node creates through the batched-parallel path, driven
+    // entirely by the CLI flags (workers + batch size).
+    let mut stream = String::new();
+    for i in 0..60 {
+        stream.push_str(&format!("CREATE (:Item {{n: {i}}});\n"));
+    }
+    let imported = run_cli(
+        &mg,
+        &[
+            "--import-mode",
+            "batched-parallel",
+            "--workers-number",
+            "4",
+            "--batch-size",
+            "8",
+        ],
+        &stream,
+    );
+    assert!(
+        imported.status.success(),
+        "parallel import exits zero; stderr: {}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
+
+    // A follow-up read confirms every node landed exactly once.
+    let counted = run_cli(
+        &mg,
+        &["--output-format", "csv"],
+        "MATCH (i:Item) RETURN count(i) AS n;\n",
+    );
+    assert!(counted.status.success());
+    assert_eq!(String::from_utf8(counted.stdout).unwrap(), "n\n60\n");
+}
+
 #[test]
 fn parser_mode_reports_without_touching_the_database() {
     // Point at an address nothing listens on: parser mode must succeed anyway,

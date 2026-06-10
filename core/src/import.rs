@@ -12,8 +12,11 @@
 //! within bounded memory regardless of result size; the tabular format buffers
 //! its rows, the deliberate exception (slice 08).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 use crate::clause::{scan_clauses, Clause};
 use crate::error::Error;
@@ -21,6 +24,7 @@ use crate::format::{self, CsvOptions, CsvWriter, CypherlWriter, JsonlWriter};
 use crate::session::Session;
 use crate::tabular::{render_table, TableOptions};
 use crate::value::Value;
+use crate::workers::Workers;
 
 /// How a serial run renders each query's result. Mirrors the CLI output-format
 /// flag, carrying the per-format config the Core needs to render (csv options,
@@ -168,6 +172,102 @@ async fn execute_and_render<W: Write>(
     Ok(())
 }
 
+// --- Batched-parallel executor (slice 30) ---------------------------------
+
+/// A group of queries submitted together as one unit of concurrency (CONTEXT.md
+/// "Batch"). A worker pulls a Batch and runs its queries in order on its Session.
+#[derive(Debug, Clone)]
+pub struct Batch {
+    pub queries: Vec<String>,
+}
+
+/// The outcome of a batched-parallel run: how many queries ran cleanly and which
+/// failed (across all workers, so order is not significant).
+#[derive(Debug, Default)]
+pub struct ParallelReport {
+    pub executed: usize,
+    pub failures: Vec<ImportFailure>,
+}
+
+impl ParallelReport {
+    /// Whether every query succeeded (drives a zero exit code).
+    pub fn is_success(&self) -> bool {
+        self.failures.is_empty()
+    }
+}
+
+/// Split a query stream into Batches of at most `batch_size` queries, preserving
+/// input order within and across Batches. A `batch_size` of 0 is treated as 1.
+pub fn into_batches<I: IntoIterator<Item = String>>(queries: I, batch_size: usize) -> Vec<Batch> {
+    let batch_size = batch_size.max(1);
+    let mut batches = Vec::new();
+    let mut current = Vec::with_capacity(batch_size);
+    for query in queries {
+        current.push(query);
+        if current.len() == batch_size {
+            batches.push(Batch {
+                queries: std::mem::take(&mut current),
+            });
+        }
+    }
+    if !current.is_empty() {
+        batches.push(Batch { queries: current });
+    }
+    batches
+}
+
+/// Run a query stream as a batched-parallel import (ADR 0006 worker-pull): split
+/// it into Batches and let the `workers` pull from a shared queue until it
+/// drains. The worker count *is* the concurrency bound — there is no separate
+/// semaphore. Query output is discarded (parallel import loads data; result
+/// ordering across workers is meaningless); a failed query is recorded.
+///
+/// This slice delivers raw parallelism: Batches run in input order *within* a
+/// worker but interleave *across* workers, so cross-Batch ordering is not
+/// guaranteed — vertices-first ordering (slice 31) and retry (slice 32) layer on.
+pub async fn run_parallel<I: IntoIterator<Item = String>>(
+    workers: Workers,
+    queries: I,
+    batch_size: usize,
+) -> ParallelReport {
+    let queue: Arc<Mutex<VecDeque<Batch>>> =
+        Arc::new(Mutex::new(into_batches(queries, batch_size).into()));
+
+    let mut handles = Vec::new();
+    for mut session in workers.into_sessions() {
+        let queue = queue.clone();
+        handles.push(tokio::spawn(async move {
+            let mut outcome = ParallelReport::default();
+            // Pull one Batch at a time until the shared queue drains.
+            while let Some(batch) = queue.lock().await.pop_front() {
+                for query in batch.queries {
+                    match run_write(&mut session, &query).await {
+                        Ok(()) => outcome.executed += 1,
+                        Err(error) => outcome.failures.push(ImportFailure { query, error }),
+                    }
+                }
+            }
+            outcome
+        }));
+    }
+
+    let mut report = ParallelReport::default();
+    for handle in handles {
+        let outcome = handle.await.expect("worker task joins");
+        report.executed += outcome.executed;
+        report.failures.extend(outcome.failures);
+    }
+    report
+}
+
+/// Run one import query and discard its result, leaving the Session ready for the
+/// next (ADR 0005). Used by the parallel path, where output is not rendered.
+async fn run_write(session: &mut Session, query: &str) -> Result<(), Error> {
+    let mut result = session.run(query).await?;
+    result.records().discard().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,5 +308,35 @@ mod tests {
         assert_eq!(report.query_count(), 1);
         assert!(report.queries[0].clauses.is_empty());
         assert!(report.clause_counts.is_empty());
+    }
+
+    fn batch_sizes(qs: &[&str], size: usize) -> Vec<usize> {
+        into_batches(queries(qs), size)
+            .iter()
+            .map(|b| b.queries.len())
+            .collect()
+    }
+
+    #[test]
+    fn batches_are_filled_to_size_with_a_short_final_batch() {
+        assert_eq!(batch_sizes(&["a", "b", "c", "d", "e"], 2), vec![2, 2, 1]);
+        assert_eq!(batch_sizes(&["a", "b", "c", "d"], 2), vec![2, 2]);
+    }
+
+    #[test]
+    fn batching_preserves_input_order() {
+        let batches = into_batches(queries(&["a", "b", "c"]), 2);
+        assert_eq!(batches[0].queries, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(batches[1].queries, vec!["c".to_string()]);
+    }
+
+    #[test]
+    fn an_empty_input_yields_no_batches() {
+        assert!(into_batches(Vec::<String>::new(), 10).is_empty());
+    }
+
+    #[test]
+    fn a_zero_batch_size_is_treated_as_one() {
+        assert_eq!(batch_sizes(&["a", "b"], 0), vec![1, 1]);
     }
 }

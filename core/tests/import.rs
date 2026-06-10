@@ -6,7 +6,7 @@
 mod common;
 
 use mgconsole_core::format::CsvOptions;
-use mgconsole_core::{run_serial, ImportFormat, Value};
+use mgconsole_core::{run_parallel, run_serial, ImportFormat, Session, Value, Workers};
 
 #[tokio::test]
 async fn runs_a_cypherl_stream_serially_and_takes_effect() {
@@ -86,4 +86,43 @@ async fn a_failing_query_is_recorded_and_the_run_continues() {
         .expect("count query");
     let record = count.records().next().await.expect("ok").expect("one row");
     assert_eq!(record.fields(), &[Value::Integer(2)]);
+}
+
+#[tokio::test]
+async fn batched_parallel_import_loads_a_dataset_across_workers() {
+    // A dedicated container: this opens several worker connections of its own.
+    let mg = common::start_memgraph().await;
+
+    // 200 independent node creates — no inter-query dependencies, so any
+    // interleaving across workers produces the same correct graph (vertices-first
+    // ordering is slice 31; this slice is raw parallelism).
+    let queries: Vec<String> = (0..200)
+        .map(|i| format!("CREATE (:Item {{n: {i}}})"))
+        .collect();
+
+    let workers = Workers::connect(&mg.host, mg.port, &Default::default(), 4)
+        .await
+        .expect("4 workers");
+
+    // batch-size 16 over 4 workers: many Batches pulled concurrently.
+    let report = run_parallel(workers, queries, 16).await;
+    assert!(report.is_success(), "clean parallel import: {report:?}");
+    assert_eq!(report.executed, 200);
+
+    // Every Batch's effect landed exactly once.
+    let mut verify = common::connect(&mg).await;
+    let count = scalar(&mut verify, "MATCH (i:Item) RETURN count(i)").await;
+    assert_eq!(count, 200);
+    let distinct = scalar(&mut verify, "MATCH (i:Item) RETURN count(DISTINCT i.n)").await;
+    assert_eq!(distinct, 200, "no query ran twice or was dropped");
+}
+
+/// Run a query expected to return a single integer scalar.
+async fn scalar(session: &mut Session, query: &str) -> i64 {
+    let mut result = session.run(query).await.expect("scalar query");
+    let record = result.records().next().await.expect("ok").expect("one row");
+    match record.fields() {
+        [Value::Integer(n)] => *n,
+        other => panic!("expected one integer, got {other:?}"),
+    }
 }

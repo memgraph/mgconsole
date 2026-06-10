@@ -25,8 +25,9 @@ use mgconsole::syntax::{self, Completer};
 use mgconsole::{resolve_password, Cli, ImportMode, OutputFormat};
 use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
-    render_table, run_parser, run_serial, ConnectOptions, Credentials, Error, ImportFormat,
-    ParserReport, QueryAssembler, ReconnectNotice, Session, TableOptions, Value, DEFAULT_ROW_CAP,
+    render_table, run_parallel, run_parser, run_serial, ConnectOptions, Credentials, Error,
+    ImportFormat, ParserReport, QueryAssembler, ReconnectNotice, Session, TableOptions, Value,
+    Workers, DEFAULT_ROW_CAP,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -68,6 +69,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
+
+    // Batched-parallel import runs over N worker Sessions, not the single Session
+    // the REPL/serial path uses, so establish them and run the executor here
+    // (slice 30). Non-interactive only; exits non-zero if any query fails.
+    if !io::stdin().is_terminal() && cli.import_mode == ImportMode::BatchedParallel {
+        let queries = read_queries(io::stdin().lock())?;
+        let report = runtime.block_on(async {
+            let workers =
+                Workers::connect(&cli.host, cli.port, &options, cli.workers_number).await?;
+            Ok::<_, Error>(run_parallel(workers, queries, cli.batch_size as usize).await)
+        })?;
+        for failure in &report.failures {
+            eprintln!("error: {}: {}", failure.query, failure.error);
+        }
+        if !report.is_success() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     let mut session = runtime.block_on(Session::connect_with(&cli.host, cli.port, &options))?;
     // Surface fatal-error reconnect attempts to the user (slice 14 hook).
