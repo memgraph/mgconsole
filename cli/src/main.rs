@@ -8,8 +8,10 @@
 use std::io::Read;
 
 use clap::Parser;
-use mgconsole::Cli;
-use mgconsole_core::{render_table, tabular, Error, Session, TableOptions, Value, DEFAULT_ROW_CAP};
+use mgconsole::{resolve_password, Cli};
+use mgconsole_core::{
+    render_table, tabular, Credentials, Error, Session, TableOptions, Value, DEFAULT_ROW_CAP,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -17,6 +19,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("error: {message}");
         std::process::exit(2);
     }
+
+    // Resolve auth before touching the network: a username with no password gets
+    // a hidden prompt; an empty username stays anonymous.
+    let password = match resolve_password(&cli.username, &cli.password, || {
+        rpassword::prompt_password("Password: ")
+    }) {
+        Ok(password) => password,
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(2);
+        }
+    };
+    let credentials = (!cli.username.is_empty()).then(|| Credentials {
+        username: cli.username.clone(),
+        password,
+    });
 
     let mut query = String::new();
     std::io::stdin().read_to_string(&mut query)?;
@@ -30,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     runtime.block_on(async {
-        let mut session = Session::connect(&cli.host, cli.port).await?;
+        let mut session = Session::connect_with(&cli.host, cli.port, credentials.as_ref()).await?;
         let mut result = session.run(query).await?;
         let header = result.header().to_vec();
         let (records, overflowed) = result.records().collect_capped(DEFAULT_ROW_CAP).await?;

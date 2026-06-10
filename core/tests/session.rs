@@ -2,7 +2,7 @@
 
 mod common;
 
-use mgconsole_core::Value;
+use mgconsole_core::{Credentials, Error, Session, Value};
 
 #[tokio::test]
 async fn runs_a_scalar_query_against_live_memgraph() {
@@ -48,6 +48,51 @@ async fn streams_a_large_result_incrementally() {
     }
     assert_eq!(count, 50_000);
     assert_eq!(last, 50_000);
+}
+
+#[tokio::test]
+async fn authenticates_with_valid_credentials_and_rejects_bad_ones() {
+    // Dedicated container: creating a user flips on auth enforcement for all new
+    // connections, so this must not run against a shared/wiped Memgraph.
+    let mg = common::start_memgraph().await;
+
+    // The first connection is still anonymous; use it to create a user. Once a
+    // user exists, Memgraph requires authentication for subsequent connections.
+    {
+        let mut admin = common::connect(&mg).await;
+        let mut created = admin
+            .run("CREATE USER tester IDENTIFIED BY 'secret'")
+            .await
+            .expect("create user");
+        // Drain (PULL) so the user is committed before we reconnect as them.
+        created.records().discard().await.expect("commit create user");
+    }
+
+    let good = Credentials {
+        username: "tester".to_string(),
+        password: "secret".to_string(),
+    };
+    let mut session = Session::connect_with(&mg.host, mg.port, Some(&good))
+        .await
+        .expect("valid credentials authenticate");
+    let mut result = session.run("RETURN 1 AS n").await.expect("authed query runs");
+    let record = result
+        .records()
+        .next()
+        .await
+        .expect("stream ok")
+        .expect("one record");
+    assert_eq!(record.fields(), &[Value::Integer(1)]);
+
+    let bad = Credentials {
+        username: "tester".to_string(),
+        password: "wrong".to_string(),
+    };
+    match Session::connect_with(&mg.host, mg.port, Some(&bad)).await {
+        Err(Error::Auth(_)) => {}
+        Err(other) => panic!("expected an auth error, got {other:?}"),
+        Ok(_) => panic!("bad credentials must not authenticate"),
+    }
 }
 
 #[tokio::test]

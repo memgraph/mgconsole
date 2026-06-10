@@ -107,6 +107,29 @@ pub struct Cli {
     pub parser_stats: bool,
 }
 
+/// Resolve the password to authenticate with, prompting only when a username is
+/// given without one.
+///
+/// The hidden, no-echo prompt is terminal IO, so it is injected as `prompt`:
+/// `main` passes a real no-echo reader; tests pass a closure. An empty username
+/// means an anonymous (unauthenticated) connection, so the password is
+/// irrelevant and never prompted for. A prompt that yields an empty password
+/// fails with a clear message rather than attempting a doomed empty login.
+pub fn resolve_password(
+    username: &str,
+    password: &str,
+    prompt: impl FnOnce() -> std::io::Result<String>,
+) -> Result<String, String> {
+    if username.is_empty() || !password.is_empty() {
+        return Ok(password.to_string());
+    }
+    let entered = prompt().map_err(|e| format!("could not read password: {e}"))?;
+    if entered.is_empty() {
+        return Err(format!("a password is required for user '{username}'"));
+    }
+    Ok(entered)
+}
+
 impl Cli {
     /// Cross-field validation that clap's per-argument parsing cannot express.
     ///
@@ -200,6 +223,35 @@ mod tests {
             .expect("parses");
         assert_eq!(cli.csv_escapechar, Some('\\'));
         cli.validate().expect("escape char supplied");
+    }
+
+    fn never_prompts() -> std::io::Result<String> {
+        panic!("prompt must not be called")
+    }
+
+    #[test]
+    fn anonymous_connection_never_prompts() {
+        let pw = resolve_password("", "", never_prompts).expect("anonymous ok");
+        assert_eq!(pw, "");
+    }
+
+    #[test]
+    fn explicit_password_is_used_without_prompting() {
+        let pw = resolve_password("alice", "secret", never_prompts).expect("explicit ok");
+        assert_eq!(pw, "secret");
+    }
+
+    #[test]
+    fn username_without_password_prompts() {
+        let pw = resolve_password("alice", "", || Ok("typed".to_string())).expect("prompt ok");
+        assert_eq!(pw, "typed");
+    }
+
+    #[test]
+    fn empty_prompted_password_fails_clearly() {
+        let err = resolve_password("alice", "", || Ok(String::new()))
+            .expect_err("empty password rejected");
+        assert!(err.contains("alice"), "message names the user: {err}");
     }
 
     #[test]

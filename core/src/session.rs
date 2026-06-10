@@ -25,31 +25,58 @@ pub(crate) type SharedConn = Arc<Mutex<Conn>>;
 
 const USER_AGENT: &str = concat!("mgconsole/", env!("CARGO_PKG_VERSION"));
 
+/// Username and password for basic authentication against Memgraph.
+pub struct Credentials {
+    pub username: String,
+    pub password: String,
+}
+
 pub struct Session {
     conn: SharedConn,
 }
 
 impl Session {
-    /// Connect to a Memgraph server by host and port and perform the Bolt
-    /// handshake + HELLO (unauthenticated for now).
+    /// Connect unauthenticated (HELLO with `scheme: none`).
     pub async fn connect(host: &str, port: u16) -> Result<Self, Error> {
+        Self::connect_with(host, port, None).await
+    }
+
+    /// Connect to a Memgraph server and perform the Bolt handshake + HELLO,
+    /// authenticating with `credentials` when supplied (`scheme: basic`).
+    ///
+    /// A HELLO refusal is reported as [`Error::Auth`] so the Frontend can tell a
+    /// rejected password apart from a transport failure.
+    pub async fn connect_with(
+        host: &str,
+        port: u16,
+        credentials: Option<&Credentials>,
+    ) -> Result<Self, Error> {
         let tcp = TcpStream::connect((host, port))
             .await
             .map_err(|e| Error::Connection(e.to_string()))?;
         let mut client = Client::new(BufStream::new(tcp).compat(), &[V4_4, V4_3, V4_2, V4_1])
             .await
             .map_err(|e| Error::Connection(e.to_string()))?;
+
+        let mut entries: Vec<(&str, &str)> = vec![("user_agent", USER_AGENT)];
+        match credentials {
+            Some(creds) => {
+                entries.push(("scheme", "basic"));
+                entries.push(("principal", &creds.username));
+                entries.push(("credentials", &creds.password));
+            }
+            None => entries.push(("scheme", "none")),
+        }
+
         let hello = client
-            .hello(Metadata::from_iter(vec![
-                ("user_agent", USER_AGENT),
-                ("scheme", "none"),
-            ]))
+            .hello(Metadata::from_iter(entries))
             .await
             .map_err(|e| Error::Protocol(e.to_string()))?;
         match hello {
             Message::Success(_) => Ok(Self {
                 conn: Arc::new(Mutex::new(client)),
             }),
+            Message::Failure(f) => Err(Error::Auth(proto::failure_message(f.metadata()))),
             other => Err(Error::Protocol(format!("HELLO refused: {other:?}"))),
         }
     }

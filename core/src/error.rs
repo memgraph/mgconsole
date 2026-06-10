@@ -11,6 +11,10 @@ pub enum Error {
     #[error("connection error: {0}")]
     Connection(String),
 
+    /// The server rejected the supplied credentials during the Bolt handshake.
+    #[error("authentication failed: {0}")]
+    Auth(String),
+
     /// The server rejected a query (e.g. bad Cypher). The Session survives.
     #[error("query error: {0}")]
     Query(String),
