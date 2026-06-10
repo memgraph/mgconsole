@@ -381,44 +381,85 @@ fn draw_help(frame: &mut Frame, text: &str, scroll: u16) {
     );
 }
 
-/// Render a query plan as a navigable, collapsible operator tree (slice 14):
-/// each visible line indented by its depth, a ▸/▾ marker on a node with a
-/// subtree, the selected line highlighted.
+/// Render a query plan (slice 14). An `EXPLAIN` plan is a navigable, collapsible
+/// operator tree; a `PROFILE` plan is the same tree in the first column of a table
+/// whose other columns are the per-operator hits/time metrics, aligned for reading
+/// (the tree *in* a table). The selected visible line is highlighted when focused.
 fn draw_plan(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool) {
+    if plan.is_profile() {
+        draw_plan_table(frame, area, plan, focused);
+    } else {
+        draw_plan_tree(frame, area, plan, focused);
+    }
+}
+
+/// The ▸/▾ marker and indentation that draw a line's place in the operator tree.
+fn plan_tree_cell(plan: &Plan, index: usize) -> String {
+    let node = &plan.lines[index];
+    let marker = if plan.has_children(index) {
+        if node.collapsed {
+            "▸ "
+        } else {
+            "▾ "
+        }
+    } else {
+        "  "
+    };
+    format!("{}{marker}{}", " ".repeat(node.depth), node.operator)
+}
+
+/// Draw an `EXPLAIN` plan as a bare collapsible tree (no metrics columns).
+fn draw_plan_tree(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool) {
     let lines: Vec<Line> = plan
         .visible()
         .into_iter()
         .map(|index| {
-            let node = &plan.lines[index];
-            let marker = if plan.has_children(index) {
-                if node.collapsed {
-                    "▸ "
-                } else {
-                    "▾ "
-                }
-            } else {
-                "  "
-            };
-            let operator = format!("{}{marker}{}", " ".repeat(node.depth), node.operator);
-            let row_style = if focused && index == plan.selected {
+            let style = if focused && index == plan.selected {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
                 Style::default()
             };
-            // PROFILE annotation (hits/time) trails the operator, dimmed.
-            match &node.annotation {
-                Some(annotation) => Line::from(vec![
-                    Span::styled(format!("{operator}  "), row_style),
-                    Span::styled(
-                        annotation.clone(),
-                        row_style.add_modifier(Modifier::DIM),
-                    ),
-                ]),
-                None => Line::styled(operator, row_style),
-            }
+            Line::styled(plan_tree_cell(plan, index), style)
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Draw a `PROFILE` plan as a table: the operator tree in the first column, then
+/// hits / relative-time / absolute-time in aligned (right-justified) columns.
+fn draw_plan_table(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool) {
+    let rows = plan.visible().into_iter().map(|index| {
+        let node = &plan.lines[index];
+        let metrics = node.annotation.clone().unwrap_or_default();
+        let style = if focused && index == plan.selected {
+            Style::default().add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        Row::new(vec![
+            Cell::from(plan_tree_cell(plan, index)),
+            Cell::from(Line::from(metrics.hits).right_aligned()),
+            Cell::from(Line::from(metrics.relative).right_aligned()),
+            Cell::from(Line::from(metrics.absolute).right_aligned()),
+        ])
+        .style(style)
+    });
+    let widths = [
+        Constraint::Min(20),
+        Constraint::Length(12),
+        Constraint::Length(11),
+        Constraint::Length(12),
+    ];
+    // The operator header reads left-aligned; the metric headers right-align to
+    // sit over their numbers.
+    let header = Row::new(vec![
+        Cell::from("OPERATOR"),
+        Cell::from(Line::from("HITS").right_aligned()),
+        Cell::from(Line::from("REL TIME").right_aligned()),
+        Cell::from(Line::from("ABS TIME").right_aligned()),
+    ])
+    .style(Style::default().add_modifier(Modifier::BOLD));
+    frame.render_widget(Table::new(rows, widths).header(header), area);
 }
 
 /// A rectangle centred in `area`, sized to `pct_x` × `pct_y` percent of it.
@@ -696,8 +737,8 @@ mod tests {
     }
 
     #[test]
-    fn renders_a_profile_plan_with_annotations() {
-        use crate::workbench::plan::{Plan, PlanLine};
+    fn renders_a_profile_plan_as_a_tree_in_a_table() {
+        use crate::workbench::plan::{Plan, PlanLine, PlanMetrics};
         let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
         let mut result = CurrentResult::new("PROFILE ...".to_string(), vec!["OPERATOR".to_string()]);
         result.plan = Some(Plan {
@@ -705,14 +746,22 @@ mod tests {
                 depth: 0,
                 operator: "Produce {n}".into(),
                 collapsed: false,
-                annotation: Some("2 hits".to_string()),
+                annotation: Some(PlanMetrics {
+                    hits: "202002".into(),
+                    relative: "54.36 %".into(),
+                    absolute: "9.49 ms".into(),
+                }),
             }],
             selected: 0,
         });
         state.history.push(result);
         let rendered = render(&mut state);
-        assert!(rendered.contains("Produce {n}"), "operator drawn");
-        assert!(rendered.contains("2 hits"), "annotation drawn");
+        // The operator (the tree) and the metric columns all appear, with headers.
+        assert!(rendered.contains("Produce {n}"), "operator drawn in the tree column");
+        assert!(rendered.contains("OPERATOR") && rendered.contains("HITS"), "table headers drawn");
+        assert!(rendered.contains("202002"), "hits column drawn");
+        assert!(rendered.contains("54.36 %"), "relative-time column drawn");
+        assert!(rendered.contains("9.49 ms"), "absolute-time column drawn");
     }
 
     #[test]

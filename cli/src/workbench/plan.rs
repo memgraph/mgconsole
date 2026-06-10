@@ -23,15 +23,28 @@ pub fn is_plan_query(query: &str) -> bool {
         })
 }
 
+/// A `PROFILE` operator's per-operator execution metrics (slice 15), kept as the
+/// separate columns Memgraph returns so the workbench can lay them out as an
+/// aligned table beside the operator tree, rather than one inline string.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlanMetrics {
+    /// `ACTUAL HITS` — the row count the operator processed.
+    pub hits: String,
+    /// `RELATIVE TIME` — this operator's share of the total (e.g. `54.36 %`).
+    pub relative: String,
+    /// `ABSOLUTE TIME` — wall-clock time spent in the operator (e.g. `9.49 ms`).
+    pub absolute: String,
+}
+
 /// One operator line of a plan: its indentation depth, its text, whether its
 /// subtree is collapsed, and — for a `PROFILE` plan — its per-operator execution
-/// annotation (hits/time, slice 15). `EXPLAIN` has no annotation.
+/// metrics (hits/time, slice 15). `EXPLAIN` has no metrics.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlanLine {
     pub depth: usize,
     pub operator: String,
     pub collapsed: bool,
-    pub annotation: Option<String>,
+    pub annotation: Option<PlanMetrics>,
 }
 
 /// A parsed query plan: the operator lines in order, with a selection cursor for
@@ -60,6 +73,12 @@ impl Plan {
             })
             .collect();
         Self { lines, selected: 0 }
+    }
+
+    /// Whether this is a `PROFILE` plan (any line carries execution metrics), so
+    /// it renders as a tree-plus-metrics table rather than a bare tree.
+    pub fn is_profile(&self) -> bool {
+        self.lines.iter().any(|line| line.annotation.is_some())
     }
 
     /// Whether line `index` has a subtree (a following line of greater depth).
@@ -136,16 +155,19 @@ fn parse_line(text: &str) -> PlanLine {
     }
 }
 
-/// The per-operator annotation from a `PROFILE` row's extra columns
-/// (`ACTUAL HITS`, `RELATIVE TIME`, `ABSOLUTE TIME`), or `None` for an `EXPLAIN`
-/// row (which has only the operator column). Verified against Memgraph 3.10.1.
-fn annotation(fields: &[Value]) -> Option<String> {
+/// The per-operator metrics from a `PROFILE` row's extra columns (`ACTUAL HITS`,
+/// `RELATIVE TIME`, `ABSOLUTE TIME`), kept as separate fields for tabular layout,
+/// or `None` for an `EXPLAIN` row (which has only the operator column). Verified
+/// against Memgraph 3.10.1.
+fn annotation(fields: &[Value]) -> Option<PlanMetrics> {
     let Some(Value::Integer(hits)) = fields.get(1) else {
         return None;
     };
-    let relative = string_cell(fields.get(2));
-    let absolute = string_cell(fields.get(3));
-    Some(format!("{hits} hits · {relative} · {absolute}"))
+    Some(PlanMetrics {
+        hits: hits.to_string(),
+        relative: string_cell(fields.get(2)),
+        absolute: string_cell(fields.get(3)),
+    })
 }
 
 /// A trimmed string cell, or empty when absent / not a string.
@@ -194,10 +216,11 @@ mod tests {
             Value::String("  0.0037 ms".to_string()),
         ]);
         let plan = Plan::parse(&[row]);
-        let annotation = plan.lines[0].annotation.as_ref().expect("annotation");
-        assert!(annotation.contains("2 hits"), "{annotation}");
-        assert!(annotation.contains("14.04 %"));
-        assert!(annotation.contains("0.0037 ms"));
+        assert!(plan.is_profile(), "a PROFILE plan carries metrics");
+        let metrics = plan.lines[0].annotation.as_ref().expect("metrics");
+        assert_eq!(metrics.hits, "2");
+        assert_eq!(metrics.relative, "14.04 %");
+        assert_eq!(metrics.absolute, "0.0037 ms");
     }
 
     #[test]
