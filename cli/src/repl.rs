@@ -39,6 +39,10 @@ pub fn is_complete(buffer: &str) -> bool {
 pub enum MetaCommand {
     /// Leave the REPL (`:quit`).
     Quit,
+    /// Print interactive-mode usage (`:help`).
+    Help,
+    /// Print documentation pointers (`:docs`).
+    Docs,
     /// A `:`-prefixed word that is not recognised.
     Unknown(String),
 }
@@ -52,8 +56,41 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
     let name = rest.split_whitespace().next().unwrap_or("");
     Some(match name {
         "quit" | "exit" => MetaCommand::Quit,
+        "help" => MetaCommand::Help,
+        "docs" => MetaCommand::Docs,
         _ => MetaCommand::Unknown(trimmed.to_string()),
     })
+}
+
+/// Interactive-mode usage, printed by `:help`. Carried over from `mgconsole`'s
+/// usage text, listing the commands the REPL implements (the `:param`/`:params`
+/// family lands in slice 20).
+pub fn help_text() -> &'static str {
+    "In interactive mode you can enter Cypher queries and the commands below.\n\
+     \n\
+     Cypher queries can span multiple lines and conclude with a semicolon (;).\n\
+     Each query is executed against the database and its results are printed.\n\
+     \n\
+     Supported commands:\n\
+     \n\
+     \t:help                  Print this usage for interactive mode\n\
+     \t:quit                  Exit the shell (or press Ctrl-D)\n\
+     \t:docs                  Print pointers to Memgraph documentation\n\
+     \t:param <name> <expr>   Set a query parameter to a Cypher expression\n\
+     \t                       (e.g. ':param age 21 * 2'); use it as $<name>\n\
+     \t:params                List all currently set query parameters\n\
+     \t:params clear          Remove all query parameters"
+}
+
+/// Documentation pointers, printed by `:docs`. Carried over from `mgconsole`.
+pub fn docs_text() -> &'static str {
+    "If you are new to Memgraph or the Cypher query language, check out these resources:\n\
+     \n\
+     \tQuerying with Cypher:    https://memgr.ph/querying\n\
+     \tImporting data:          https://memgr.ph/importing-data\n\
+     \tDatabase configuration:  https://memgr.ph/configuration\n\
+     \n\
+     Official mgconsole documentation: https://memgr.ph/mgconsole"
 }
 
 /// The one-line summary printed after a query's result: how many rows came back
@@ -144,6 +181,14 @@ pub fn run_loop(
         if !continued {
             match meta_command(&text) {
                 Some(MetaCommand::Quit) => break,
+                Some(MetaCommand::Help) => {
+                    writeln!(out, "{}", help_text())?;
+                    continue;
+                }
+                Some(MetaCommand::Docs) => {
+                    writeln!(out, "{}", docs_text())?;
+                    continue;
+                }
                 Some(MetaCommand::Unknown(cmd)) => {
                     writeln!(err, "error: unknown command '{cmd}'")?;
                     continue;
@@ -221,11 +266,34 @@ mod tests {
     }
 
     #[test]
+    fn help_and_docs_are_recognised() {
+        assert_eq!(meta_command(":help"), Some(MetaCommand::Help));
+        assert_eq!(meta_command(":docs"), Some(MetaCommand::Docs));
+    }
+
+    #[test]
     fn an_unknown_colon_word_is_reported_not_run() {
         assert_eq!(
             meta_command(":frobnicate"),
             Some(MetaCommand::Unknown(":frobnicate".to_string()))
         );
+    }
+
+    #[test]
+    fn help_text_describes_query_entry_and_every_implemented_command() {
+        let help = help_text();
+        // Query entry is explained.
+        assert!(help.contains("Cypher"));
+        assert!(help.contains("semicolon"));
+        // Every implemented command is listed (acceptance criterion 4).
+        for command in [":help", ":quit", ":docs", ":param", ":params"] {
+            assert!(help.contains(command), "help should list {command}");
+        }
+    }
+
+    #[test]
+    fn docs_text_points_at_memgraph_documentation() {
+        assert!(docs_text().contains("memgr.ph"));
     }
 
     #[test]
@@ -437,5 +505,16 @@ mod tests {
             drive(vec![Line::Text(":bogus".into())], vec![]);
         assert!(runner.seen.is_empty());
         assert!(err.contains("unknown command"));
+    }
+
+    #[test]
+    fn help_and_docs_print_to_output_without_running_a_query() {
+        let (_src, runner, out, _err) = drive(
+            vec![Line::Text(":help".into()), Line::Text(":docs".into())],
+            vec![],
+        );
+        assert!(runner.seen.is_empty(), "no query runs for :help/:docs");
+        assert!(out.contains("Supported commands"), "help printed: {out}");
+        assert!(out.contains("memgr.ph"), "docs printed: {out}");
     }
 }

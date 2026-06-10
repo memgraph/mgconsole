@@ -14,10 +14,10 @@ Memgraph documentation. Carry over the content from `mgconsole`'s usage text.
 
 ## Acceptance criteria
 
-- [ ] `:help` prints usage covering query entry and the supported `:` commands
-- [ ] `:docs` prints the documentation pointers
-- [ ] Both return to the prompt without running a query
-- [ ] Help text lists the commands actually implemented (help, quit, docs, param, params)
+- [x] `:help` prints usage covering query entry and the supported `:` commands
+- [x] `:docs` prints the documentation pointers
+- [x] Both return to the prompt without running a query
+- [x] Help text lists the commands actually implemented (help, quit, docs, param, params)
 
 ## Blocked by
 
