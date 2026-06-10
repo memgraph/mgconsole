@@ -1,6 +1,6 @@
 # 11 — Static keyword/function completion popup
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -16,13 +16,19 @@ into as a second source — no change to the cursor handling when it does.
 
 ## Acceptance criteria
 
-- [ ] Triggering completion offers keyword/function candidates for the prefix
+- [x] Triggering completion offers keyword/function candidates for the prefix
       under the cursor, matched case-insensitively, and inserts the selection.
-- [ ] The popup navigates with the keyboard and dismisses cleanly; an empty
-      prefix offers nothing (as the REPL completer already decides).
-- [ ] The existing `Completer`/`word_start` are reused unchanged.
-- [ ] Completion state (open, candidates, selection, insertion) is covered at the
-      reducer seam.
+      (Tab → `open_completion` via the state's `Completer`; `apply_completion`
+      replaces the prefix with the selected candidate.)
+- [x] The popup navigates with the keyboard and dismisses cleanly; an empty
+      prefix offers nothing (as the REPL completer already decides). (Up/Down/Tab
+      cycle with wrap, Esc dismisses; an empty prefix yields no candidates, so the
+      popup never opens and Tab falls back to focus-switch.)
+- [x] The existing `Completer`/`word_start` are reused unchanged.
+      (`WorkbenchState::completer = Completer::with_static_vocabulary()`;
+      `EditorState::word_under_cursor` uses `syntax::word_start`.)
+- [x] Completion state (open, candidates, selection, insertion) is covered at the
+      reducer seam. (open, insert, cycle-wrap, Esc-dismiss, empty-prefix tests.)
 
 ## Blocked by
 

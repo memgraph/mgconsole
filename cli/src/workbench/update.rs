@@ -16,7 +16,7 @@ use crate::repl::{format_summary, meta_command, MetaCommand};
 
 use super::effect::Effect;
 use super::event::{Event, Key, KeyCode};
-use super::state::{CurrentResult, ExportPrompt, Focus, RunState, WorkbenchState};
+use super::state::{Completion, CurrentResult, ExportPrompt, Focus, RunState, WorkbenchState};
 
 /// Apply one event to the state, returning the effects to perform.
 // Events are consumed by value: slice 02's lifecycle events carry owned data
@@ -181,6 +181,12 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     if state.export.is_some() {
         return export_key(state, key);
     }
+    // The completion popup captures its navigation keys (Esc included, so it
+    // dismisses rather than quitting); any other key closes it and is handled as
+    // ordinary input.
+    if state.completion.is_some() {
+        return completion_key(state, key);
+    }
     // Quit gestures work from any pane (ADR 0010 AC: Esc / Ctrl-D leave).
     if key.code == KeyCode::Esc || (key.ctrl && key.code == KeyCode::Char('d')) {
         return vec![Effect::Quit];
@@ -196,17 +202,53 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     }
 }
 
+/// Keys while the completion popup is open: cycle/insert/dismiss; any other key
+/// closes the popup and is handled as ordinary input.
+fn completion_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc => {
+            state.completion = None;
+            Vec::new()
+        }
+        KeyCode::Enter => {
+            apply_completion(state);
+            Vec::new()
+        }
+        KeyCode::Up => {
+            cycle_completion(state, -1);
+            Vec::new()
+        }
+        KeyCode::Down | KeyCode::Tab => {
+            cycle_completion(state, 1);
+            Vec::new()
+        }
+        _ => {
+            state.completion = None;
+            // The key that closed the popup is still ordinary editor input.
+            match state.focus {
+                Focus::Editor => editor_key(state, key),
+                Focus::Results => results_key(state, key),
+            }
+        }
+    }
+}
+
 /// Keys while the editor pane has focus.
 fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     match key {
-        // Tab cycles focus to the results pane.
+        // Tab triggers completion for the word under the cursor; with nothing to
+        // complete (empty prefix or no candidates) it cycles focus to the results
+        // pane instead (slice 11).
         Key {
             code: KeyCode::Tab,
             ctrl: false,
             alt: false,
             ..
         } => {
-            state.focus = Focus::Results;
+            open_completion(state);
+            if state.completion.is_none() {
+                state.focus = Focus::Results;
+            }
             Vec::new()
         }
         // Newline gestures. The universal keys (everywhere): Alt+Enter, Ctrl+J.
@@ -250,6 +292,40 @@ fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             state.editor.edit(other);
             Vec::new()
         }
+    }
+}
+
+/// Open the completion popup for the word under the cursor, using the existing
+/// `Completer` (reused unchanged). An empty prefix or no candidates leaves the
+/// popup closed (the static completer already declines an empty prefix).
+fn open_completion(state: &mut WorkbenchState) {
+    let prefix = state.editor.word_under_cursor();
+    let candidates = state.completer.candidates(&prefix);
+    if candidates.is_empty() {
+        return;
+    }
+    state.completion = Some(Completion {
+        candidates,
+        selected: 0,
+        prefix_len: prefix.chars().count(),
+    });
+}
+
+/// Move the completion selection by `delta`, wrapping around the candidate list.
+fn cycle_completion(state: &mut WorkbenchState, delta: isize) {
+    if let Some(completion) = state.completion.as_mut() {
+        let len = completion.candidates.len() as isize;
+        completion.selected = (completion.selected as isize + delta).rem_euclid(len) as usize;
+    }
+}
+
+/// Insert the selected candidate, replacing the typed prefix, and close the popup.
+fn apply_completion(state: &mut WorkbenchState) {
+    if let Some(completion) = state.completion.take() {
+        let candidate = completion.candidates[completion.selected].clone();
+        state
+            .editor
+            .insert_completion(completion.prefix_len, &candidate);
     }
 }
 
@@ -1013,6 +1089,65 @@ mod tests {
             3,
             "the older result's rows are intact"
         );
+    }
+
+    // --- completion popup (slice 11) ----------------------------------------
+
+    #[test]
+    fn tab_opens_completion_for_the_word_under_the_cursor() {
+        let mut s = wb();
+        type_str(&mut s, "MAT");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        let completion = s.completion.as_ref().expect("popup open");
+        assert!(
+            completion.candidates.contains(&"MATCH".to_string()),
+            "candidates: {:?}",
+            completion.candidates
+        );
+        assert_eq!(completion.prefix_len, 3);
+    }
+
+    #[test]
+    fn enter_inserts_the_selected_candidate_replacing_the_prefix() {
+        let mut s = wb();
+        type_str(&mut s, "RETUR");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab))); // open (RETURN matches)
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter))); // insert
+        assert_eq!(s.editor.buffer(), "RETURN");
+        assert!(s.completion.is_none(), "popup closed after insert");
+    }
+
+    #[test]
+    fn down_cycles_the_selection_and_wraps() {
+        let mut s = wb();
+        type_str(&mut s, "RE"); // several keyword matches
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        let count = s.completion.as_ref().unwrap().candidates.len();
+        assert!(count > 1, "needs multiple candidates to cycle");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
+        assert_eq!(s.completion.as_ref().unwrap().selected, 1);
+        update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
+        update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
+        assert_eq!(s.completion.as_ref().unwrap().selected, count - 1, "wraps past the top");
+    }
+
+    #[test]
+    fn esc_dismisses_the_completion_popup() {
+        let mut s = wb();
+        type_str(&mut s, "MAT");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
+        assert!(s.completion.is_none());
+    }
+
+    #[test]
+    fn tab_with_no_completable_prefix_moves_focus_to_results() {
+        // An empty prefix offers nothing (the static completer declines it), so
+        // Tab falls back to cycling focus.
+        let mut s = wb();
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        assert!(s.completion.is_none());
+        assert_eq!(s.focus, Focus::Results);
     }
 
     #[test]

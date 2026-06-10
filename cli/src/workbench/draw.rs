@@ -14,7 +14,7 @@ use ratatui::Frame;
 use mgconsole_core::Value;
 
 use super::highlight;
-use super::state::{CurrentResult, ExportPrompt, Focus, RunState, WorkbenchState};
+use super::state::{Completion, CurrentResult, ExportPrompt, Focus, RunState, WorkbenchState};
 
 /// Braille spinner frames for the running-query indicator (slice 07).
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -51,7 +51,7 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
         .title("Query");
     let editor_inner = editor_block.inner(editor_area);
     frame.render_widget(editor_block, editor_area);
-    draw_editor(frame, editor_inner, state, editor_focused);
+    let editor_cursor = draw_editor(frame, editor_inner, state, editor_focused);
 
     // Results pane: a native table with a pinned header and a lazily-rendered
     // visible window, or just a summary line for a result with no columns.
@@ -90,6 +90,62 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     if let Some(prompt) = state.export.as_ref() {
         draw_export(frame, prompt);
     }
+    // Completion popup (slice 11), anchored just below the editor cursor.
+    if let Some(completion) = state.completion.as_ref() {
+        let (cx, cy) = editor_cursor;
+        draw_completion(frame, completion, cx, cy);
+    }
+}
+
+/// Draw the completion popup: a small list of candidates anchored below the
+/// cursor, the selected one highlighted, with a window that keeps the selection
+/// visible (slice 11).
+fn draw_completion(frame: &mut Frame, completion: &Completion, cursor_x: u16, cursor_y: u16) {
+    const MAX_VISIBLE: usize = 8;
+    let visible = completion.candidates.len().min(MAX_VISIBLE);
+    let width = completion
+        .candidates
+        .iter()
+        .map(String::len)
+        .max()
+        .unwrap_or(8)
+        .clamp(8, 40) as u16
+        + 2;
+    let height = visible as u16 + 2;
+    let frame_area = frame.area();
+    let x = cursor_x.min(frame_area.width.saturating_sub(width));
+    let y = (cursor_y + 1).min(frame_area.height.saturating_sub(height));
+    let area = ratatui::layout::Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Window the list so the selected candidate stays visible.
+    let start = if completion.selected >= MAX_VISIBLE {
+        completion.selected + 1 - MAX_VISIBLE
+    } else {
+        0
+    };
+    let lines: Vec<Line> = completion
+        .candidates
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(i, candidate)| {
+            let style = if i == completion.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            Line::styled(candidate.clone(), style)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// Draw the export prompt (slice 09): the chosen format and the destination path
@@ -148,7 +204,7 @@ fn centered_rect(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
 /// stays editable. When focused, the terminal cursor is placed at the editor
 /// cursor. (tui-textarea has no per-token styling, so the workbench renders the
 /// lines itself and uses the widget only as the edit/cursor model.)
-fn draw_editor(frame: &mut Frame, area: Rect, state: &WorkbenchState, focused: bool) {
+fn draw_editor(frame: &mut Frame, area: Rect, state: &WorkbenchState, focused: bool) -> (u16, u16) {
     let height = area.height.max(1) as usize;
     let (cursor_row, cursor_col) = state.editor.cursor();
     // Keep the cursor line visible (pin to the bottom when scrolling past it).
@@ -164,11 +220,12 @@ fn draw_editor(frame: &mut Frame, area: Rect, state: &WorkbenchState, focused: b
         .map(|line| highlight::highlight_line(line, state.color))
         .collect();
     frame.render_widget(Paragraph::new(visible), area);
+    let x = area.x + (cursor_col as u16).min(area.width.saturating_sub(1));
+    let y = area.y + (cursor_row - scroll) as u16;
     if focused {
-        let x = area.x + (cursor_col as u16).min(area.width.saturating_sub(1));
-        let y = area.y + (cursor_row - scroll) as u16;
         frame.set_cursor_position((x, y));
     }
+    (x, y)
 }
 
 /// Render a streamed result into `area`: a table with a pinned header and only

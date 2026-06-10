@@ -11,8 +11,20 @@ use std::collections::{BTreeMap, VecDeque};
 use mgconsole_core::{Record, Summary, Value};
 use tui_textarea::{Input, Key as TaKey, TextArea};
 
+use crate::syntax::{word_start, Completer};
+
 use super::effect::ExportFormat;
 use super::event::{Key, KeyCode};
+
+/// The open completion popup (slice 11): the candidates for the word under the
+/// cursor, the highlighted one, and the length (in characters) of the prefix a
+/// chosen candidate replaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Completion {
+    pub candidates: Vec<String>,
+    pub selected: usize,
+    pub prefix_len: usize,
+}
 
 /// The export prompt's state (slice 09): the chosen format and the destination
 /// path being typed.
@@ -60,6 +72,11 @@ pub struct WorkbenchState {
     /// When `Some`, the export prompt is open (slice 09): pick a format and type
     /// a destination path for the on-screen result.
     pub export: Option<ExportPrompt>,
+    /// When `Some`, the completion popup is open (slice 11).
+    pub completion: Option<Completion>,
+    /// The completion candidate source(s): the static keyword/function vocabulary
+    /// (slice 11), joined by a live schema source in slice 12.
+    pub completer: Completer,
     /// The results-table viewport height (data rows) from the last draw, cached so
     /// the reducer can page and keep the selection visible without re-deriving the
     /// layout. The draw is the only writer.
@@ -91,6 +108,8 @@ impl WorkbenchState {
             detail: None,
             detail_scroll: 0,
             export: None,
+            completion: None,
+            completer: Completer::with_static_vocabulary(),
             viewport_rows: 0,
             params: BTreeMap::new(),
             next_id: 0,
@@ -258,6 +277,33 @@ impl EditorState {
     pub fn cursor(&self) -> (usize, usize) {
         self.textarea.cursor()
     }
+
+    /// The word being typed under the cursor — the text from the word start (the
+    /// REPL's [`word_start`], reused unchanged) to the cursor on the current
+    /// line. The completion prefix.
+    pub fn word_under_cursor(&self) -> String {
+        let (row, col) = self.textarea.cursor();
+        let line = &self.textarea.lines()[row];
+        let byte = char_to_byte(line, col);
+        line[word_start(line, byte)..byte].to_string()
+    }
+
+    /// Replace the `prefix_len`-character word before the cursor with `candidate`
+    /// (completion insertion): delete the prefix, then insert the candidate.
+    pub fn insert_completion(&mut self, prefix_len: usize, candidate: &str) {
+        for _ in 0..prefix_len {
+            self.textarea.delete_char();
+        }
+        self.textarea.insert_str(candidate);
+    }
+}
+
+/// The byte offset of character index `col` in `line` (the cursor's byte
+/// position), or the line length when the cursor is at the end.
+fn char_to_byte(line: &str, col: usize) -> usize {
+    line.char_indices()
+        .nth(col)
+        .map_or(line.len(), |(byte, _)| byte)
 }
 
 impl Default for EditorState {
