@@ -953,6 +953,11 @@ fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             open_export(state);
             return Vec::new();
         }
+        // Vim-style yank (issue 04 / ADR 0015): 'y' copies the selected cell's
+        // rendered Value, 'Y' the whole selected row, each via an OSC 52 effect.
+        // (`Ctrl+C` is cancel, hence the lowercase/uppercase letters.)
+        KeyCode::Char('y') => return yank_cell(state),
+        KeyCode::Char('Y') => return yank_row(state),
         // '[' / ']' step back/forward through the result history (slice 10).
         KeyCode::Char('[') => {
             state.view = state.view.saturating_sub(1);
@@ -1014,6 +1019,54 @@ fn open_detail(state: &mut WorkbenchState) {
     if let Some(value) = value {
         state.detail = Some(value);
         state.detail_scroll = 0;
+    }
+}
+
+/// Yank the selected cell's rendered Value to the clipboard (issue 04 / ADR
+/// 0015): the exact text shown, copied via OSC 52. A plan result or an empty
+/// table has no cell to copy, so the yank is a no-op.
+fn yank_cell(state: &mut WorkbenchState) -> Vec<Effect> {
+    let text = state.shown().and_then(|result| {
+        if result.plan.is_some() {
+            return None;
+        }
+        result
+            .rows
+            .get(result.selected_row)
+            .and_then(|row| row.fields().get(result.selected_col))
+            .map(mgconsole_core::render::tabular)
+    });
+    match text {
+        Some(text) => {
+            state.status.message = "copied cell".to_string();
+            vec![Effect::CopyToClipboard(text)]
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Yank the whole selected row to the clipboard (issue 04 / ADR 0015): its cells
+/// rendered as shown and joined by tabs, so it pastes as one row. A no-op for a
+/// plan result or an empty table.
+fn yank_row(state: &mut WorkbenchState) -> Vec<Effect> {
+    let text = state.shown().and_then(|result| {
+        if result.plan.is_some() {
+            return None;
+        }
+        result.rows.get(result.selected_row).map(|row| {
+            row.fields()
+                .iter()
+                .map(mgconsole_core::render::tabular)
+                .collect::<Vec<_>>()
+                .join("\t")
+        })
+    });
+    match text {
+        Some(text) => {
+            state.status.message = "copied row".to_string();
+            vec![Effect::CopyToClipboard(text)]
+        }
+        None => Vec::new(),
     }
 }
 
@@ -1104,6 +1157,15 @@ fn detail_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             state.detail_scroll = state.detail_scroll.saturating_add(1);
         }
         KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => state.detail = None,
+        // The cell-detail overlay yanks the same way as the results pane (issue
+        // 04 / ADR 0015): 'y' copies the full Value shown via OSC 52.
+        KeyCode::Char('y') => {
+            if let Some(value) = state.detail.as_ref() {
+                let text = mgconsole_core::render::tabular(value);
+                state.status.message = "copied value".to_string();
+                return vec![Effect::CopyToClipboard(text)];
+            }
+        }
         _ => {}
     }
     Vec::new()
@@ -1262,11 +1324,27 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
         // connect time.
         MetaCommand::ListSettings => {
             state.status.message = format!(
-                "{} · readonly = {}",
+                "{} · readonly = {} · mouse = {}",
                 state.settings.list().replace('\n', " · "),
-                crate::repl::on_off(state.read_only)
+                crate::repl::on_off(state.read_only),
+                crate::repl::on_off(state.mouse),
             );
             state.editor.clear();
+            Vec::new()
+        }
+        // `mouse` (issue 04) is a Workbench-only session toggle, not a precedence-
+        // resolved Setting: `:set mouse off` releases mouse capture so native
+        // selection works; `:set mouse on` restores the Workbench gestures.
+        MetaCommand::SetSetting { name, value } if name == "mouse" => {
+            state.editor.clear();
+            match crate::repl::parse_on_off(&value) {
+                Ok(on) => {
+                    state.mouse = on;
+                    state.status.message = format!("mouse = {}", crate::repl::on_off(on));
+                    return vec![Effect::SetMouseCapture(on)];
+                }
+                Err(message) => state.status.message = format!("error: {message}"),
+            }
             Vec::new()
         }
         MetaCommand::SetSetting { name, value } if name == "readonly" => {
@@ -1542,6 +1620,7 @@ pub fn keybindings_help(keys: &KeyBindings) -> String {
             ("Up/Down/PgUp/PgDn".to_string(), "Move the row selection"),
             ("Left / Right".to_string(), "Move the column selection"),
             ("Enter".to_string(), "Expand the selected cell"),
+            ("y / Y".to_string(), "Yank the selected cell / row to the clipboard"),
             ("e".to_string(), "Export the on-screen result"),
             (chord(Gesture::Search), "Search / filter rows in the result"),
         ],
@@ -2882,6 +2961,73 @@ mod tests {
         assert_eq!(s.drawer, Some(DrawerKind::Summary));
         update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('y'))));
         assert_eq!(s.drawer, None);
+    }
+
+    // --- Yank / clipboard + mouse toggle (issue 04 / ADR 0015) ----------------
+
+    /// A two-column result with one row, focused on the results pane, for yank.
+    fn with_two_col_row() -> WorkbenchState {
+        let mut s = wb();
+        s.focus = Focus::Results;
+        s.history.push(CurrentResult {
+            header: vec!["name".to_string(), "age".to_string()],
+            rows: vec![Record::new(vec![Value::String("Ada".into()), Value::Integer(36)])],
+            ..CurrentResult::default()
+        });
+        s
+    }
+
+    #[test]
+    fn y_yanks_the_selected_cell_as_an_osc52_copy_effect() {
+        let mut s = with_two_col_row();
+        // Move the column selection to the second cell, then yank it.
+        update(&mut s, Event::Key(Key::plain(KeyCode::Right)));
+        let effects = update(&mut s, Event::Key(Key::char('y')));
+        assert_eq!(effects, vec![Effect::CopyToClipboard("36".to_string())], "exact cell payload");
+        assert!(s.status.message.contains("copied cell"), "status confirms: {:?}", s.status.message);
+    }
+
+    #[test]
+    fn shift_y_yanks_the_whole_row() {
+        let mut s = with_two_col_row();
+        let effects = update(&mut s, Event::Key(Key::char('Y')));
+        assert_eq!(
+            effects,
+            vec![Effect::CopyToClipboard("Ada\t36".to_string())],
+            "the row's cells, tab-joined as shown"
+        );
+        assert!(s.status.message.contains("copied row"));
+    }
+
+    #[test]
+    fn the_cell_detail_overlay_yanks_the_full_value() {
+        let mut s = with_two_col_row();
+        // Open the cell-detail overlay on the first cell, then yank from it.
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(s.detail.is_some(), "detail overlay open");
+        let effects = update(&mut s, Event::Key(Key::char('y')));
+        assert_eq!(effects, vec![Effect::CopyToClipboard("Ada".to_string())]);
+        assert!(s.status.message.contains("copied value"));
+    }
+
+    #[test]
+    fn set_mouse_off_then_on_toggles_capture_and_emits_the_effect() {
+        let mut s = wb();
+        assert!(s.mouse, "capture is on by default");
+        let off = submit_meta(&mut s, ":set mouse off");
+        assert_eq!(off, vec![Effect::SetMouseCapture(false)]);
+        assert!(!s.mouse, "the reducer tracks the toggle");
+        assert!(s.status.message.contains("mouse = off"));
+        let on = submit_meta(&mut s, ":set mouse on");
+        assert_eq!(on, vec![Effect::SetMouseCapture(true)]);
+        assert!(s.mouse);
+    }
+
+    #[test]
+    fn set_lists_the_mouse_setting() {
+        let mut s = wb();
+        submit_meta(&mut s, ":set");
+        assert!(s.status.message.contains("mouse = on"), "mouse listed: {:?}", s.status.message);
     }
 
     // --- In-result search/filter (issue 16) -----------------------------------

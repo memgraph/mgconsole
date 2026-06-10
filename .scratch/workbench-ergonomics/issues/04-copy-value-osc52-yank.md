@@ -1,6 +1,6 @@
 # 04 — Copy a Value out: OSC 52 yank + `:set mouse off`
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

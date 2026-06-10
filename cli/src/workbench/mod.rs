@@ -31,9 +31,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crossterm::event::{
-    Event as CrosstermEvent, EventStream, KeyCode as CrosstermKeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, MouseButton, MouseEventKind,
+    DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, EventStream,
+    KeyCode as CrosstermKeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
+use crossterm::execute;
 use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
@@ -267,6 +268,24 @@ pub async fn run(
                         let outcome = write_export(format, &path, &header, &rows).map(|()| path);
                         let _ = tx.send(Event::ExportFinished(outcome));
                     });
+                }
+                Effect::CopyToClipboard(text) => {
+                    // Write the OSC 52 sequence straight to the terminal (issue 04
+                    // / ADR 0015): the terminal sets the system clipboard from it.
+                    // Best-effort — a terminal that does not honour OSC 52 simply
+                    // ignores it (the status line already confirmed the yank).
+                    let mut out = stdout();
+                    let _ = write!(out, "{}", effect::osc52(&text));
+                    let _ = out.flush();
+                }
+                Effect::SetMouseCapture(on) => {
+                    // Release or re-acquire mouse capture (issue 04): off restores
+                    // native click-drag selection; on restores the mouse gestures.
+                    let _ = if on {
+                        execute!(stdout(), EnableMouseCapture)
+                    } else {
+                        execute!(stdout(), DisableMouseCapture)
+                    };
                 }
             }
         }

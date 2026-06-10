@@ -189,6 +189,11 @@ pub struct WorkbenchState {
     /// by `:set readonly on`. Drives the `[read-only]` status-bar marker; the
     /// off-at-runtime refusal is enforced by the reducer.
     pub read_only: bool,
+    /// Whether terminal mouse capture is on (issue 04). Capture is on by default
+    /// (the Workbench's mouse gestures); `:set mouse off` releases it so native
+    /// click-drag selection works as the documented escape hatch. The reducer
+    /// tracks it for `:set` listing; the edge applies the actual capture toggle.
+    pub mouse: bool,
     /// The explicit-transaction state (issue 05), mirrored from the Session by the
     /// `TransactionApplied` event. Drives the `[tx]`/`[tx failed]` status marker.
     pub tx: TransactionState,
@@ -266,6 +271,7 @@ impl WorkbenchState {
             color,
             settings: config.settings.clone(),
             read_only: config.read_only,
+            mouse: true,
             tx: TransactionState::Auto,
             profile: config.profile.clone(),
             endpoint: config.endpoint.clone(),

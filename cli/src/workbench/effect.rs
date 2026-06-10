@@ -108,6 +108,63 @@ pub enum Effect {
     /// mutated it in the reducer (issue 13). The reducer stays pure; the edge does
     /// the write and reports any failure.
     PersistQueries,
+    /// Copy rendered text to the system clipboard via an OSC 52 escape (issue 04 /
+    /// ADR 0015): the edge base64-encodes the payload and writes the sequence to
+    /// the terminal — pure bytes, no native clipboard dependency, works over SSH.
+    CopyToClipboard(String),
+    /// Turn the terminal's mouse capture on or off (issue 04): `:set mouse off`
+    /// releases capture so native click-drag selection works; `:set mouse on`
+    /// re-enables the Workbench's mouse gestures.
+    SetMouseCapture(bool),
     /// Leave the workbench and restore the terminal.
     Quit,
+}
+
+/// Build the OSC 52 clipboard escape sequence carrying `text` (issue 04 / ADR
+/// 0015): `ESC ] 52 ; c ; <base64> BEL`. The terminal — not the application —
+/// sets the system clipboard from it, so it rides the same channel as the rest of
+/// the TUI and works through SSH and `tmux`. Pure bytes; no FFI (ADR 0001).
+#[must_use]
+pub fn osc52(text: &str) -> String {
+    format!("\x1b]52;c;{}\x07", base64_encode(text.as_bytes()))
+}
+
+/// Minimal standard-alphabet base64 encoder (issue 04): a few lines of pure Rust
+/// rather than a dependency, since OSC 52 is the only base64 the tool needs.
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = chunk.get(1).copied().map_or(0, u32::from);
+        let b2 = chunk.get(2).copied().map_or(0, u32::from);
+        let n = b0 << 16 | b1 << 8 | b2;
+        out.push(ALPHABET[(n >> 18 & 63) as usize] as char);
+        out.push(ALPHABET[(n >> 12 & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { ALPHABET[(n >> 6 & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { ALPHABET[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_matches_known_vectors() {
+        // The classic RFC 4648 examples, including the two padding cases.
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn osc52_frames_the_base64_payload() {
+        // ESC ] 52 ; c ; <base64> BEL — the terminal sets the clipboard from this.
+        assert_eq!(osc52("foo"), "\x1b]52;c;Zm9v\x07");
+    }
 }
