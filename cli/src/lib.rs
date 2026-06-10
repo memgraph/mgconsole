@@ -9,7 +9,9 @@
 use clap::{Parser, ValueEnum};
 
 pub mod history;
+pub mod keywords;
 pub mod repl;
+pub mod syntax;
 
 /// Output format for a Query result (CONTEXT.md: tabular buffers; csv/jsonl/
 /// cypherl stream). `jsonl` is the addition over today's mgconsole flags.
