@@ -19,7 +19,8 @@ use super::highlight;
 use super::plan::Plan;
 use super::schema::Schema;
 use super::state::{
-    Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, WorkbenchState,
+    Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, SearchState,
+    WorkbenchState,
 };
 use ratatui::text::Span;
 
@@ -104,8 +105,9 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     frame.render_widget(results_block, results_area);
     // Cache the data-row viewport (height minus the pinned header row).
     state.viewport_rows = results_inner.height.saturating_sub(1) as usize;
+    let search = state.search.as_ref();
     if let Some(result) = state.shown() {
-        draw_result(frame, results_inner, result, results_focused);
+        draw_result(frame, results_inner, result, results_focused, search);
     }
 
     // Status bar: the transient message, then the keybind hints.
@@ -412,7 +414,13 @@ fn draw_editor(frame: &mut Frame, area: Rect, state: &WorkbenchState, focused: b
 /// the visible window of rows drawn (so a huge result is cheap), the selected
 /// cell highlighted. A result with no columns shows nothing here (its summary is
 /// in the status bar).
-fn draw_result(frame: &mut Frame, area: Rect, result: &CurrentResult, focused: bool) {
+fn draw_result(
+    frame: &mut Frame,
+    area: Rect,
+    result: &CurrentResult,
+    focused: bool,
+    search: Option<&SearchState>,
+) {
     // An EXPLAIN/PROFILE result renders as an operator tree, not a table.
     if let Some(plan) = &result.plan {
         draw_plan(frame, area, plan, focused);
@@ -422,18 +430,45 @@ fn draw_result(frame: &mut Frame, area: Rect, result: &CurrentResult, focused: b
         return;
     }
     let viewport = area.height.saturating_sub(1) as usize;
-    let start = result.scroll.min(result.rows.len());
-    let end = (start + viewport).min(result.rows.len());
+    // The lowercased search needle, and whether the view is filtered (issue 16).
+    let needle = search
+        .map(|s| s.query.to_lowercase())
+        .filter(|q| !q.is_empty());
+    let filtering = search.is_some_and(|s| s.filter_only);
 
-    let rows = result.rows[start..end].iter().enumerate().map(|(offset, record)| {
-        let absolute = start + offset;
+    // The absolute row indices to draw, windowed to the viewport. A filtered view
+    // shows only matching rows, windowed so the active match stays visible; the
+    // full view uses the result's own scroll offset.
+    let visible: Vec<usize> = if filtering {
+        let matches = search.map(|s| s.matches.as_slice()).unwrap_or_default();
+        let sel_pos = search
+            .and_then(|s| s.current)
+            .unwrap_or(0)
+            .min(matches.len().saturating_sub(1));
+        let start = if sel_pos >= viewport { sel_pos + 1 - viewport } else { 0 };
+        matches.iter().skip(start).take(viewport).copied().collect()
+    } else {
+        let start = result.scroll.min(result.rows.len());
+        let end = (start + viewport).min(result.rows.len());
+        (start..end).collect()
+    };
+
+    let rows = visible.iter().map(|&absolute| {
+        let record = &result.rows[absolute];
         let cells = record.fields().iter().enumerate().map(|(col, value)| {
+            let text = render::tabular(value);
             let mut style = Style::default();
+            // Bold any cell containing the search needle (issue 16).
+            if let Some(needle) = &needle {
+                if text.to_lowercase().contains(needle) {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+            }
             // Highlight the selected cell when the pane is focused.
             if focused && absolute == result.selected_row && col == result.selected_col {
                 style = style.add_modifier(Modifier::REVERSED);
             }
-            Cell::from(render::tabular(value)).style(style)
+            Cell::from(text).style(style)
         });
         Row::new(cells)
     });
@@ -682,5 +717,32 @@ mod tests {
         assert!(rendered.contains("name"), "header column drawn");
         assert!(rendered.contains("Ada"), "a row cell drawn");
         assert!(rendered.contains("2 rows"), "live row count in the title");
+    }
+
+    #[test]
+    fn a_filtered_search_view_draws_only_matching_rows() {
+        use crate::workbench::state::SearchState;
+        use mgconsole_core::{Record, Value};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.history.push(CurrentResult {
+            header: vec!["name".to_string()],
+            rows: vec![
+                Record::new(vec![Value::String("Ada".into())]),
+                Record::new(vec![Value::String("Bob".into())]),
+                Record::new(vec![Value::String("Ana".into())]),
+            ],
+            ..CurrentResult::default()
+        });
+        // A filtered search for "a": Ada and Ana match, Bob is hidden (issue 16).
+        state.search = Some(SearchState {
+            query: "a".to_string(),
+            filter_only: true,
+            matches: vec![0, 2],
+            current: Some(0),
+        });
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Ada"), "a matching row is drawn");
+        assert!(rendered.contains("Ana"), "the other matching row is drawn");
+        assert!(!rendered.contains("Bob"), "the non-matching row is filtered out");
     }
 }

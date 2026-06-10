@@ -1,6 +1,6 @@
 # 16 — In-result search/filter (Workbench)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

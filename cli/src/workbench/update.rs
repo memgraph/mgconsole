@@ -21,7 +21,7 @@ use super::event::{Event, Key, KeyCode};
 use super::plan::{is_plan_query, Plan};
 use super::schema::{Schema, SchemaSource};
 use super::state::{
-    Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, WatchState,
+    Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, SearchState, WatchState,
     WorkbenchState,
 };
 
@@ -327,6 +327,11 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     if state.export.is_some() {
         return export_key(state, key);
     }
+    // In-result search captures keys while open (issue 16): typing edits the query,
+    // arrows step matches, Tab toggles the filter, Esc clears and closes.
+    if state.search.is_some() {
+        return search_key(state, key);
+    }
     // The completion popup captures its navigation keys (Esc included, so it
     // dismisses rather than quitting); any other key closes it and is handled as
     // ordinary input.
@@ -429,6 +434,10 @@ fn handle_gesture(state: &mut WorkbenchState, gesture: Gesture) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Gesture::Search => {
+            open_search(state);
+            Vec::new()
+        }
         // Buffer (tab) gestures arrive in issue 18; recognised now so their chords
         // are reserved and rebindable, a no-op until then.
         Gesture::NewBuffer
@@ -445,6 +454,159 @@ fn toggle_drawer(drawer: Option<DrawerKind>, kind: DrawerKind) -> Option<DrawerK
     } else {
         Some(kind)
     }
+}
+
+/// Open in-result search over the shown result (issue 16). Refused with a status
+/// when there is no result with rows to search; when the result is partial or
+/// truncated, the status states that search covers only the loaded rows.
+fn open_search(state: &mut WorkbenchState) {
+    let Some(result) = state.shown() else {
+        state.status.message = "no result to search".to_string();
+        return;
+    };
+    if result.rows.is_empty() {
+        state.status.message = "no rows to search".to_string();
+        return;
+    }
+    let partial = result.partial || result.truncated;
+    state.search = Some(SearchState::default());
+    state.status.message = if partial {
+        "search (loaded rows only): type to match, ↑/↓ next/prev, Tab filter, Esc clear"
+            .to_string()
+    } else {
+        "search: type to match, ↑/↓ next/prev, Tab filter, Esc clear".to_string()
+    };
+}
+
+/// Keys while in-result search is open (issue 16): edit the query (live matches),
+/// step between matches, toggle the filtered view, or clear and close.
+fn search_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
+    match key {
+        Key { code: KeyCode::Esc, .. } => {
+            // Clearing search restores the full view (the filter lives in the
+            // search state, so dropping it un-filters).
+            state.search = None;
+            state.status.message = "search cleared".to_string();
+        }
+        Key { code: KeyCode::Backspace, .. } => {
+            if let Some(search) = state.search.as_mut() {
+                search.query.pop();
+            }
+            recompute_search(state);
+        }
+        // Tab toggles the filtered view (only matching rows) on/off.
+        Key { code: KeyCode::Tab, .. } => {
+            if let Some(search) = state.search.as_mut() {
+                search.filter_only = !search.filter_only;
+            }
+            update_search_status(state);
+        }
+        // Enter / Down step to the next match; Up to the previous (wrapping).
+        Key { code: KeyCode::Enter | KeyCode::Down, .. } => search_step(state, 1),
+        Key { code: KeyCode::Up, .. } => search_step(state, -1),
+        // Ordinary printable input extends the query and re-matches live.
+        Key { code: KeyCode::Char(c), ctrl: false, alt: false, .. } => {
+            if let Some(search) = state.search.as_mut() {
+                search.query.push(c);
+            }
+            recompute_search(state);
+        }
+        _ => {}
+    }
+    Vec::new()
+}
+
+/// Whether any cell of `record` contains `needle` (a lowercased substring),
+/// rendered exactly as the table shows it so the highlight matches the test.
+fn row_matches(record: &Record, needle: &str) -> bool {
+    record
+        .fields()
+        .iter()
+        .any(|value| mgconsole_core::render::tabular(value).to_lowercase().contains(needle))
+}
+
+/// Recompute the match set after the query changed, reset the active match to the
+/// first, and move the selection onto it.
+fn recompute_search(state: &mut WorkbenchState) {
+    let needle = state
+        .search
+        .as_ref()
+        .map(|s| s.query.to_lowercase())
+        .unwrap_or_default();
+    let matches: Vec<usize> = if needle.is_empty() {
+        Vec::new()
+    } else if let Some(result) = state.shown() {
+        result
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, record)| row_matches(record, &needle))
+            .map(|(index, _)| index)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if let Some(search) = state.search.as_mut() {
+        search.current = (!matches.is_empty()).then_some(0);
+        search.matches = matches;
+    }
+    move_selection_to_match(state);
+    update_search_status(state);
+}
+
+/// Step the active match by `delta` (wrapping) and move the selection onto it.
+fn search_step(state: &mut WorkbenchState, delta: isize) {
+    if let Some(search) = state.search.as_mut() {
+        if search.matches.is_empty() {
+            return;
+        }
+        let len = search.matches.len() as isize;
+        let current = search.current.unwrap_or(0) as isize;
+        search.current = Some((current + delta).rem_euclid(len) as usize);
+    }
+    move_selection_to_match(state);
+    update_search_status(state);
+}
+
+/// Move the result's selection onto the active match and keep it in the viewport.
+fn move_selection_to_match(state: &mut WorkbenchState) {
+    let target = state
+        .search
+        .as_ref()
+        .and_then(|s| s.current.map(|i| s.matches[i]));
+    let Some(row) = target else {
+        return;
+    };
+    let page = state.viewport_rows.max(1);
+    if let Some(result) = state.shown_mut() {
+        result.selected_row = row;
+        if result.selected_row < result.scroll {
+            result.scroll = result.selected_row;
+        } else if result.selected_row >= result.scroll + page {
+            result.scroll = result.selected_row + 1 - page;
+        }
+    }
+}
+
+/// Refresh the status line with the current match count and filter state.
+fn update_search_status(state: &mut WorkbenchState) {
+    let Some(search) = state.search.as_ref() else {
+        return;
+    };
+    let filter = if search.filter_only { " · filtered" } else { "" };
+    state.status.message = if search.query.is_empty() {
+        format!("search:{filter}")
+    } else if search.matches.is_empty() {
+        format!("search '{}' — no matches{filter}", search.query)
+    } else {
+        let position = search.current.map_or(0, |i| i + 1);
+        format!(
+            "search '{}' — {}/{}{filter}",
+            search.query,
+            position,
+            search.matches.len()
+        )
+    };
 }
 
 /// Keys while the completion popup is open: cycle/insert/dismiss; any other key
@@ -2466,6 +2628,115 @@ mod tests {
         assert_eq!(s.drawer, Some(DrawerKind::Summary));
         update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('y'))));
         assert_eq!(s.drawer, None);
+    }
+
+    // --- In-result search/filter (issue 16) -----------------------------------
+
+    /// A result with one text column, one cell per given row, focused with a
+    /// known viewport — the shape the search tests match against.
+    fn with_text_rows(cells: &[&str], viewport: usize) -> WorkbenchState {
+        let mut s = wb();
+        s.focus = Focus::Results;
+        s.viewport_rows = viewport;
+        s.history.push(CurrentResult {
+            header: vec!["name".to_string()],
+            rows: cells
+                .iter()
+                .map(|c| Record::new(vec![Value::String((*c).to_string())]))
+                .collect(),
+            ..CurrentResult::default()
+        });
+        s
+    }
+
+    fn open_search_overlay(state: &mut WorkbenchState) {
+        update(state, Event::Key(Key::ctrl(KeyCode::Char('f'))));
+    }
+
+    #[test]
+    fn search_matches_rows_by_substring_across_cells_and_clears_to_the_full_view() {
+        let mut s = with_text_rows(&["apple", "banana", "apricot", "cherry"], 10);
+        open_search_overlay(&mut s);
+        assert!(s.search.is_some(), "search opened");
+        type_str(&mut s, "ap");
+        let search = s.search.as_ref().expect("open");
+        assert_eq!(search.matches, vec![0, 2], "apple and apricot match 'ap'");
+        assert_eq!(search.current, Some(0));
+        // The selection moved onto the first match.
+        assert_eq!(s.shown().unwrap().selected_row, 0);
+        // Esc clears search and restores the full view.
+        update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
+        assert!(s.search.is_none(), "cleared");
+    }
+
+    #[test]
+    fn search_is_case_insensitive() {
+        let mut s = with_text_rows(&["Apple", "BANANA"], 10);
+        open_search_overlay(&mut s);
+        type_str(&mut s, "ban");
+        assert_eq!(s.search.as_ref().unwrap().matches, vec![1]);
+    }
+
+    #[test]
+    fn next_and_previous_match_navigation_moves_the_selection() {
+        let mut s = with_text_rows(&["apple", "banana", "apricot", "cherry", "grape"], 10);
+        open_search_overlay(&mut s);
+        type_str(&mut s, "a"); // apple(0), banana(1), apricot(2), grape(4)
+        assert_eq!(s.search.as_ref().unwrap().matches, vec![0, 1, 2, 4]);
+        assert_eq!(s.shown().unwrap().selected_row, 0);
+        // Down steps to the next match.
+        update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
+        assert_eq!(s.shown().unwrap().selected_row, 1);
+        update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
+        assert_eq!(s.shown().unwrap().selected_row, 2);
+        // Up steps back.
+        update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
+        assert_eq!(s.shown().unwrap().selected_row, 1);
+        // Wrap-around: from the first match, Up lands on the last.
+        update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
+        update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
+        assert_eq!(s.shown().unwrap().selected_row, 4, "wrapped to the last match");
+    }
+
+    #[test]
+    fn the_filter_toggle_is_reflected_in_state_and_toggles_off() {
+        let mut s = with_text_rows(&["apple", "banana", "apricot"], 10);
+        open_search_overlay(&mut s);
+        type_str(&mut s, "ap");
+        // Tab turns on the filtered (matching-rows-only) view.
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        assert!(s.search.as_ref().unwrap().filter_only, "filter on");
+        // Tab again restores the full view (toggles off).
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        assert!(!s.search.as_ref().unwrap().filter_only, "filter off");
+    }
+
+    #[test]
+    fn backspace_re_matches_live() {
+        let mut s = with_text_rows(&["apple", "apricot", "banana"], 10);
+        open_search_overlay(&mut s);
+        type_str(&mut s, "app");
+        assert_eq!(s.search.as_ref().unwrap().matches, vec![0]);
+        update(&mut s, Event::Key(Key::plain(KeyCode::Backspace)));
+        // Now "ap" matches both apple and apricot.
+        assert_eq!(s.search.as_ref().unwrap().matches, vec![0, 1]);
+    }
+
+    #[test]
+    fn search_over_a_partial_result_states_loaded_rows_only() {
+        let mut s = with_text_rows(&["apple"], 10);
+        s.shown_mut().unwrap().truncated = true;
+        open_search_overlay(&mut s);
+        assert!(s.status.message.contains("loaded rows only"), "{}", s.status.message);
+    }
+
+    #[test]
+    fn search_with_no_result_is_refused() {
+        let mut s = wb();
+        s.focus = Focus::Results;
+        open_search_overlay(&mut s);
+        assert!(s.search.is_none(), "nothing to search");
+        assert!(s.status.message.contains("no result"));
     }
 
     #[test]

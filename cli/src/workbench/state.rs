@@ -33,6 +33,22 @@ pub struct Completion {
     pub prefix_len: usize,
 }
 
+/// In-result search/filter state (issue 16): an open search input over the
+/// currently-shown result, matching rows by substring across all cells. Operates
+/// only over rows already loaded into the result view — it never re-runs the query.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SearchState {
+    /// The substring being searched for (case-insensitive).
+    pub query: String,
+    /// Whether the view is filtered to only matching rows (Tab toggles it).
+    pub filter_only: bool,
+    /// Indices into the shown result's `rows` that match the query, in order.
+    pub matches: Vec<usize>,
+    /// Which entry of `matches` is the active match (the selection sits on it), or
+    /// `None` when there are no matches.
+    pub current: Option<usize>,
+}
+
 /// The export prompt's state (slice 09): the chosen format and the destination
 /// path being typed.
 #[derive(Debug, Clone)]
@@ -79,6 +95,8 @@ pub struct WorkbenchState {
     /// When `Some`, the export prompt is open (slice 09): pick a format and type
     /// a destination path for the on-screen result.
     pub export: Option<ExportPrompt>,
+    /// When `Some`, in-result search is open over the shown result (issue 16).
+    pub search: Option<SearchState>,
     /// When `Some`, the completion popup is open (slice 11).
     pub completion: Option<Completion>,
     /// The completion candidate source(s): the static keyword/function vocabulary
@@ -176,6 +194,7 @@ impl WorkbenchState {
             detail: None,
             detail_scroll: 0,
             export: None,
+            search: None,
             completion: None,
             completer: Completer::with_static_vocabulary(),
             schema: None,
