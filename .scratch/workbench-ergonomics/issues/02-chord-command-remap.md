@@ -1,6 +1,6 @@
 # 02 — Chord/command remap: free `Ctrl+W`, `:close`, `Ctrl+PageUp/Down` nav
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

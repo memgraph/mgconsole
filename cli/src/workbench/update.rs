@@ -543,10 +543,11 @@ fn handle_gesture(state: &mut WorkbenchState, gesture: Gesture) -> Vec<Effect> {
             open_search(state);
             Vec::new()
         }
-        // Buffer (tab) gestures (issue 18). Refused while a query is live, since
-        // the one live result streams into the active Buffer — switching mid-query
-        // would misroute its rows (cross-tab parallelism is a non-goal, ADR 0006).
-        Gesture::NewBuffer | Gesture::CloseBuffer | Gesture::NextBuffer | Gesture::PrevBuffer => {
+        // Buffer (tab) navigation gestures (issue 18). Refused while a query is
+        // live, since the one live result streams into the active Buffer —
+        // switching mid-query would misroute its rows (relaxed in issue 03).
+        // Closing a Buffer is the `:close` command, not a gesture (CONTEXT.md).
+        Gesture::NewBuffer | Gesture::NextBuffer | Gesture::PrevBuffer => {
             if matches!(state.run, RunState::Running { .. }) {
                 state.status.message = "session busy — cancel first".to_string();
                 return Vec::new();
@@ -556,15 +557,6 @@ fn handle_gesture(state: &mut WorkbenchState, gesture: Gesture) -> Vec<Effect> {
                     state.new_buffer();
                     state.status.message =
                         format!("new buffer {}/{}", state.active + 1, state.buffer_count());
-                }
-                Gesture::CloseBuffer => {
-                    if state.buffer_count() == 1 {
-                        state.status.message = "the last buffer stays open".to_string();
-                    } else {
-                        state.close_buffer();
-                        state.status.message =
-                            format!("buffer {}/{}", state.active + 1, state.buffer_count());
-                    }
                 }
                 Gesture::NextBuffer => {
                     state.cycle_buffer(true);
@@ -1456,6 +1448,22 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             state.status.message = format!("error: no saved query named '{name}'");
             Vec::new()
         }
+        // `:close` is the deliberate, typed way to close the active Buffer — the
+        // destructive counterpart to the navigation gestures (CONTEXT.md). The
+        // last Buffer always stays open; refused while a query is live.
+        MetaCommand::Close => {
+            state.editor.clear();
+            if matches!(state.run, RunState::Running { .. }) {
+                state.status.message = "session busy — cancel first".to_string();
+            } else if state.buffer_count() == 1 {
+                state.status.message = "the last buffer stays open".to_string();
+            } else {
+                state.close_buffer();
+                state.status.message =
+                    format!("buffer {}/{}", state.active + 1, state.buffer_count());
+            }
+            Vec::new()
+        }
         MetaCommand::Invalid(message) => {
             state.status.message = format!("error: {message}");
             Vec::new()
@@ -1523,9 +1531,9 @@ pub fn keybindings_help(keys: &KeyBindings) -> String {
         "Buffers (tabs)",
         &[
             (chord(Gesture::NewBuffer), "New tab"),
-            (chord(Gesture::CloseBuffer), "Close tab"),
             (chord(Gesture::NextBuffer), "Next tab"),
             (chord(Gesture::PrevBuffer), "Previous tab"),
+            (":close".to_string(), "Close the active tab (a typed command)"),
         ],
     );
     section(
@@ -1542,7 +1550,7 @@ pub fn keybindings_help(keys: &KeyBindings) -> String {
     out.push_str(
         "Commands (type at the editor)\n  \
          :param :params · :set · :begin :commit :rollback · :connect :use · :sysinfo\n  \
-         :source :watch :o · :save :saved :load :forget · :help :docs :quit\n\n\
+         :source :watch :o · :save :saved :load :forget · :close · :help :docs :quit\n\n\
          Tab chords and tool chords are rebindable in ~/.mgconsole/config.toml under [keys].",
     );
     out
@@ -2971,13 +2979,24 @@ mod tests {
         update(state, Event::Key(Key::ctrl(KeyCode::Char('t'))));
     }
     fn next_buffer(state: &mut WorkbenchState) {
-        update(state, Event::Key(Key::alt(KeyCode::Right)));
+        update(state, Event::Key(Key::ctrl(KeyCode::PageDown)));
     }
     fn prev_buffer(state: &mut WorkbenchState) {
-        update(state, Event::Key(Key::alt(KeyCode::Left)));
+        update(state, Event::Key(Key::ctrl(KeyCode::PageUp)));
     }
     fn close_buffer(state: &mut WorkbenchState) {
-        update(state, Event::Key(Key::ctrl(KeyCode::Char('w'))));
+        submit_meta(state, ":close");
+    }
+
+    #[test]
+    fn ctrl_w_no_longer_closes_a_buffer_and_reaches_the_editor() {
+        let mut s = wb();
+        new_buffer(&mut s); // two buffers open
+        type_str(&mut s, "alpha beta");
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('w'))));
+        assert_eq!(s.buffer_count(), 2, "Ctrl+W did not close a buffer");
+        // It reached the editor as delete-word.
+        assert_eq!(s.editor.buffer(), "alpha ", "Ctrl+W deleted the word in the editor");
     }
 
     #[test]
@@ -3354,8 +3373,8 @@ mod tests {
     fn the_format_gesture_reformats_the_editor_buffer() {
         let mut s = wb();
         type_str(&mut s, "match (n) return n");
-        // Alt+f is the default format-buffer chord.
-        update(&mut s, Event::Key(Key::alt(KeyCode::Char('f'))));
+        // Ctrl+L is the default format-buffer chord (issue 02).
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('l'))));
         assert_eq!(s.editor.buffer(), "MATCH (n)\nRETURN n");
         assert_eq!(s.status.message, "formatted");
     }
@@ -3364,7 +3383,7 @@ mod tests {
     fn the_format_gesture_leaves_partial_input_untouched_with_a_status() {
         let mut s = wb();
         type_str(&mut s, "RETURN 'half");
-        update(&mut s, Event::Key(Key::alt(KeyCode::Char('f'))));
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('l'))));
         assert_eq!(s.editor.buffer(), "RETURN 'half", "untouched");
         assert!(s.status.message.contains("unterminated string"), "{}", s.status.message);
     }

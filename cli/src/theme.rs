@@ -307,6 +307,17 @@ impl Chord {
             key,
         }
     }
+
+    /// A `ctrl+<key>` chord for a non-character key (e.g. `Ctrl+PageDown`).
+    #[must_use]
+    pub fn ctrl_key(key: ChordKey) -> Self {
+        Self {
+            ctrl: true,
+            alt: false,
+            shift: false,
+            key,
+        }
+    }
 }
 
 impl fmt::Display for Chord {
@@ -370,12 +381,12 @@ pub enum Gesture {
     FormatBuffer,
     Search,
     NewBuffer,
-    CloseBuffer,
     NextBuffer,
     PrevBuffer,
 }
 
-/// Every gesture, in a stable order — for defaults and for listing.
+/// Every gesture, in a stable order — for defaults and for listing. Closing a
+/// Buffer is a Workbench command (`:close`), not a gesture, so it is absent here.
 pub const GESTURES: &[Gesture] = &[
     Gesture::RefreshSchema,
     Gesture::ToggleSchema,
@@ -384,7 +395,6 @@ pub const GESTURES: &[Gesture] = &[
     Gesture::FormatBuffer,
     Gesture::Search,
     Gesture::NewBuffer,
-    Gesture::CloseBuffer,
     Gesture::NextBuffer,
     Gesture::PrevBuffer,
 ];
@@ -400,7 +410,6 @@ impl Gesture {
             Gesture::FormatBuffer => "format-buffer",
             Gesture::Search => "search",
             Gesture::NewBuffer => "new-buffer",
-            Gesture::CloseBuffer => "close-buffer",
             Gesture::NextBuffer => "next-buffer",
             Gesture::PrevBuffer => "prev-buffer",
         }
@@ -418,12 +427,15 @@ impl Gesture {
             Gesture::ToggleSchema => Chord::ctrl('b'),
             Gesture::ToggleParams => Chord::ctrl('p'),
             Gesture::ToggleSummary => Chord::ctrl('y'),
-            Gesture::FormatBuffer => Chord::alt(ChordKey::Char('f')),
+            // Ctrl+L is free in a TUI (no scrollback to clear); Ctrl+W stays the
+            // editor's delete-word and is no longer a Workbench gesture.
+            Gesture::FormatBuffer => Chord::ctrl('l'),
             Gesture::Search => Chord::ctrl('f'),
             Gesture::NewBuffer => Chord::ctrl('t'),
-            Gesture::CloseBuffer => Chord::ctrl('w'),
-            Gesture::NextBuffer => Chord::alt(ChordKey::Right),
-            Gesture::PrevBuffer => Chord::alt(ChordKey::Left),
+            // Buffer navigation lives on Ctrl+PageDown/PageUp, off the editor's
+            // single-Ctrl/Alt+letter keyspace.
+            Gesture::NextBuffer => Chord::ctrl_key(ChordKey::PageDown),
+            Gesture::PrevBuffer => Chord::ctrl_key(ChordKey::PageUp),
         }
     }
 }
@@ -613,6 +625,25 @@ mod tests {
         // The reverse lookup matches.
         assert_eq!(keys.gesture_for(Chord::ctrl('b')), Some(Gesture::ToggleSchema));
         assert_eq!(keys.gesture_for(Chord::ctrl('x')), None);
+    }
+
+    #[test]
+    fn the_buffer_and_format_chords_are_remapped_off_the_editor_keyspace() {
+        let keys = KeyBindings::default();
+        // Buffer navigation moves to Ctrl+PageDown / Ctrl+PageUp; new stays Ctrl+T.
+        assert_eq!(keys.chord(Gesture::NextBuffer), Chord::ctrl_key(ChordKey::PageDown));
+        assert_eq!(keys.chord(Gesture::PrevBuffer), Chord::ctrl_key(ChordKey::PageUp));
+        assert_eq!(keys.chord(Gesture::NewBuffer), Chord::ctrl('t'));
+        // Auto-format moves to Ctrl+L (free in a TUI; Ctrl+W is no longer bound).
+        assert_eq!(keys.chord(Gesture::FormatBuffer), Chord::ctrl('l'));
+        assert_eq!(keys.gesture_for(Chord::ctrl('w')), None, "Ctrl+W is freed");
+    }
+
+    #[test]
+    fn close_buffer_is_not_a_rebindable_gesture() {
+        // Close is a Workbench command (:close), not a chord, so it has no [keys]
+        // name and rebinding it is an unknown-gesture warning.
+        assert!(Gesture::from_name("close-buffer").is_none());
     }
 
     #[test]

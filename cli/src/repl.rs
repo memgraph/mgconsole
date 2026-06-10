@@ -95,6 +95,10 @@ pub enum MetaCommand {
     /// `:forget <name>` — delete a Named query (a deliberately non-generic verb so
     /// it never reads as deleting data, issue 13).
     Forget(String),
+    /// `:close` — close the active Workbench Buffer (a Workbench command, so it has
+    /// no meaning in the line REPL, which reports it unavailable). The destructive
+    /// counterpart to the Buffer-navigation gestures (CONTEXT.md "Workbench command").
+    Close,
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -157,6 +161,7 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
         }
         "save" => parse_save(args),
         "saved" => MetaCommand::Saved,
+        "close" => MetaCommand::Close,
         "load" => {
             if args.is_empty() {
                 MetaCommand::Invalid(":load needs a saved name, e.g. ':load recent'".to_string())
@@ -780,6 +785,11 @@ fn dispatch_meta(
                 writeln!(err, "error: no saved query named '{name}'")?;
             }
         }
+        // A Workbench command has no meaning in the line REPL (it has no Buffers),
+        // so it is reported unavailable rather than acted on (CONTEXT.md).
+        MetaCommand::Close => {
+            writeln!(err, "error: :close is a workbench command, not available here")?;
+        }
         MetaCommand::Invalid(message) => writeln!(err, "error: {message}")?,
         MetaCommand::Unknown(cmd) => writeln!(err, "error: unknown command '{cmd}'")?,
     }
@@ -1002,6 +1012,23 @@ mod tests {
             meta_command(":frobnicate"),
             Some(MetaCommand::Unknown(":frobnicate".to_string()))
         );
+    }
+
+    #[test]
+    fn close_is_parsed_as_a_workbench_command() {
+        assert_eq!(meta_command(":close"), Some(MetaCommand::Close));
+    }
+
+    #[test]
+    fn close_is_reported_unavailable_in_the_line_repl() {
+        // The line REPL has no Buffers, so the Workbench command :close is
+        // reported unavailable rather than acted on; the loop survives.
+        let (_src, _runner, _out, err) = drive(
+            vec![Line::Text(":close".into()), Line::Text("RETURN 1;".into())],
+            vec![Ok(ok_result("t", 1))],
+        );
+        assert!(err.contains(":close"), "names the command: {err}");
+        assert!(err.to_lowercase().contains("not available") || err.contains("workbench"), "{err}");
     }
 
     #[test]
