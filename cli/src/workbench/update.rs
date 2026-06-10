@@ -17,6 +17,7 @@ use crate::syntax::Completer;
 
 use super::effect::Effect;
 use super::event::{Event, Key, KeyCode};
+use super::plan::{is_plan_query, Plan};
 use super::schema::{Schema, SchemaSource};
 use super::state::{
     Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, WorkbenchState,
@@ -80,7 +81,8 @@ fn on_started(state: &mut WorkbenchState, id: u64, header: Vec<String>) {
     if !is_current(state, id) {
         return;
     }
-    state.history.push(CurrentResult::new(header));
+    let statement = state.running_statement.clone().unwrap_or_default();
+    state.history.push(CurrentResult::new(statement, header));
     state.view = state.history.len() - 1;
 }
 
@@ -117,6 +119,10 @@ fn on_completed(
     state.status.message = format_summary(rows, elapsed);
     if let Some(result) = state.live_mut() {
         result.summary = Some(summary);
+        // An EXPLAIN/PROFILE result renders as an operator tree, not a table.
+        if is_plan_query(&result.statement) {
+            result.plan = Some(Plan::parse(&result.rows));
+        }
     }
     advance(state)
 }
@@ -150,6 +156,7 @@ fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
     state.run = RunState::Running { id };
     state.spinner = 0;
     state.status.message = "running…".to_string();
+    state.running_statement = Some(query.clone());
     vec![Effect::RunQuery {
         id,
         query,
@@ -386,7 +393,16 @@ fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
         }
         // Enter expands the selected cell into the detail overlay (slice 08).
         KeyCode::Enter => {
-            open_detail(state);
+            // For a plan result, Enter collapses/expands the selected operator;
+            // for a table, it expands the selected cell (slice 08/14).
+            let toggled = state
+                .shown_mut()
+                .and_then(|result| result.plan.as_mut())
+                .map(Plan::toggle)
+                .is_some();
+            if !toggled {
+                open_detail(state);
+            }
             return Vec::new();
         }
         // 'e' opens the export prompt for the on-screen result (slice 09).
@@ -404,6 +420,17 @@ fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             return Vec::new();
         }
         _ => {}
+    }
+    // Plan results navigate as an operator tree (slice 14); tables navigate rows.
+    if let Some(plan) = state.shown_mut().and_then(|result| result.plan.as_mut()) {
+        match key.code {
+            KeyCode::Up => plan.move_selection(-1),
+            KeyCode::Down => plan.move_selection(1),
+            KeyCode::Left => plan.collapse(),
+            KeyCode::Right => plan.expand(),
+            _ => {}
+        }
+        return Vec::new();
     }
     let page = state.viewport_rows.max(1);
     if let Some(result) = state.shown_mut() {
@@ -1276,6 +1303,61 @@ mod tests {
         update(&mut s, Event::SchemaLoaded(None)); // feature off
         update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('b'))));
         assert_eq!(s.drawer, None, "drawer does not open when there is no schema");
+    }
+
+    // --- EXPLAIN/PROFILE plan tree (slice 14) -------------------------------
+
+    fn plan_row(text: &str) -> Record {
+        Record::new(vec![Value::String(text.to_string())])
+    }
+
+    #[test]
+    fn an_explain_query_renders_as_a_plan_not_a_table() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "EXPLAIN MATCH (n) RETURN n;");
+        update(&mut s, Event::QueryStarted { id, header: vec!["QUERY PLAN".to_string()] });
+        update(&mut s, Event::RecordArrived { id, record: plan_row(" * Produce {n}") });
+        update(&mut s, Event::RecordArrived { id, record: plan_row(" * ScanAll (n)") });
+        update(
+            &mut s,
+            Event::QueryCompleted {
+                id,
+                summary: Summary::default(),
+                elapsed: Duration::from_millis(1),
+            },
+        );
+        let plan = s.shown().unwrap().plan.as_ref().expect("plan built");
+        assert_eq!(plan.lines.len(), 2);
+        assert_eq!(plan.lines[0].operator, "Produce {n}");
+    }
+
+    #[test]
+    fn an_ordinary_query_stays_a_table() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "MATCH (n) RETURN n;");
+        complete(&mut s, id, 2);
+        assert!(s.shown().unwrap().plan.is_none(), "no plan for an ordinary query");
+    }
+
+    #[test]
+    fn plan_navigation_and_collapse_work_on_the_tree() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "PROFILE MATCH (n) RETURN n;");
+        update(&mut s, Event::QueryStarted { id, header: vec!["OPERATOR".to_string()] });
+        update(&mut s, Event::RecordArrived { id, record: plan_row("* Produce {n}") });
+        update(&mut s, Event::RecordArrived { id, record: plan_row("  * ScanAll (n)") });
+        update(
+            &mut s,
+            Event::QueryCompleted { id, summary: Summary::default(), elapsed: Duration::from_millis(1) },
+        );
+        s.focus = Focus::Results;
+        // Down moves the plan selection (not a table row).
+        press(&mut s, KeyCode::Down);
+        assert_eq!(s.shown().unwrap().plan.as_ref().unwrap().selected, 1);
+        // Enter on the root (a node with a child) collapses the subtree.
+        press(&mut s, KeyCode::Up);
+        press(&mut s, KeyCode::Enter);
+        assert!(s.shown().unwrap().plan.as_ref().unwrap().lines[0].collapsed);
     }
 
     #[test]

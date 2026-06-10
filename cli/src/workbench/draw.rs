@@ -14,6 +14,7 @@ use ratatui::Frame;
 use mgconsole_core::Value;
 
 use super::highlight;
+use super::plan::Plan;
 use super::schema::Schema;
 use super::state::{
     Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, WorkbenchState,
@@ -72,6 +73,9 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     // visible window, or just a summary line for a result with no columns.
     let results_focused = matches!(state.focus, Focus::Results);
     let title = match state.shown() {
+        Some(result) if result.plan.is_some() => {
+            format!("Results [{}/{}] (plan)", state.view + 1, state.history.len())
+        }
         Some(result) => format!(
             "Results [{}/{}] ({} row{}{}{})",
             state.view + 1,
@@ -233,6 +237,36 @@ fn draw_detail(frame: &mut Frame, value: &Value, scroll: u16) {
     );
 }
 
+/// Render a query plan as a navigable, collapsible operator tree (slice 14):
+/// each visible line indented by its depth, a ▸/▾ marker on a node with a
+/// subtree, the selected line highlighted.
+fn draw_plan(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool) {
+    let lines: Vec<Line> = plan
+        .visible()
+        .into_iter()
+        .map(|index| {
+            let node = &plan.lines[index];
+            let marker = if plan.has_children(index) {
+                if node.collapsed {
+                    "▸ "
+                } else {
+                    "▾ "
+                }
+            } else {
+                "  "
+            };
+            let text = format!("{}{marker}{}", " ".repeat(node.depth), node.operator);
+            let style = if focused && index == plan.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            Line::styled(text, style)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
 /// A rectangle centred in `area`, sized to `pct_x` × `pct_y` percent of it.
 fn centered_rect(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
     let rows = Layout::vertical([
@@ -283,6 +317,11 @@ fn draw_editor(frame: &mut Frame, area: Rect, state: &WorkbenchState, focused: b
 /// cell highlighted. A result with no columns shows nothing here (its summary is
 /// in the status bar).
 fn draw_result(frame: &mut Frame, area: Rect, result: &CurrentResult, focused: bool) {
+    // An EXPLAIN/PROFILE result renders as an operator tree, not a table.
+    if let Some(plan) = &result.plan {
+        draw_plan(frame, area, plan, focused);
+        return;
+    }
     if result.header.is_empty() {
         return;
     }
@@ -367,6 +406,26 @@ mod tests {
         assert!(rendered.contains("Query"), "editor pane titled");
         assert!(rendered.contains("Results"), "results pane titled");
         assert!(rendered.contains("Alt+Enter"), "newline key surfaced in the hint");
+    }
+
+    #[test]
+    fn renders_a_plan_as_an_operator_tree() {
+        use crate::workbench::plan::{Plan, PlanLine};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let mut result = CurrentResult::new("EXPLAIN ...".to_string(), vec!["QUERY PLAN".to_string()]);
+        result.plan = Some(Plan {
+            lines: vec![
+                PlanLine { depth: 0, operator: "Produce {n}".into(), collapsed: false },
+                PlanLine { depth: 2, operator: "ScanAll (n)".into(), collapsed: false },
+            ],
+            selected: 0,
+        });
+        state.history.push(result);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Produce {n}"), "operator drawn");
+        assert!(rendered.contains("ScanAll (n)"), "child operator drawn");
+        assert!(rendered.contains("plan"), "title marks plan mode");
+        assert!(rendered.contains('▾'), "an expandable node shows a marker");
     }
 
     #[test]

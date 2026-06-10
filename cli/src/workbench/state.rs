@@ -15,6 +15,7 @@ use crate::syntax::{word_start, Completer};
 
 use super::effect::ExportFormat;
 use super::event::{Key, KeyCode};
+use super::plan::Plan;
 use super::schema::Schema;
 
 /// The open completion popup (slice 11): the candidates for the word under the
@@ -92,6 +93,9 @@ pub struct WorkbenchState {
     pub params: BTreeMap<String, Value>,
     /// Monotonic id stamped on each query, so its lifecycle events match.
     pub next_id: u64,
+    /// The statement of the in-flight query, carried from submit to the result
+    /// entry created when the query starts (for plan detection, slice 14).
+    pub running_statement: Option<String>,
     /// The transient status message (errors, hints; running/elapsed in slice 07).
     pub status: StatusLine,
     /// Whether colour is on (resolved `--color`/`NO_COLOR`); slice 05 uses it for
@@ -122,6 +126,7 @@ impl WorkbenchState {
             viewport_rows: 0,
             params: BTreeMap::new(),
             next_id: 0,
+            running_statement: None,
             status: StatusLine::default(),
             color,
             config,
@@ -159,8 +164,13 @@ pub enum RunState {
 /// visible window is drawn, so a huge result stays navigable).
 #[derive(Debug, Default, Clone)]
 pub struct CurrentResult {
+    /// The statement that produced this result (for history + plan detection).
+    pub statement: String,
     pub header: Vec<String>,
     pub rows: Vec<Record>,
+    /// When `Some`, this is an `EXPLAIN`/`PROFILE` result rendered as an operator
+    /// tree instead of a table (slice 14).
+    pub plan: Option<Plan>,
     /// The selected row, for navigation and cell-expand (slice 08).
     pub selected_row: usize,
     /// The selected column.
@@ -179,9 +189,11 @@ pub struct CurrentResult {
 }
 
 impl CurrentResult {
-    /// A fresh result for a query's `header`, cursor at the top-left.
-    pub fn new(header: Vec<String>) -> Self {
+    /// A fresh result for a query's `statement` and `header`, cursor at the
+    /// top-left.
+    pub fn new(statement: String, header: Vec<String>) -> Self {
         Self {
+            statement,
             header,
             ..Self::default()
         }
