@@ -13,6 +13,12 @@ query referencing `$name` resolves against supplied values. This is the Core
 capability; the `:param` Frontend commands are slice 20. Integration tested
 against a live container.
 
+As the first slice to add integration tests beyond 02, also introduce the
+**shared-container test harness** described in `core/tests/common/mod.rs`
+(one container per test binary + an aggressive `reset()`, tests serial within
+the file) and convert the existing `session.rs` tests to it — so the growing
+integration suite does not spin up a heavyweight Memgraph container per test.
+
 ## Acceptance criteria
 
 - [ ] The Session accepts a set of named parameters alongside a query
