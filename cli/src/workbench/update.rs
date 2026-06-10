@@ -395,11 +395,13 @@ fn update_mouse(state: &mut WorkbenchState, mouse: MouseEvent) -> Vec<Effect> {
             }
             Vec::new()
         }
-        // A click focuses the pane under the cursor; over a result cell it also
-        // selects that cell and opens the cell-detail overlay (the existing
-        // cell-expand path). The tab bar (issue 18) is handled where it is drawn.
+        // A click on the tab bar switches Buffers (issue 18); on a pane it focuses
+        // it, and over a result cell selects that cell and opens the cell-detail
+        // overlay (the existing cell-expand path).
         MouseKind::Down => {
-            if in_rect(state.results_area, col, row) {
+            if in_rect(state.tabbar_area, col, row) {
+                click_tab(state, col);
+            } else if in_rect(state.results_area, col, row) {
                 state.focus = Focus::Results;
                 click_result_cell(state, col, row);
             } else if in_rect(state.editor_area, col, row) {
@@ -407,6 +409,22 @@ fn update_mouse(state: &mut WorkbenchState, mouse: MouseEvent) -> Vec<Effect> {
             }
             Vec::new()
         }
+    }
+}
+
+/// Switch to the Buffer whose tab a click landed on (issue 18). Tabs are
+/// fixed-width, so the index is `(click - bar.x) / TAB_WIDTH`; a click past the
+/// last tab is ignored. Refused while a query is live (as the gesture is).
+fn click_tab(state: &mut WorkbenchState, col: u16) {
+    if matches!(state.run, RunState::Running { .. }) {
+        state.status.message = "session busy — cancel first".to_string();
+        return;
+    }
+    let offset = col.saturating_sub(state.tabbar_area.x);
+    let index = (offset / super::draw::TAB_WIDTH) as usize;
+    if index < state.buffer_count() && index != state.active {
+        state.switch_to(index);
+        state.status.message = format!("buffer {}/{}", state.active + 1, state.buffer_count());
     }
 }
 
@@ -518,12 +536,42 @@ fn handle_gesture(state: &mut WorkbenchState, gesture: Gesture) -> Vec<Effect> {
             open_search(state);
             Vec::new()
         }
-        // Buffer (tab) gestures arrive in issue 18; recognised now so their chords
-        // are reserved and rebindable, a no-op until then.
-        Gesture::NewBuffer
-        | Gesture::CloseBuffer
-        | Gesture::NextBuffer
-        | Gesture::PrevBuffer => Vec::new(),
+        // Buffer (tab) gestures (issue 18). Refused while a query is live, since
+        // the one live result streams into the active Buffer — switching mid-query
+        // would misroute its rows (cross-tab parallelism is a non-goal, ADR 0006).
+        Gesture::NewBuffer | Gesture::CloseBuffer | Gesture::NextBuffer | Gesture::PrevBuffer => {
+            if matches!(state.run, RunState::Running { .. }) {
+                state.status.message = "session busy — cancel first".to_string();
+                return Vec::new();
+            }
+            match gesture {
+                Gesture::NewBuffer => {
+                    state.new_buffer();
+                    state.status.message =
+                        format!("new buffer {}/{}", state.active + 1, state.buffer_count());
+                }
+                Gesture::CloseBuffer => {
+                    if state.buffer_count() == 1 {
+                        state.status.message = "the last buffer stays open".to_string();
+                    } else {
+                        state.close_buffer();
+                        state.status.message =
+                            format!("buffer {}/{}", state.active + 1, state.buffer_count());
+                    }
+                }
+                Gesture::NextBuffer => {
+                    state.cycle_buffer(true);
+                    state.status.message =
+                        format!("buffer {}/{}", state.active + 1, state.buffer_count());
+                }
+                _ => {
+                    state.cycle_buffer(false);
+                    state.status.message =
+                        format!("buffer {}/{}", state.active + 1, state.buffer_count());
+                }
+            }
+            Vec::new()
+        }
     }
 }
 
@@ -2817,6 +2865,121 @@ mod tests {
         open_search_overlay(&mut s);
         assert!(s.search.is_none(), "nothing to search");
         assert!(s.status.message.contains("no result"));
+    }
+
+    // --- Multiple buffers / tabs (issue 18) -----------------------------------
+
+    fn new_buffer(state: &mut WorkbenchState) {
+        update(state, Event::Key(Key::ctrl(KeyCode::Char('t'))));
+    }
+    fn next_buffer(state: &mut WorkbenchState) {
+        update(state, Event::Key(Key::alt(KeyCode::Right)));
+    }
+    fn prev_buffer(state: &mut WorkbenchState) {
+        update(state, Event::Key(Key::alt(KeyCode::Left)));
+    }
+    fn close_buffer(state: &mut WorkbenchState) {
+        update(state, Event::Key(Key::ctrl(KeyCode::Char('w'))));
+    }
+
+    #[test]
+    fn new_and_cycle_gestures_manage_buffers_each_with_its_own_editor_text() {
+        let mut s = wb();
+        type_str(&mut s, "QUERY ONE");
+        assert_eq!(s.buffer_count(), 1);
+
+        new_buffer(&mut s);
+        assert_eq!(s.buffer_count(), 2);
+        assert_eq!(s.active, 1);
+        assert_eq!(s.editor.buffer(), "", "a new buffer starts empty");
+        type_str(&mut s, "QUERY TWO");
+
+        // Switching back preserves each buffer's own editor text.
+        prev_buffer(&mut s);
+        assert_eq!(s.active, 0);
+        assert_eq!(s.editor.buffer(), "QUERY ONE");
+        next_buffer(&mut s);
+        assert_eq!(s.active, 1);
+        assert_eq!(s.editor.buffer(), "QUERY TWO");
+    }
+
+    #[test]
+    fn each_buffer_keeps_its_own_result_history() {
+        let mut s = wb();
+        s.history.push(CurrentResult::new("A".to_string(), vec!["x".to_string()]));
+        new_buffer(&mut s);
+        assert!(s.history.is_empty(), "the new buffer has its own (empty) history");
+        s.history.push(CurrentResult::new("B".to_string(), vec!["y".to_string()]));
+        prev_buffer(&mut s);
+        assert_eq!(s.history.len(), 1);
+        assert_eq!(s.history[0].statement, "A", "buffer 1's result preserved");
+        next_buffer(&mut s);
+        assert_eq!(s.history[0].statement, "B", "buffer 2's result preserved");
+    }
+
+    #[test]
+    fn cycling_wraps_around() {
+        let mut s = wb();
+        new_buffer(&mut s);
+        new_buffer(&mut s); // 3 buffers, active 2
+        assert_eq!(s.active, 2);
+        next_buffer(&mut s);
+        assert_eq!(s.active, 0, "wrapped to the first");
+        prev_buffer(&mut s);
+        assert_eq!(s.active, 2, "wrapped to the last");
+    }
+
+    #[test]
+    fn closing_the_last_buffer_is_a_no_op() {
+        let mut s = wb();
+        close_buffer(&mut s);
+        assert_eq!(s.buffer_count(), 1, "always at least one buffer");
+        assert!(s.status.message.contains("last buffer"));
+    }
+
+    #[test]
+    fn closing_a_buffer_drops_it_and_activates_a_neighbour() {
+        let mut s = wb();
+        type_str(&mut s, "ONE");
+        new_buffer(&mut s);
+        type_str(&mut s, "TWO");
+        close_buffer(&mut s); // closes buffer 2, back to buffer 1
+        assert_eq!(s.buffer_count(), 1);
+        assert_eq!(s.editor.buffer(), "ONE");
+    }
+
+    #[test]
+    fn session_global_state_is_shared_across_buffers() {
+        let mut s = wb();
+        // A :param set in one buffer is visible from another (one shared Session).
+        s.params.insert("x".to_string(), Value::Integer(1));
+        s.read_only = true;
+        new_buffer(&mut s);
+        assert!(s.params.contains_key("x"), "params shared across buffers");
+        assert!(s.read_only, "read-only shared across buffers");
+    }
+
+    #[test]
+    fn buffer_management_is_refused_while_a_query_is_live() {
+        let mut s = wb();
+        submit_query(&mut s, "RETURN 1;");
+        // A new-buffer gesture mid-query is refused (one live result, ADR 0006).
+        new_buffer(&mut s);
+        assert_eq!(s.buffer_count(), 1, "no buffer opened while busy");
+        assert!(s.status.message.contains("busy"));
+    }
+
+    #[test]
+    fn a_tab_bar_click_switches_buffers() {
+        let mut s = wb();
+        type_str(&mut s, "ONE");
+        new_buffer(&mut s); // buffer 2 active
+        // The draw would set tabbar_area; simulate a 2-tab bar at the top.
+        s.tabbar_area = Rect::new(0, 0, super::super::draw::TAB_WIDTH * 2, 1);
+        // Click the first tab (columns 0..TAB_WIDTH).
+        click(&mut s, 1, 0);
+        assert_eq!(s.active, 0, "clicked the first tab");
+        assert_eq!(s.editor.buffer(), "ONE");
     }
 
     // --- Mouse support (issue 17) ---------------------------------------------

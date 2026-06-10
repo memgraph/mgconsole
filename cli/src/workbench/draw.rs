@@ -59,13 +59,23 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
         None => frame.area(),
     };
 
+    // A tab bar sits above the editor when more than one Buffer is open (issue 18);
+    // with a single Buffer there is nothing to switch between, so it is not drawn.
+    let show_tabs = state.buffer_count() > 1;
+    let tabbar_height = u16::from(show_tabs);
     let areas = Layout::vertical([
+        Constraint::Length(tabbar_height),
         Constraint::Percentage(state.config.editor_percent),
         Constraint::Min(3),
         Constraint::Length(1),
     ])
     .split(main_area);
-    let (editor_area, results_area, status_area) = (areas[0], areas[1], areas[2]);
+    let (tabbar_area, editor_area, results_area, status_area) =
+        (areas[0], areas[1], areas[2], areas[3]);
+    state.tabbar_area = if show_tabs { tabbar_area } else { Rect::default() };
+    if show_tabs {
+        draw_tabbar(frame, tabbar_area, state.active, state.buffer_count());
+    }
 
     // Editor pane: a bordered block with the query editor rendered inside it.
     // The lines are rendered with per-token syntax highlighting (slice 05), and
@@ -129,6 +139,25 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
         let (cx, cy) = editor_cursor;
         draw_completion(frame, completion, cx, cy);
     }
+}
+
+/// The fixed on-screen width of one Buffer tab (issue 18). Fixed so the reducer
+/// can map a tab-bar click back to a Buffer index by integer division.
+pub const TAB_WIDTH: u16 = 6;
+
+/// Draw the Buffer tab bar (issue 18): one fixed-width numbered tab per Buffer,
+/// the active one reversed. Fixed widths keep click hit-testing trivial.
+fn draw_tabbar(frame: &mut Frame, area: Rect, active: usize, count: usize) {
+    let mut spans = Vec::with_capacity(count);
+    for index in 0..count {
+        let label = format!("{:^width$}", index + 1, width = TAB_WIDTH as usize);
+        let mut style = Style::default();
+        if index == active {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        spans.push(Span::styled(label, style));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Draw the completion popup: a small list of candidates anchored below the
@@ -721,6 +750,20 @@ mod tests {
         assert!(rendered.contains("name"), "header column drawn");
         assert!(rendered.contains("Ada"), "a row cell drawn");
         assert!(rendered.contains("2 rows"), "live row count in the title");
+    }
+
+    #[test]
+    fn the_tab_bar_is_drawn_only_with_more_than_one_buffer() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        // One buffer: no tab bar, and no cached tab-bar rect for the mouse.
+        let single = render(&mut state);
+        assert!(!single.contains(" 1 "), "no tab bar for a single buffer: {single:?}");
+        assert_eq!(state.tabbar_area.height, 0, "no tab-bar rect cached");
+        // Two buffers: the tab bar shows the numbered tabs.
+        state.new_buffer();
+        let multi = render(&mut state);
+        assert!(multi.contains('1') && multi.contains('2'), "tab numbers drawn: {multi:?}");
+        assert_eq!(state.tabbar_area.height, 1, "tab-bar rect cached for the mouse");
     }
 
     #[test]

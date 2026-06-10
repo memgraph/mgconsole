@@ -67,6 +67,23 @@ impl Default for ExportPrompt {
     }
 }
 
+/// One Buffer's own state (issue 18): its editor text, its result + result-history
+/// stack, and its command-history recall position. Everything else — the Session,
+/// `:param` store, Schema, Settings, the one live query — is session-global and
+/// lives directly on [`WorkbenchState`], shared across all Buffers.
+///
+/// The *active* Buffer's state is held in the matching top-level fields of
+/// `WorkbenchState` (so the reducer reads it directly); the inactive Buffers are
+/// parked here in [`WorkbenchState::buffers`] and swapped in on a switch.
+#[derive(Default)]
+pub struct Buffer {
+    pub editor: EditorState,
+    pub history: Vec<CurrentResult>,
+    pub view: usize,
+    pub recall_index: Option<usize>,
+    pub recall_saved: Option<String>,
+}
+
 /// The complete workbench state for the current slice.
 pub struct WorkbenchState {
     /// The multiline query editor.
@@ -113,6 +130,16 @@ pub struct WorkbenchState {
     /// the reducer can page and keep the selection visible without re-deriving the
     /// layout. The draw is the only writer.
     pub viewport_rows: usize,
+    /// The inactive Buffers (issue 18), parked while another is active; the active
+    /// Buffer's state lives in the top-level [`editor`](Self::editor)/
+    /// [`history`](Self::history)/[`view`](Self::view) fields. `buffers[active]` is
+    /// a placeholder swapped with those fields on a switch. There is always ≥1.
+    pub buffers: Vec<Buffer>,
+    /// The active Buffer index into [`buffers`](Self::buffers).
+    pub active: usize,
+    /// The tab bar's rectangle from the last draw (issue 17/18), cached for mouse
+    /// hit-testing; empty when only one Buffer is open (no tab bar drawn).
+    pub tabbar_area: Rect,
     /// The editor pane's inner rectangle from the last draw (issue 17), cached so
     /// the reducer can hit-test a mouse click without knowing the layout. The draw
     /// is the only writer; the reducer only reads.
@@ -207,6 +234,9 @@ impl WorkbenchState {
             completer: Completer::with_static_vocabulary(),
             schema: None,
             drawer: None,
+            buffers: vec![Buffer::default()],
+            active: 0,
+            tabbar_area: Rect::default(),
             viewport_rows: 0,
             editor_area: Rect::default(),
             results_area: Rect::default(),
@@ -249,6 +279,99 @@ impl WorkbenchState {
     /// pushed in order and only one query runs at a time (rows stream into it).
     pub fn live_mut(&mut self) -> Option<&mut CurrentResult> {
         self.history.last_mut()
+    }
+
+    /// The number of open Buffers (issue 18); always ≥1.
+    pub fn buffer_count(&self) -> usize {
+        self.buffers.len()
+    }
+
+    /// Park the active Buffer's live state into `buffers[active]` and check out
+    /// `target`'s state into the live fields, making it active. A no-op when
+    /// `target` is already active. The transient command-history list and all
+    /// session-global state are untouched — only the per-Buffer state moves.
+    fn checkout(&mut self, target: usize) {
+        if target == self.active || target >= self.buffers.len() {
+            return;
+        }
+        self.buffers[self.active] = Buffer {
+            editor: std::mem::take(&mut self.editor),
+            history: std::mem::take(&mut self.history),
+            view: self.view,
+            recall_index: self.recall_index.take(),
+            recall_saved: self.recall_saved.take(),
+        };
+        let incoming = std::mem::take(&mut self.buffers[target]);
+        self.editor = incoming.editor;
+        self.history = incoming.history;
+        self.view = incoming.view;
+        self.recall_index = incoming.recall_index;
+        self.recall_saved = incoming.recall_saved;
+        self.active = target;
+    }
+
+    /// Open a fresh Buffer after the current one and make it active (issue 18).
+    pub fn new_buffer(&mut self) {
+        // Park the active Buffer, append an empty one, and check it out.
+        self.buffers[self.active] = self.take_active();
+        self.buffers.insert(self.active + 1, Buffer::default());
+        self.active += 1;
+        let incoming = std::mem::take(&mut self.buffers[self.active]);
+        self.install_active(incoming);
+    }
+
+    /// Close the active Buffer (issue 18). Closing the last is a no-op (there is
+    /// always ≥1 Buffer); otherwise the neighbour becomes active.
+    pub fn close_buffer(&mut self) {
+        if self.buffers.len() == 1 {
+            return;
+        }
+        self.buffers.remove(self.active);
+        if self.active >= self.buffers.len() {
+            self.active = self.buffers.len() - 1;
+        }
+        let incoming = std::mem::take(&mut self.buffers[self.active]);
+        self.install_active(incoming);
+    }
+
+    /// Switch directly to Buffer `index` (issue 18), e.g. from a tab-bar click. A
+    /// no-op for the active index or an out-of-range one.
+    pub fn switch_to(&mut self, index: usize) {
+        self.checkout(index);
+    }
+
+    /// Switch to the next/previous Buffer, wrapping (issue 18).
+    pub fn cycle_buffer(&mut self, forward: bool) {
+        let len = self.buffers.len();
+        if len <= 1 {
+            return;
+        }
+        let target = if forward {
+            (self.active + 1) % len
+        } else {
+            (self.active + len - 1) % len
+        };
+        self.checkout(target);
+    }
+
+    /// Move the live top-level Buffer state out into an owned [`Buffer`].
+    fn take_active(&mut self) -> Buffer {
+        Buffer {
+            editor: std::mem::take(&mut self.editor),
+            history: std::mem::take(&mut self.history),
+            view: self.view,
+            recall_index: self.recall_index.take(),
+            recall_saved: self.recall_saved.take(),
+        }
+    }
+
+    /// Install an owned [`Buffer`] as the live top-level state.
+    fn install_active(&mut self, buffer: Buffer) {
+        self.editor = buffer.editor;
+        self.history = buffer.history;
+        self.view = buffer.view;
+        self.recall_index = buffer.recall_index;
+        self.recall_saved = buffer.recall_saved;
     }
 }
 

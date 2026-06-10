@@ -1,6 +1,6 @@
 # 18 — Multiple buffers/tabs (Workbench)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
