@@ -1,6 +1,6 @@
 # 12 — Query parameters passed through Session
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

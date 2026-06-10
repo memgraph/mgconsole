@@ -1,6 +1,6 @@
 # 13 — Notifications + stats + verbose execution info
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

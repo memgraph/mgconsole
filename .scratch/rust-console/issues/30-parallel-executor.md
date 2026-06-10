@@ -1,6 +1,6 @@
 # 30 — Batched-parallel executor
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

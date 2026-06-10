@@ -1,6 +1,6 @@
 # 32 — Retry-with-backoff on serialization conflicts
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

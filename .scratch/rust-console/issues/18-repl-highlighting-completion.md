@@ -1,6 +1,6 @@
 # 18 — Syntax highlighting + static keyword/function completion
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

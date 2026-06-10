@@ -1,6 +1,6 @@
 # 09 — CLI flag surface + validation
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

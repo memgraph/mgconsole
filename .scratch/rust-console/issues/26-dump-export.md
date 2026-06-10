@@ -1,6 +1,6 @@
 # 26 — `DUMP DATABASE` export → cypherl
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

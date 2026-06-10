@@ -1,6 +1,6 @@
 # 20 — `:param` / `:params` / `:params clear`
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

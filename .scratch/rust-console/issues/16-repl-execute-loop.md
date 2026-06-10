@@ -1,6 +1,6 @@
 # 16 — REPL execute loop (rustyline)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

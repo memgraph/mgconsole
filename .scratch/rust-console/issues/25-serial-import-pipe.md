@@ -1,6 +1,6 @@
 # 25 — Non-interactive pipe + serial import + exit codes
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

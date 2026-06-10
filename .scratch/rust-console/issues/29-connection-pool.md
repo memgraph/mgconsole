@@ -1,6 +1,6 @@
 # 29 — Worker Sessions for parallel import
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

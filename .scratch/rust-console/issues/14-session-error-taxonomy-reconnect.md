@@ -1,6 +1,6 @@
 # 14 — Error taxonomy + reconnect-with-retry
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

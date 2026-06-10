@@ -1,6 +1,6 @@
 # 31 — Vertices-first ordering in parallel import
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

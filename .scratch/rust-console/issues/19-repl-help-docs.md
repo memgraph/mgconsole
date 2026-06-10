@@ -1,6 +1,6 @@
 # 19 — `:help` and `:docs` commands
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

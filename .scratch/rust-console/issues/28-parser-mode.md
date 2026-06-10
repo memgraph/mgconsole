@@ -1,6 +1,6 @@
 # 28 — Parser-only mode
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

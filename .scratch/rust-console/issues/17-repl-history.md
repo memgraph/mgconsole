@@ -1,6 +1,6 @@
 # 17 — Persistent REPL history
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

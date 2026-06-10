@@ -1,6 +1,6 @@
 # 10 — Auth: username/password + hidden password prompt
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
