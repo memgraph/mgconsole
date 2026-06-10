@@ -47,6 +47,15 @@ the definition here wins until deliberately changed.
   type, written `Type::Member` (e.g. `Status::Active`). The console treats it as
   a first-class Value, not as the map Memgraph happens to transmit it as.
 
+## Schema
+
+- **Schema** — the labels, relationship types, and property keys present in the
+  connected database. It is metadata _about_ the graph, distinct from a Query
+  result's data: the console fetches it so it can complete and browse the names
+  the database knows. The open-vocabulary dual of the closed keyword/function
+  vocabulary a Token is classified against — the console knows keywords without
+  the database, but can only know labels and property keys by asking it.
+
 ## Import / export
 
 - **Import mode** — the discipline by which a batch of queries from a file is
