@@ -202,6 +202,14 @@ pub async fn run(
                         session, tx, id, query, params, format, path,
                     )));
                 }
+                Effect::PersistQueries => {
+                    // Write the Named-query store after a `:save`/`:forget` (issue
+                    // 13). A failure is a status warning — the in-memory store keeps
+                    // the change for the session.
+                    if let Err(message) = state.queries.persist() {
+                        state.status.message = format!("warning: {message}");
+                    }
+                }
                 Effect::Source(path) => {
                     // Read the file off the render loop; the reducer runs its
                     // statements as a stop-on-error batch when the contents arrive

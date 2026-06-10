@@ -15,6 +15,7 @@ pub mod config;
 pub mod frontend;
 pub mod history;
 pub mod keywords;
+pub mod queries;
 pub mod repl;
 pub mod settings;
 pub mod syntax;

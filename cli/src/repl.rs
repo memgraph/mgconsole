@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use mgconsole_core::{render, tabular, DisplayMode, Error, QueryAssembler, TransactionState, Value};
 
+use crate::queries::NamedQueries;
 use crate::settings::Settings;
 use crate::OutputFormat;
 
@@ -82,6 +83,18 @@ pub enum MetaCommand {
     /// `:o [format] <file>` — redirect the next query's result to a file (issue
     /// 12). The raw argument is parsed at dispatch time.
     Redirect(String),
+    /// `:save <name> [query]` — save a query as a Named template (issue 13). With
+    /// no query the last query is saved; `query` is kept verbatim (it may hold
+    /// `$param` placeholders, resolved at run time).
+    Save { name: String, query: Option<String> },
+    /// `:saved` — list the saved Named queries.
+    Saved,
+    /// `:load <name>` — recall a Named query into the input for review/edit; never
+    /// auto-run (issue 13).
+    Load(String),
+    /// `:forget <name>` — delete a Named query (a deliberately non-generic verb so
+    /// it never reads as deleting data, issue 13).
+    Forget(String),
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -142,8 +155,42 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
                 MetaCommand::Redirect(args.to_string())
             }
         }
+        "save" => parse_save(args),
+        "saved" => MetaCommand::Saved,
+        "load" => {
+            if args.is_empty() {
+                MetaCommand::Invalid(":load needs a saved name, e.g. ':load recent'".to_string())
+            } else {
+                MetaCommand::Load(args.to_string())
+            }
+        }
+        "forget" => {
+            if args.is_empty() {
+                MetaCommand::Invalid(":forget needs a saved name, e.g. ':forget recent'".to_string())
+            } else {
+                MetaCommand::Forget(args.to_string())
+            }
+        }
         _ => MetaCommand::Unknown(trimmed.to_string()),
     })
+}
+
+/// Parse `:save <name> [query]` (issue 13). The name is the first word; anything
+/// after it is the template, kept verbatim (it may hold spaces and `$param`
+/// placeholders). With no query word, the last query is saved (a `None` the
+/// dispatcher fills). A bare `:save` with no name is a misuse.
+fn parse_save(args: &str) -> MetaCommand {
+    let (name, query) = split_first_word(args);
+    if name.is_empty() {
+        return MetaCommand::Invalid(
+            ":save needs a name, e.g. ':save recent' or ':save recent MATCH (n) RETURN n'"
+                .to_string(),
+        );
+    }
+    MetaCommand::Save {
+        name: name.to_string(),
+        query: (!query.is_empty()).then(|| query.to_string()),
+    }
 }
 
 /// Parse the argument of `:param` into a `SetParam`, or an [`MetaCommand::Invalid`]
@@ -276,7 +323,11 @@ pub fn help_text() -> &'static str {
      \t:sysinfo               Show server version and storage/runtime info\n\
      \t:source <file>         Run a file's queries and commands in this session\n\
      \t:watch [interval] [q]  Re-run a query on a timer (default 2s; Enter stops)\n\
-     \t:o [format] <file>     Redirect the next query's result to a file (csv/jsonl/cypherl/table)"
+     \t:o [format] <file>     Redirect the next query's result to a file (csv/jsonl/cypherl/table)\n\
+     \t:save <name> [query]   Save a query as a named template (the last query if none given)\n\
+     \t:saved                 List the saved named queries\n\
+     \t:load <name>           Recall a saved query into the input for review (does not run it)\n\
+     \t:forget <name>         Delete a saved named query"
 }
 
 /// Documentation pointers, printed by `:docs`. Carried over from `mgconsole`.
@@ -315,9 +366,11 @@ pub enum Line {
 
 /// Where the REPL reads input. `continued` is true when a statement is part-way
 /// assembled, so an interactive source can show a continuation prompt instead of
-/// the primary one. Abstracted so the loop is testable without a terminal.
+/// the primary one. `initial`, when `Some`, pre-fills the editor with recalled
+/// text the user can review and edit before submitting (`:load`, issue 13).
+/// Abstracted so the loop is testable without a terminal.
 pub trait LineSource {
-    fn read(&mut self, continued: bool) -> io::Result<Line>;
+    fn read(&mut self, continued: bool, initial: Option<&str>) -> io::Result<Line>;
 }
 
 /// One query's result, rendered and measured, ready for the loop to print. The
@@ -550,18 +603,24 @@ enum MetaFlow {
     Quit,
     /// The command was handled (output already written); re-prompt.
     Handled,
+    /// `:load` recalled a Named query: pre-fill the next prompt with this text for
+    /// the user to review and edit (never auto-run, issue 13).
+    Recall(String),
 }
 
 /// Handle one recognised meta-command, writing its output/errors. Split from
 /// [`run_loop`] so the loop body stays small as the vocabulary grows (issues
 /// 04–13). `Unknown`/`Invalid` are reported here too — every `:`-line is a
 /// command, handled, never run as a query.
-#[allow(clippy::too_many_arguments)]
+// One arm per command in the shared vocabulary; the match (and the seams it
+// threads — settings, params, the Named-query store) grows with each issue.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn dispatch_meta(
     cmd: MetaCommand,
     runner: &mut dyn QueryRunner,
     settings: &mut Settings,
     params: &mut BTreeMap<String, Value>,
+    queries: &mut NamedQueries,
     last_query: Option<&str>,
     pending_redirect: &mut Option<(OutputFormat, PathBuf)>,
     row_cap: usize,
@@ -649,7 +708,9 @@ fn dispatch_meta(
         // file may carry meta-commands too. A missing file is reported without
         // ending the session.
         MetaCommand::Source(path) => match std::fs::read_to_string(&path) {
-            Ok(content) => source_content(&content, runner, settings, params, row_cap, out, err)?,
+            Ok(content) => {
+                source_content(&content, runner, settings, params, queries, row_cap, out, err)?;
+            }
             Err(e) => writeln!(err, "error: cannot read source file '{path}': {e}")?,
         },
         // `:watch` re-runs a query on a timer (issue 11); refused while a
@@ -674,6 +735,44 @@ fn dispatch_meta(
             }
             Err(message) => writeln!(err, "error: {message}")?,
         },
+        // Named queries (issue 13): a tool-managed store of reusable templates.
+        // `:save` keeps text only ($param placeholders survive); persistence
+        // errors are reported without losing the in-memory save or the session.
+        MetaCommand::Save { name, query } => {
+            let text = query.or_else(|| last_query.map(str::to_string));
+            match text {
+                Some(text) => {
+                    // The in-memory save always succeeds; a persist failure is a
+                    // warning (the session keeps the save), not a lost command.
+                    queries.set(name.clone(), text);
+                    writeln!(out, "saved '{name}'")?;
+                    if let Err(e) = queries.persist() {
+                        writeln!(err, "warning: {e}")?;
+                    }
+                }
+                None => writeln!(
+                    err,
+                    "error: no query to save; give one: ':save {name} <query>'"
+                )?,
+            }
+        }
+        MetaCommand::Saved => writeln!(out, "{}", queries.list())?,
+        // `:load` recalls the template into the input for review/edit — it never
+        // auto-runs (issue 13). An unknown name is reported and the loop carries on.
+        MetaCommand::Load(name) => match queries.get(&name) {
+            Some(text) => return Ok(MetaFlow::Recall(text.to_string())),
+            None => writeln!(err, "error: no saved query named '{name}'")?,
+        },
+        MetaCommand::Forget(name) => {
+            if queries.remove(&name) {
+                writeln!(out, "forgot '{name}'")?;
+                if let Err(e) = queries.persist() {
+                    writeln!(err, "warning: {e}")?;
+                }
+            } else {
+                writeln!(err, "error: no saved query named '{name}'")?;
+            }
+        }
         MetaCommand::Invalid(message) => writeln!(err, "error: {message}")?,
         MetaCommand::Unknown(cmd) => writeln!(err, "error: unknown command '{cmd}'")?,
     }
@@ -684,11 +783,13 @@ fn dispatch_meta(
 /// (issue 10): meta-commands are honoured, queries are assembled and run, each is
 /// echoed before its result, and execution stops on the first query error. A
 /// `:quit` inside a source ends sourcing, not the session.
+#[allow(clippy::too_many_arguments)]
 fn source_content(
     content: &str,
     runner: &mut dyn QueryRunner,
     settings: &mut Settings,
     params: &mut BTreeMap<String, Value>,
+    queries: &mut NamedQueries,
     row_cap: usize,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -707,6 +808,7 @@ fn source_content(
                     runner,
                     settings,
                     params,
+                    queries,
                     None,
                     &mut pending_redirect,
                     row_cap,
@@ -750,6 +852,7 @@ fn source_content(
 pub fn run_loop(
     source: &mut dyn LineSource,
     runner: &mut dyn QueryRunner,
+    queries: &mut NamedQueries,
     out: &mut dyn Write,
     err: &mut dyn Write,
     config: &ReplConfig,
@@ -764,9 +867,12 @@ pub fn run_loop(
     let mut last_query: Option<String> = None;
     // A one-shot `:o` redirect armed for the next query (issue 12).
     let mut pending_redirect: Option<(OutputFormat, PathBuf)> = None;
+    // Text recalled by `:load` to pre-fill the next prompt (issue 13).
+    let mut pending_initial: Option<String> = None;
     loop {
         let continued = assembler.has_pending();
-        let text = match source.read(continued)? {
+        let initial = pending_initial.take();
+        let text = match source.read(continued, initial.as_deref())? {
             Line::Eof => break,
             // Drop the half-typed statement and re-prompt from scratch.
             Line::Interrupted => {
@@ -786,6 +892,7 @@ pub fn run_loop(
                     runner,
                     &mut settings,
                     &mut params,
+                    queries,
                     last_query.as_deref(),
                     &mut pending_redirect,
                     config.row_cap,
@@ -794,6 +901,11 @@ pub fn run_loop(
                 )? {
                     MetaFlow::Quit => break,
                     MetaFlow::Handled => continue,
+                    // Re-prompt with the recalled text pre-filled; never auto-run.
+                    MetaFlow::Recall(text) => {
+                        pending_initial = Some(text);
+                        continue;
+                    }
                 }
             }
         }
@@ -1220,6 +1332,9 @@ mod tests {
     struct ScriptedSource {
         lines: VecDeque<Line>,
         continued_at: Vec<bool>,
+        /// The `initial` (recalled `:load` text) each read was offered, so a test
+        /// can assert recall-to-input without a terminal (issue 13).
+        initials: Vec<Option<String>>,
     }
 
     impl ScriptedSource {
@@ -1227,13 +1342,15 @@ mod tests {
             Self {
                 lines: lines.into(),
                 continued_at: Vec::new(),
+                initials: Vec::new(),
             }
         }
     }
 
     impl LineSource for ScriptedSource {
-        fn read(&mut self, continued: bool) -> io::Result<Line> {
+        fn read(&mut self, continued: bool, initial: Option<&str>) -> io::Result<Line> {
             self.continued_at.push(continued);
+            self.initials.push(initial.map(str::to_string));
             Ok(self.lines.pop_front().unwrap_or(Line::Eof))
         }
     }
@@ -1389,14 +1506,28 @@ mod tests {
 
     fn drive_with(
         lines: Vec<Line>,
-        mut runner: ScriptedRunner,
+        runner: ScriptedRunner,
     ) -> (ScriptedSource, ScriptedRunner, String, String) {
+        let (source, runner, _queries, out, err) =
+            drive_with_queries(lines, runner, NamedQueries::in_memory());
+        (source, runner, out, err)
+    }
+
+    /// Like [`drive_with`] but threads a [`NamedQueries`] store in and back out, so
+    /// the issue-13 tests can pre-seed saved queries and assert the store after the
+    /// run.
+    fn drive_with_queries(
+        lines: Vec<Line>,
+        mut runner: ScriptedRunner,
+        mut queries: NamedQueries,
+    ) -> (ScriptedSource, ScriptedRunner, NamedQueries, String, String) {
         let mut source = ScriptedSource::of(lines);
         let mut out = Vec::new();
         let mut err = Vec::new();
         run_loop(
             &mut source,
             &mut runner,
+            &mut queries,
             &mut out,
             &mut err,
             &ReplConfig {
@@ -1408,6 +1539,7 @@ mod tests {
         (
             source,
             runner,
+            queries,
             String::from_utf8(out).unwrap(),
             String::from_utf8(err).unwrap(),
         )
@@ -1720,5 +1852,166 @@ mod tests {
         assert!(err.contains("bad expression"), "eval error surfaced: {err}");
         // Nothing was stored, and the next query still ran with no params.
         assert_eq!(runner.seen_params, vec![BTreeMap::new()]);
+    }
+
+    // --- :save / :saved / :load / :forget — Named queries (issue 13) ---------
+
+    #[test]
+    fn save_parses_a_name_and_optional_verbatim_query() {
+        assert_eq!(
+            meta_command(":save recent MATCH (n) RETURN n"),
+            Some(MetaCommand::Save {
+                name: "recent".to_string(),
+                query: Some("MATCH (n) RETURN n".to_string()),
+            })
+        );
+        // No query word: the last query is saved (a None the dispatcher fills).
+        assert_eq!(
+            meta_command(":save recent"),
+            Some(MetaCommand::Save {
+                name: "recent".to_string(),
+                query: None,
+            })
+        );
+        // A bare :save with no name is a misuse, not a save.
+        assert!(matches!(meta_command(":save"), Some(MetaCommand::Invalid(_))));
+    }
+
+    #[test]
+    fn saved_load_and_forget_parse() {
+        assert_eq!(meta_command(":saved"), Some(MetaCommand::Saved));
+        assert_eq!(
+            meta_command(":load recent"),
+            Some(MetaCommand::Load("recent".to_string()))
+        );
+        assert_eq!(
+            meta_command(":forget recent"),
+            Some(MetaCommand::Forget("recent".to_string()))
+        );
+        // load/forget need a name.
+        assert!(matches!(meta_command(":load"), Some(MetaCommand::Invalid(_))));
+        assert!(matches!(meta_command(":forget"), Some(MetaCommand::Invalid(_))));
+    }
+
+    #[test]
+    fn save_with_a_query_stores_a_template_and_persists() {
+        let (_src, _runner, queries, out, _err) = drive_with_queries(
+            vec![Line::Text(":save recent MATCH (n) RETURN $limit".into())],
+            ScriptedRunner::returning(vec![]),
+            // A real path so persist() succeeds; the round-trip is asserted via the
+            // returned store.
+            NamedQueries::in_memory(),
+        );
+        // The $param placeholder is kept verbatim — a template, not a frozen value.
+        assert_eq!(queries.get("recent"), Some("MATCH (n) RETURN $limit"));
+        assert!(out.contains("saved 'recent'"));
+    }
+
+    #[test]
+    fn save_with_no_query_saves_the_last_query() {
+        let (_src, _runner, queries, _out, _err) = drive_with_queries(
+            vec![
+                Line::Text("RETURN 1;".into()),
+                Line::Text(":save one".into()),
+            ],
+            ScriptedRunner::returning(vec![Ok(ok_result("t", 1))]),
+            NamedQueries::in_memory(),
+        );
+        assert_eq!(queries.get("one"), Some("RETURN 1"));
+    }
+
+    #[test]
+    fn save_with_no_query_and_no_last_query_is_reported() {
+        let (_src, _runner, queries, _out, err) = drive_with_queries(
+            vec![Line::Text(":save one".into())],
+            ScriptedRunner::returning(vec![]),
+            NamedQueries::in_memory(),
+        );
+        assert!(err.contains("no query to save"), "reported: {err}");
+        assert!(queries.is_empty());
+    }
+
+    #[test]
+    fn saved_lists_the_store() {
+        let mut seed = NamedQueries::in_memory();
+        seed.set("a".to_string(), "RETURN 1".to_string());
+        seed.set("b".to_string(), "RETURN 2".to_string());
+        let (_src, _runner, _queries, out, _err) = drive_with_queries(
+            vec![Line::Text(":saved".into())],
+            ScriptedRunner::returning(vec![]),
+            seed,
+        );
+        assert!(out.contains("a\nb"), "lists saved names: {out}");
+    }
+
+    #[test]
+    fn load_recalls_the_template_into_the_input_and_does_not_run_it() {
+        let mut seed = NamedQueries::in_memory();
+        seed.set("recent".to_string(), "MATCH (n) RETURN $limit".to_string());
+        let (src, runner, _queries, _out, _err) = drive_with_queries(
+            vec![Line::Text(":load recent".into())],
+            ScriptedRunner::returning(vec![]),
+            seed,
+        );
+        // The next read was offered the template as initial text — recall to input.
+        assert!(
+            src.initials.contains(&Some("MATCH (n) RETURN $limit".to_string())),
+            "recalled to input: {:?}",
+            src.initials
+        );
+        // It was not auto-run.
+        assert!(runner.seen.is_empty(), "load never runs the query");
+    }
+
+    #[test]
+    fn a_loaded_template_resolves_params_at_run_time_not_at_save_time() {
+        // Save references $limit, set $limit, then a recalled-and-submitted template
+        // runs with the *current* param value bound — templates, not frozen values.
+        let mut seed = NamedQueries::in_memory();
+        seed.set("recent".to_string(), "RETURN $limit;".to_string());
+        let runner = ScriptedRunner::returning(vec![Ok(ok_result("t", 1))])
+            .evaluating(vec![Ok(Value::Integer(10))]);
+        let (_src, runner, _queries, _out, _err) = drive_with_queries(
+            vec![
+                Line::Text(":param limit 10".into()),
+                // Recall loads to input; the next line is the user submitting it.
+                Line::Text(":load recent".into()),
+                Line::Text("RETURN $limit;".into()),
+            ],
+            runner,
+            seed,
+        );
+        assert_eq!(runner.seen, vec!["RETURN $limit".to_string()]);
+        assert_eq!(
+            runner.seen_params,
+            vec![BTreeMap::from([("limit".to_string(), Value::Integer(10))])]
+        );
+    }
+
+    #[test]
+    fn load_of_an_unknown_name_is_reported_and_the_loop_survives() {
+        let (_src, _runner, _queries, _out, err) = drive_with_queries(
+            vec![Line::Text(":load nope".into())],
+            ScriptedRunner::returning(vec![]),
+            NamedQueries::in_memory(),
+        );
+        assert!(err.contains("no saved query named 'nope'"), "reported: {err}");
+    }
+
+    #[test]
+    fn forget_removes_a_saved_query_and_an_unknown_name_is_reported() {
+        let mut seed = NamedQueries::in_memory();
+        seed.set("a".to_string(), "RETURN 1".to_string());
+        let (_src, _runner, queries, out, err) = drive_with_queries(
+            vec![
+                Line::Text(":forget a".into()),
+                Line::Text(":forget gone".into()),
+            ],
+            ScriptedRunner::returning(vec![]),
+            seed,
+        );
+        assert!(queries.get("a").is_none(), "removed");
+        assert!(out.contains("forgot 'a'"));
+        assert!(err.contains("no saved query named 'gone'"), "reported: {err}");
     }
 }

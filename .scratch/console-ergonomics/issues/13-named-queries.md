@@ -1,6 +1,6 @@
 # 13 — Named queries: `:save` / `:saved` / `:load` / `:forget`
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

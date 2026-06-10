@@ -104,6 +104,10 @@ pub enum Effect {
         format: OutputFormat,
         path: PathBuf,
     },
+    /// Persist the Named-query store to its backing file after a `:save`/`:forget`
+    /// mutated it in the reducer (issue 13). The reducer stays pure; the edge does
+    /// the write and reports any failure.
+    PersistQueries,
     /// Leave the workbench and restore the terminal.
     Quit,
 }

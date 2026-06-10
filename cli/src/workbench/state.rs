@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, VecDeque};
 use mgconsole_core::{ConnectOptions, Record, Summary, TransactionState, Value};
 
 use crate::config::Config;
+use crate::queries::NamedQueries;
 use tui_textarea::{Input, Key as TaKey, TextArea};
 
 use crate::settings::Settings;
@@ -145,6 +146,10 @@ pub struct WorkbenchState {
     pub last_query: Option<String>,
     /// A one-shot `:o` redirect armed for the next submitted query (issue 12).
     pub redirect: Option<(crate::OutputFormat, std::path::PathBuf)>,
+    /// The Named-query store (issue 13): saved templates recalled into the editor
+    /// by `:load`. Shared spine with the REPL; the pure reducer mutates it and the
+    /// edge persists via [`Effect::PersistQueries`](super::Effect::PersistQueries).
+    pub queries: NamedQueries,
     /// Frontend-local configuration.
     pub config: WorkbenchConfig,
 }
@@ -186,6 +191,7 @@ impl WorkbenchState {
             watch: None,
             last_query: None,
             redirect: None,
+            queries: config.queries.clone(),
             config,
         }
     }
@@ -316,6 +322,9 @@ pub struct WorkbenchConfig {
     /// The config + current connect options, so `:connect` can resolve a profile
     /// or bare endpoint and re-establish (issue 07).
     pub connect: ConnectContext,
+    /// The saved-queries store loaded at startup (issue 13), seeding the state's
+    /// live [`NamedQueries`] which `:save`/`:forget` then mutate and persist.
+    pub queries: NamedQueries,
 }
 
 /// An active `:watch` (issue 11): which query to re-run and the tick countdown
@@ -346,6 +355,7 @@ impl Default for WorkbenchConfig {
             read_only: false,
             endpoint: String::new(),
             connect: ConnectContext::default(),
+            queries: NamedQueries::in_memory(),
         }
     }
 }

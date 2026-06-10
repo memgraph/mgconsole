@@ -24,6 +24,7 @@ use rustyline::{Context, Editor, Helper, Hinter};
 use mgconsole::frontend::{select_frontend, Frontend};
 use mgconsole::history::{self, HistoryFile};
 use mgconsole::config;
+use mgconsole::queries;
 use mgconsole::repl::{self, Line, LineSource, QueryRunner, Rendered, ReplConfig};
 use mgconsole::settings::Settings;
 use mgconsole::syntax::{self, Completer};
@@ -220,6 +221,7 @@ fn run_interactive(
                     read_only,
                     endpoint: session.endpoint().to_string(),
                     connect: workbench::state::ConnectContext { config, options },
+                    queries: load_queries(),
                     ..workbench::WorkbenchConfig::default()
                 };
                 runtime.block_on(workbench::run(session, wb_config, colorize, history))?;
@@ -249,7 +251,8 @@ fn run_interactive(
                 settings,
             };
             let mut source = RustylineSource::new(history, colorize, prompt)?;
-            repl::run_loop(&mut source, &mut runner, out, err, &repl_config)?;
+            let mut queries = load_queries();
+            repl::run_loop(&mut source, &mut runner, &mut queries, out, err, &repl_config)?;
         }
         Frontend::Piped => {
             unreachable!("the piped path is handled by the non-terminal branch")
@@ -374,6 +377,26 @@ fn load_config() -> config::Config {
         Err(message) => {
             eprintln!("warning: {message}; continuing on defaults");
             config::Config::default()
+        }
+    }
+}
+
+/// Load the tool-managed saved-queries file (issue 13): resolve its path from
+/// `MGCONSOLE_QUERIES_PATH`/home, then read it. A missing file is the normal case
+/// (an empty store); a malformed file is reported and treated as empty so the
+/// console still starts. With no writable location the store works in-memory and
+/// `:save` later reports it cannot persist.
+fn load_queries() -> queries::NamedQueries {
+    let env = std::env::var(queries::QUERIES_ENV).ok();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let Some(path) = queries::resolve_queries_path(env.as_deref(), home.as_deref()) else {
+        return queries::NamedQueries::in_memory();
+    };
+    match queries::NamedQueries::load(path) {
+        Ok(store) => store,
+        Err(message) => {
+            eprintln!("warning: {message}; continuing with no saved queries");
+            queries::NamedQueries::in_memory()
         }
     }
 }
@@ -534,13 +557,19 @@ impl RustylineSource {
 }
 
 impl LineSource for RustylineSource {
-    fn read(&mut self, continued: bool) -> io::Result<Line> {
+    fn read(&mut self, continued: bool, initial: Option<&str>) -> io::Result<Line> {
         let primary = self
             .prompt
             .lock()
             .map_or_else(|_| "memgraph> ".to_string(), |info| repl_prompt(&info));
         let prompt = if continued { "      -> " } else { &primary };
-        match self.editor.readline(prompt) {
+        // `:load` recall (issue 13) pre-fills the line with the saved template for
+        // review and edit; an ordinary read starts from an empty line.
+        let read = match initial {
+            Some(text) => self.editor.readline_with_initial(prompt, (text, "")),
+            None => self.editor.readline(prompt),
+        };
+        match read {
             Ok(line) => {
                 if let Some(history) = &self.history {
                     history.record(self.editor.history_mut(), &line);

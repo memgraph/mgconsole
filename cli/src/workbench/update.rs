@@ -1027,6 +1027,52 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             state.pending = statements.collect();
             start_query(state, first)
         }
+        // Named queries (issue 13): the same verbs as the REPL, over the same
+        // store. `:save`/`:forget` mutate the in-memory store in this pure reducer
+        // and request a persist effect; `:load` recalls into the editor (never
+        // auto-runs); `:saved` summarises into the status bar.
+        MetaCommand::Save { name, query } => {
+            state.editor.clear();
+            match query.or_else(|| state.last_query.clone()) {
+                Some(text) => {
+                    state.queries.set(name.clone(), text);
+                    state.status.message = format!("saved '{name}'");
+                    return vec![Effect::PersistQueries];
+                }
+                None => {
+                    state.status.message =
+                        format!("error: no query to save; give one: ':save {name} <query>'");
+                }
+            }
+            Vec::new()
+        }
+        MetaCommand::Saved => {
+            state.status.message = state.queries.summary();
+            state.editor.clear();
+            Vec::new()
+        }
+        // `:load` recalls the template into the editor for review/edit — it never
+        // auto-runs (issue 13). The editor keeps it so the user can submit it.
+        MetaCommand::Load(name) => {
+            match state.queries.get(&name) {
+                Some(text) => {
+                    let text = text.to_string();
+                    state.editor.set_text(&text);
+                    state.status.message = format!("loaded '{name}' — edit and submit to run");
+                }
+                None => state.status.message = format!("error: no saved query named '{name}'"),
+            }
+            Vec::new()
+        }
+        MetaCommand::Forget(name) => {
+            state.editor.clear();
+            if state.queries.remove(&name) {
+                state.status.message = format!("forgot '{name}'");
+                return vec![Effect::PersistQueries];
+            }
+            state.status.message = format!("error: no saved query named '{name}'");
+            Vec::new()
+        }
         MetaCommand::Invalid(message) => {
             state.status.message = format!("error: {message}");
             Vec::new()
@@ -2371,5 +2417,87 @@ mod tests {
             },
         );
         assert_eq!(s.shown().expect("result").rows.len(), 0);
+    }
+
+    // --- Named queries (issue 13): the same verbs as the REPL, reducer seam ----
+
+    /// Submit a `:`-meta command by typing it and pressing Enter, returning the
+    /// effects. Clears the editor first (a prior submitted query keeps its text).
+    fn submit_meta(state: &mut WorkbenchState, command: &str) -> Vec<Effect> {
+        state.editor.clear();
+        type_str(state, command);
+        update(state, Event::Key(Key::plain(KeyCode::Enter)))
+    }
+
+    #[test]
+    fn save_with_a_query_stores_a_template_and_requests_a_persist() {
+        let mut s = wb();
+        let effects = submit_meta(&mut s, ":save recent MATCH (n) RETURN $limit");
+        // The $param placeholder is kept verbatim — a template, not a frozen value.
+        assert_eq!(s.queries.get("recent"), Some("MATCH (n) RETURN $limit"));
+        assert_eq!(effects, vec![Effect::PersistQueries]);
+        assert!(s.status.message.contains("saved 'recent'"));
+        assert_eq!(s.editor.buffer(), "", "a command is consumed");
+    }
+
+    #[test]
+    fn save_with_no_query_saves_the_last_query() {
+        let mut s = wb();
+        submit_query(&mut s, "RETURN 1;");
+        let effects = submit_meta(&mut s, ":save one");
+        assert_eq!(s.queries.get("one"), Some("RETURN 1"));
+        assert_eq!(effects, vec![Effect::PersistQueries]);
+    }
+
+    #[test]
+    fn save_with_no_query_and_no_last_query_is_reported() {
+        let mut s = wb();
+        let effects = submit_meta(&mut s, ":save one");
+        assert!(effects.is_empty(), "nothing persisted");
+        assert!(s.status.message.contains("no query to save"));
+        assert!(s.queries.is_empty());
+    }
+
+    #[test]
+    fn saved_summarises_the_store_into_the_status_bar() {
+        let mut s = wb();
+        s.queries.set("a".to_string(), "RETURN 1".to_string());
+        s.queries.set("b".to_string(), "RETURN 2".to_string());
+        submit_meta(&mut s, ":saved");
+        assert_eq!(s.status.message, "saved: a, b");
+    }
+
+    #[test]
+    fn load_recalls_the_template_into_the_editor_and_does_not_run_it() {
+        let mut s = wb();
+        s.queries
+            .set("recent".to_string(), "MATCH (n) RETURN $limit".to_string());
+        let effects = submit_meta(&mut s, ":load recent");
+        // Recall to input: the editor now holds the template, ready to edit/submit.
+        assert_eq!(s.editor.buffer(), "MATCH (n) RETURN $limit");
+        assert!(effects.is_empty(), "load never runs the query");
+        assert!(matches!(s.run, RunState::Idle));
+    }
+
+    #[test]
+    fn load_of_an_unknown_name_is_reported() {
+        let mut s = wb();
+        let effects = submit_meta(&mut s, ":load nope");
+        assert!(effects.is_empty());
+        assert!(s.status.message.contains("no saved query named 'nope'"));
+    }
+
+    #[test]
+    fn forget_removes_a_saved_query_and_an_unknown_name_is_reported() {
+        let mut s = wb();
+        s.queries.set("a".to_string(), "RETURN 1".to_string());
+        let effects = submit_meta(&mut s, ":forget a");
+        assert!(s.queries.get("a").is_none());
+        assert_eq!(effects, vec![Effect::PersistQueries]);
+        assert!(s.status.message.contains("forgot 'a'"));
+
+        let effects = submit_meta(&mut s, ":forget gone");
+        assert!(effects.is_empty(), "nothing to persist for an absent name");
+        assert!(s.status.message.contains("no saved query named 'gone'"));
     }
 }
