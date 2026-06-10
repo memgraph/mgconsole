@@ -1,6 +1,6 @@
 # 24 — cypherl writer (streaming)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -15,11 +15,11 @@ This is the format that closes the export/import loop (used by slice 26's
 
 ## Acceptance criteria
 
-- [ ] Records are written as replayable cypherl statements, streamed
-- [ ] Output streams row-by-row with bounded memory
-- [ ] Emitted cypherl re-imports cleanly (round-trips) via the serial import path
-- [ ] Value literals are escaped so the emitted Cypher is valid
-- [ ] Golden fixtures cover representative results
+- [x] Records are written as replayable cypherl statements, streamed
+- [x] Output streams row-by-row with bounded memory
+- [x] Emitted cypherl re-imports cleanly (round-trips) via the serial import path
+- [x] Value literals are escaped so the emitted Cypher is valid
+- [x] Golden fixtures cover representative results
 
 ## Blocked by
 

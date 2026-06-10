@@ -18,4 +18,14 @@ pub enum Error {
     /// The Bolt exchange was not understood (handshake/HELLO refused, etc.).
     #[error("protocol error: {0}")]
     Protocol(String),
+
+    /// Writing rendered output failed (I/O on the output sink).
+    #[error("output error: {0}")]
+    Output(String),
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Error::Output(e.to_string())
+    }
 }

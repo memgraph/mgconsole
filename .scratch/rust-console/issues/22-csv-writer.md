@@ -1,6 +1,6 @@
 # 22 — CSV writer (streaming)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -16,11 +16,11 @@ golden-file tests; uses the `csv` crate.
 
 ## Acceptance criteria
 
-- [ ] Header and rows are written in CSV, streamed row-by-row
-- [ ] Configurable delimiter is honoured
-- [ ] doublequote on/off behaves correctly; escape character is used when doublequote is off
-- [ ] Values containing delimiters, quotes, and newlines are quoted/escaped correctly
-- [ ] Golden fixtures cover the option combinations; memory stays bounded
+- [x] Header and rows are written in CSV, streamed row-by-row
+- [x] Configurable delimiter is honoured
+- [x] doublequote on/off behaves correctly; escape character is used when doublequote is off
+- [x] Values containing delimiters, quotes, and newlines are quoted/escaped correctly
+- [x] Golden fixtures cover the option combinations; memory stays bounded
 
 ## Blocked by
 

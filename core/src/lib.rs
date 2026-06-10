@@ -8,6 +8,7 @@
 
 pub mod clause;
 pub mod error;
+pub mod format;
 pub mod parse;
 mod proto;
 pub mod render;

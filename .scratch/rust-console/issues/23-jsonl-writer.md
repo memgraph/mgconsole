@@ -1,6 +1,6 @@
 # 23 — JSONL writer (streaming)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -17,11 +17,11 @@ with golden-file tests.
 
 ## Acceptance criteria
 
-- [ ] Each Record is emitted as one JSON object on its own line, keyed by column
-- [ ] Output streams row-by-row with bounded memory
-- [ ] A defined, documented JSON encoding exists for every Value type (graph, temporal, spatial, enum)
-- [ ] Output is valid JSONL consumable by a downstream parser
-- [ ] Golden fixtures cover each Value type
+- [x] Each Record is emitted as one JSON object on its own line, keyed by column
+- [x] Output streams row-by-row with bounded memory
+- [x] A defined, documented JSON encoding exists for every Value type (graph, temporal, spatial, enum)
+- [x] Output is valid JSONL consumable by a downstream parser
+- [x] Golden fixtures cover each Value type
 
 ## Blocked by
 
