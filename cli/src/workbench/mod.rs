@@ -77,9 +77,9 @@ pub async fn run(
         let _ = tx.send(Event::HistoryLoaded(history_entries(&history_store)));
     }
     let mut input = EventStream::new();
-    // Drives the running-query spinner; idle ticks are cheap (the buffer diff is
-    // unchanged, so nothing is flushed to the terminal).
-    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(120));
+    // Drives the running-query spinner and the `:watch` timer; idle ticks are
+    // cheap (the buffer diff is unchanged, so nothing is flushed to the terminal).
+    let mut ticker = tokio::time::interval(std::time::Duration::from_millis(update::TICK_MS));
     // The single in-flight query task (one-live-result, ADR 0005).
     let mut running: Option<tokio::task::JoinHandle<()>> = None;
 

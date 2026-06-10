@@ -734,6 +734,53 @@ impl QueryRunner for SessionRunner<'_> {
         }
         Ok(())
     }
+
+    fn watch(
+        &mut self,
+        query: &str,
+        params: &BTreeMap<String, Value>,
+        interval: std::time::Duration,
+        display: DisplayMode,
+        out: &mut dyn io::Write,
+    ) -> io::Result<()> {
+        // A one-shot stdin reader lets the user stop the watch by pressing Enter
+        // (no crossterm/raw-mode, so this works in the lean REPL-only build too).
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = io::stdin().read_line(&mut line);
+            let _ = tx.send(());
+        });
+        loop {
+            // Clear the screen and home the cursor, then render the snapshot.
+            write!(out, "\x1b[2J\x1b[H")?;
+            match self.run(query, params, display) {
+                Ok(result) => {
+                    if !result.table.is_empty() {
+                        writeln!(out, "{}", result.table)?;
+                    }
+                    writeln!(
+                        out,
+                        "{}",
+                        repl::format_summary(result.row_count, result.elapsed)
+                    )?;
+                }
+                Err(e) => writeln!(out, "error: {e}")?,
+            }
+            writeln!(
+                out,
+                "(watching every {:.1}s — press Enter to stop)",
+                interval.as_secs_f64()
+            )?;
+            out.flush()?;
+            match rx.recv_timeout(interval) {
+                // Enter pressed (or the reader ended): stop watching.
+                Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

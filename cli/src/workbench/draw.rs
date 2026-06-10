@@ -499,6 +499,12 @@ fn status_text(state: &WorkbenchState) -> String {
         }
         prefix.push_str(tx_marker);
     }
+    if state.watch.is_some() {
+        if !prefix.is_empty() {
+            prefix.push(' ');
+        }
+        prefix.push_str("[watch]");
+    }
     [prefix, message, hints]
         .into_iter()
         .filter(|part| !part.is_empty())

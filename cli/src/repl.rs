@@ -73,6 +73,9 @@ pub enum MetaCommand {
     Sysinfo,
     /// `:source <file>` — run a file through the normal query path (issue 10).
     Source(String),
+    /// `:watch [interval] [query]` — re-run a query on a timer (issue 11). The
+    /// raw argument is parsed at dispatch time, where the last query is known.
+    Watch(String),
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -123,6 +126,7 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
                 MetaCommand::Source(args.to_string())
             }
         }
+        "watch" => MetaCommand::Watch(args.to_string()),
         _ => MetaCommand::Unknown(trimmed.to_string()),
     })
 }
@@ -255,7 +259,8 @@ pub fn help_text() -> &'static str {
      \t:connect <target>      Swap to another server (a profile or host[:port])\n\
      \t:use <db>              Switch the active database (multi-tenancy)\n\
      \t:sysinfo               Show server version and storage/runtime info\n\
-     \t:source <file>         Run a file's queries and commands in this session"
+     \t:source <file>         Run a file's queries and commands in this session\n\
+     \t:watch [interval] [q]  Re-run a query on a timer (default 2s; Enter stops)"
 }
 
 /// Documentation pointers, printed by `:docs`. Carried over from `mgconsole`.
@@ -362,6 +367,18 @@ pub trait QueryRunner {
     /// success the prompt reflects the new Database; on failure the current one is
     /// left active.
     fn use_database(&mut self, database: &str) -> Result<(), Error>;
+
+    /// Re-run `query` on a timer (`:watch`, issue 11), clearing and redrawing each
+    /// tick as a snapshot, until the user stops it (press Enter). Owns its own IO
+    /// loop so it is only meaningful for the interactive runner.
+    fn watch(
+        &mut self,
+        query: &str,
+        params: &BTreeMap<String, Value>,
+        interval: Duration,
+        display: DisplayMode,
+        out: &mut dyn Write,
+    ) -> io::Result<()>;
 }
 
 /// Frontend-local REPL configuration.
@@ -380,6 +397,60 @@ pub struct ReplConfig {
 ///
 /// Generic over its IO seams so it runs identically under rustyline-with-a-
 /// Session and under a test's scripted input with a fake runner.
+/// The default `:watch` interval, matching `watch(1)` (issue 11).
+pub const DEFAULT_WATCH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// A parsed `:watch` request: how often to re-run, and what to run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchSpec {
+    pub interval: Duration,
+    pub query: String,
+}
+
+/// Parse `:watch [interval] [query]` (issue 11). A leading token that reads as an
+/// interval (`2`, `2s`, `500ms`, `1.5s`) sets the interval; the rest is the query.
+/// With no query the last query is reused; with neither a query nor a prior one it
+/// is an error.
+pub fn parse_watch(args: &str, last_query: Option<&str>) -> Result<WatchSpec, String> {
+    let args = args.trim();
+    let (interval, rest) = match args.split_once(char::is_whitespace) {
+        // `<interval> <query>`
+        Some((first, rest)) if parse_interval(first).is_some() => {
+            (parse_interval(first).unwrap(), rest.trim())
+        }
+        // a lone token that is an interval (`:watch 5`)
+        None if !args.is_empty() && parse_interval(args).is_some() => {
+            (parse_interval(args).unwrap(), "")
+        }
+        // no leading interval: the whole argument is the query (or it is empty)
+        _ => (DEFAULT_WATCH_INTERVAL, args),
+    };
+    let query = if rest.is_empty() {
+        last_query
+            .filter(|q| !q.trim().is_empty())
+            .ok_or_else(|| "no previous query to watch; give one: ':watch <query>'".to_string())?
+            .to_string()
+    } else {
+        rest.to_string()
+    };
+    Ok(WatchSpec { interval, query })
+}
+
+/// Parse a `:watch` interval token: a plain number or `Ns` is seconds (fractions
+/// allowed), `Nms` is milliseconds. Returns `None` for anything else (so it reads
+/// as query text instead).
+fn parse_interval(token: &str) -> Option<Duration> {
+    let token = token.trim();
+    if let Some(ms) = token.strip_suffix("ms") {
+        return ms.parse::<u64>().ok().map(Duration::from_millis);
+    }
+    let secs = token.strip_suffix('s').unwrap_or(token);
+    secs.parse::<f64>()
+        .ok()
+        .filter(|s| s.is_finite() && *s >= 0.0)
+        .map(Duration::from_secs_f64)
+}
+
 /// The server-status queries `:sysinfo` runs and renders (issue 09): the version
 /// and the storage/runtime info Memgraph exposes. Each renders like any other
 /// result, and one that a server does not support degrades to a reported error
@@ -431,11 +502,13 @@ enum MetaFlow {
 /// [`run_loop`] so the loop body stays small as the vocabulary grows (issues
 /// 04–13). `Unknown`/`Invalid` are reported here too — every `:`-line is a
 /// command, handled, never run as a query.
+#[allow(clippy::too_many_arguments)]
 fn dispatch_meta(
     cmd: MetaCommand,
     runner: &mut dyn QueryRunner,
     settings: &mut Settings,
     params: &mut BTreeMap<String, Value>,
+    last_query: Option<&str>,
     row_cap: usize,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -524,6 +597,20 @@ fn dispatch_meta(
             Ok(content) => source_content(&content, runner, settings, params, row_cap, out, err)?,
             Err(e) => writeln!(err, "error: cannot read source file '{path}': {e}")?,
         },
+        // `:watch` re-runs a query on a timer (issue 11); refused while a
+        // transaction is open (a repeating timer holding a tx is a footgun).
+        MetaCommand::Watch(args) => {
+            if runner.transaction_state() == TransactionState::Auto {
+                match parse_watch(&args, last_query) {
+                    Ok(spec) => {
+                        runner.watch(&spec.query, params, spec.interval, settings.display, out)?;
+                    }
+                    Err(message) => writeln!(err, "error: {message}")?,
+                }
+            } else {
+                writeln!(err, "error: :watch is refused while a transaction is open")?;
+            }
+        }
         MetaCommand::Invalid(message) => writeln!(err, "error: {message}")?,
         MetaCommand::Unknown(cmd) => writeln!(err, "error: unknown command '{cmd}'")?,
     }
@@ -551,7 +638,7 @@ fn source_content(
                 if matches!(cmd, MetaCommand::Quit) {
                     return Ok(());
                 }
-                dispatch_meta(cmd, runner, settings, params, row_cap, out, err)?;
+                dispatch_meta(cmd, runner, settings, params, None, row_cap, out, err)?;
                 continue;
             }
         }
@@ -587,6 +674,8 @@ pub fn run_loop(
     // The console Settings, seeded from the resolved config; runtime `:set`
     // mutates this copy. Kept rigorously distinct from `params` (CONTEXT.md).
     let mut settings = config.settings.clone();
+    // The most recently run query, so `:watch` with no query reuses it (issue 11).
+    let mut last_query: Option<String> = None;
     loop {
         let continued = assembler.has_pending();
         let text = match source.read(continued)? {
@@ -604,8 +693,16 @@ pub fn run_loop(
         // `:quit` short-circuit; only ordinary query text falls through to run.
         if !continued {
             if let Some(cmd) = meta_command(&text) {
-                match dispatch_meta(cmd, runner, &mut settings, &mut params, config.row_cap, out, err)?
-                {
+                match dispatch_meta(
+                    cmd,
+                    runner,
+                    &mut settings,
+                    &mut params,
+                    last_query.as_deref(),
+                    config.row_cap,
+                    out,
+                    err,
+                )? {
                     MetaFlow::Quit => break,
                     MetaFlow::Handled => continue,
                 }
@@ -616,6 +713,7 @@ pub fn run_loop(
         // lines when assembling across reads.
         for query in assembler.push(&format!("{text}\n")) {
             execute_query(runner, &query, &params, settings.display, config.row_cap, out, err)?;
+            last_query = Some(query);
         }
     }
     Ok(())
@@ -902,6 +1000,47 @@ mod tests {
     }
 
     #[test]
+    fn parse_watch_handles_interval_and_query_combinations() {
+        // No args: reuse the last query at the default interval.
+        let spec = parse_watch("", Some("RETURN 1")).expect("last query");
+        assert_eq!(spec.interval, DEFAULT_WATCH_INTERVAL);
+        assert_eq!(spec.query, "RETURN 1");
+        // Interval only: reuse the last query.
+        let spec = parse_watch("5s", Some("RETURN 1")).expect("interval only");
+        assert_eq!(spec.interval, Duration::from_secs(5));
+        assert_eq!(spec.query, "RETURN 1");
+        // Interval + query.
+        let spec = parse_watch("500ms MATCH (n) RETURN n", None).expect("interval + query");
+        assert_eq!(spec.interval, Duration::from_millis(500));
+        assert_eq!(spec.query, "MATCH (n) RETURN n");
+        // Query only (no leading interval): default interval.
+        let spec = parse_watch("MATCH (n) RETURN n", None).expect("query only");
+        assert_eq!(spec.interval, DEFAULT_WATCH_INTERVAL);
+        assert_eq!(spec.query, "MATCH (n) RETURN n");
+        // No query and no prior one: an error.
+        assert!(parse_watch("", None).is_err());
+        assert!(parse_watch("2s", None).is_err());
+    }
+
+    #[test]
+    fn watch_reuses_the_last_query_and_is_refused_in_a_transaction() {
+        // After running a query, `:watch` with no args reuses it.
+        let (_src, runner, _out, _err) = drive(
+            vec![Line::Text("RETURN 1;".into()), Line::Text(":watch 3s".into())],
+            vec![Ok(ok_result("t", 1))],
+        );
+        assert_eq!(runner.watched, vec![("RETURN 1".to_string(), Duration::from_secs(3))]);
+
+        // Inside an open transaction, `:watch` is refused.
+        let mut runner = ScriptedRunner::returning(vec![]);
+        runner.begin().unwrap();
+        let (_src, runner, _out, err) =
+            drive_with(vec![Line::Text(":watch RETURN 1".into())], runner);
+        assert!(runner.watched.is_empty(), "watch refused in a tx");
+        assert!(err.contains("refused while a transaction is open"), "message: {err}");
+    }
+
+    #[test]
     fn format_params_reads_clearly_when_empty() {
         assert_eq!(format_params(&BTreeMap::new()), "No parameters set.");
     }
@@ -976,6 +1115,7 @@ mod tests {
         tx: TransactionState,
         connected: Vec<String>,
         used: Vec<String>,
+        watched: Vec<(String, Duration)>,
     }
 
     impl ScriptedRunner {
@@ -991,6 +1131,7 @@ mod tests {
                 tx: TransactionState::Auto,
                 connected: Vec::new(),
                 used: Vec::new(),
+                watched: Vec::new(),
             }
         }
 
@@ -1060,6 +1201,20 @@ mod tests {
 
         fn use_database(&mut self, database: &str) -> Result<(), Error> {
             self.used.push(database.to_string());
+            Ok(())
+        }
+
+        fn watch(
+            &mut self,
+            query: &str,
+            _params: &BTreeMap<String, Value>,
+            interval: Duration,
+            _display: DisplayMode,
+            _out: &mut dyn Write,
+        ) -> io::Result<()> {
+            // Record the request rather than running a real timer loop, so the
+            // scripted loop never blocks on real time/stdin.
+            self.watched.push((query.to_string(), interval));
             Ok(())
         }
     }

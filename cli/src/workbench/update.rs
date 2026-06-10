@@ -20,7 +20,8 @@ use super::event::{Event, Key, KeyCode};
 use super::plan::{is_plan_query, Plan};
 use super::schema::{Schema, SchemaSource};
 use super::state::{
-    Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, WorkbenchState,
+    Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, WatchState,
+    WorkbenchState,
 };
 
 /// Apply one event to the state, returning the effects to perform.
@@ -124,13 +125,45 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Event::Tick => {
-            // Advance the running-query spinner; idle ticks change nothing.
-            if matches!(state.run, RunState::Running { .. }) {
-                state.spinner = state.spinner.wrapping_add(1);
+        Event::Tick => on_tick(state),
+    }
+}
+
+/// The render-loop tick period (ms). `:watch` counts ticks against it (issue 11).
+pub const TICK_MS: u64 = 120;
+
+/// How many ticks one `:watch` interval spans (at least one).
+fn period_ticks(interval: Duration) -> u32 {
+    let ticks = u64::try_from(interval.as_millis()).unwrap_or(u64::MAX) / TICK_MS;
+    u32::try_from(ticks.max(1)).unwrap_or(u32::MAX)
+}
+
+/// Advance the spinner and the `:watch` timer on each render-loop tick. When a
+/// watch interval elapses (and the Session is idle), re-run its query, replacing
+/// the previous snapshot rather than accumulating (issue 11).
+fn on_tick(state: &mut WorkbenchState) -> Vec<Effect> {
+    if matches!(state.run, RunState::Running { .. }) {
+        state.spinner = state.spinner.wrapping_add(1);
+    }
+    let fire = match state.watch.as_mut() {
+        Some(watch) if matches!(state.run, RunState::Idle) => {
+            if watch.remaining <= 1 {
+                watch.remaining = watch.period_ticks;
+                Some(watch.query.clone())
+            } else {
+                watch.remaining -= 1;
+                None
             }
-            Vec::new()
         }
+        _ => None,
+    };
+    if let Some(query) = fire {
+        // Replace the previous snapshot so a long watch does not accumulate.
+        state.history.pop();
+        state.view = state.history.len().saturating_sub(1);
+        start_query(state, query)
+    } else {
+        Vec::new()
     }
 }
 
@@ -238,6 +271,8 @@ fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
     state.spinner = 0;
     state.status.message = "running…".to_string();
     state.running_statement = Some(query.clone());
+    // Remember the last query so `:watch` with no query can reuse it (issue 11).
+    state.last_query = Some(query.clone());
     vec![Effect::RunQuery {
         id,
         query,
@@ -282,6 +317,16 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     // ordinary input.
     if state.completion.is_some() {
         return completion_key(state, key);
+    }
+    // While `:watch` is active, any key stops it (issue 11) and is consumed; a
+    // running watch re-run is cancelled so the Session is freed.
+    if state.watch.is_some() {
+        state.watch = None;
+        state.status.message = "watch stopped".to_string();
+        if matches!(state.run, RunState::Running { .. }) {
+            return interrupt(state);
+        }
+        return Vec::new();
     }
     // Quit gestures work from any pane (ADR 0010 AC: Esc / Ctrl-D leave).
     if key.code == KeyCode::Esc || (key.ctrl && key.code == KeyCode::Char('d')) {
@@ -872,6 +917,40 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             }
             state.editor.clear();
             vec![Effect::Source(PathBuf::from(path))]
+        }
+        // `:watch` re-runs a query on a timer (issue 11), refused while a
+        // transaction is open. The first run starts immediately; the tick timer
+        // drives the rest, each replacing the previous snapshot. Any key stops it.
+        MetaCommand::Watch(args) => {
+            if state.tx != mgconsole_core::TransactionState::Auto {
+                state.status.message =
+                    "error: :watch is refused while a transaction is open".to_string();
+                return Vec::new();
+            }
+            if matches!(state.run, RunState::Running { .. }) {
+                state.status.message = "session busy — cancel first".to_string();
+                return Vec::new();
+            }
+            state.editor.clear();
+            match crate::repl::parse_watch(&args, state.last_query.as_deref()) {
+                Ok(spec) => {
+                    let period = period_ticks(spec.interval);
+                    state.watch = Some(WatchState {
+                        query: spec.query.clone(),
+                        period_ticks: period,
+                        remaining: period,
+                    });
+                    state.status.message = format!(
+                        "watching every {:.1}s — press any key to stop",
+                        spec.interval.as_secs_f64()
+                    );
+                    start_query(state, spec.query)
+                }
+                Err(message) => {
+                    state.status.message = format!("error: {message}");
+                    Vec::new()
+                }
+            }
         }
         // `:sysinfo` runs the server-status queries as a normal batch (issue 09):
         // each result lands in the result pane, rendered like any other.
@@ -1960,6 +2039,68 @@ mod tests {
         update(&mut s, Event::SourceLoaded(Err("cannot read x: nope".to_string())));
         assert!(s.status.message.contains("error"), "status: {}", s.status.message);
         assert!(matches!(s.run, RunState::Idle));
+    }
+
+    // --- :watch (issue 11) --------------------------------------------------
+
+    #[test]
+    fn watch_starts_immediately_and_ticks_re_run_replacing_the_snapshot() {
+        let mut s = wb();
+        // Establish a last query.
+        let id = submit_query(&mut s, "RETURN 1;");
+        complete(&mut s, id, 1);
+        assert_eq!(s.history.len(), 1);
+
+        // `:watch 1s` starts a fresh run immediately.
+        s.editor.clear();
+        type_str(&mut s, ":watch 1s");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(matches!(effects.first(), Some(Effect::RunQuery { query, .. }) if query == "RETURN 1"));
+        assert!(s.watch.is_some());
+        let id = match s.run { RunState::Running { id } => id, RunState::Idle => panic!("running") };
+        complete(&mut s, id, 1);
+        let after_first = s.history.len();
+
+        // Ticks count down; when the interval elapses a re-run fires, replacing the
+        // previous snapshot (history does not grow).
+        let period = s.watch.as_ref().unwrap().period_ticks;
+        let mut fired = Vec::new();
+        for _ in 0..period {
+            fired = update(&mut s, Event::Tick);
+        }
+        assert!(matches!(fired.first(), Some(Effect::RunQuery { .. })), "a re-run fired");
+        let id = match s.run { RunState::Running { id } => id, RunState::Idle => panic!("running") };
+        complete(&mut s, id, 1);
+        assert_eq!(s.history.len(), after_first, "the snapshot was replaced, not appended");
+    }
+
+    #[test]
+    fn any_key_stops_watching() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "RETURN 1;");
+        complete(&mut s, id, 1);
+        s.editor.clear();
+        type_str(&mut s, ":watch 1s");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let id = match s.run { RunState::Running { id } => id, RunState::Idle => panic!("running") };
+        complete(&mut s, id, 1);
+        assert!(s.watch.is_some());
+        // Any key stops it.
+        update(&mut s, Event::Key(Key::char('x')));
+        assert!(s.watch.is_none(), "watch stopped");
+        assert!(s.status.message.contains("watch stopped"));
+    }
+
+    #[test]
+    fn watch_is_refused_in_a_transaction() {
+        let mut s = wb();
+        s.tx = mgconsole_core::TransactionState::Open;
+        s.last_query = Some("RETURN 1".to_string());
+        type_str(&mut s, ":watch");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(effects.is_empty());
+        assert!(s.watch.is_none());
+        assert!(s.status.message.contains("refused while a transaction is open"));
     }
 
     #[test]

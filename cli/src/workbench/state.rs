@@ -137,6 +137,12 @@ pub struct WorkbenchState {
     /// stops the batch (drops the queue) rather than continuing, mirroring the
     /// REPL's stop-on-first-error.
     pub source_halt: bool,
+    /// Active `:watch` (issue 11): re-runs its query every `period_ticks`, each
+    /// run replacing the previous snapshot. `None` when not watching; any key
+    /// stops it.
+    pub watch: Option<WatchState>,
+    /// The most recently submitted query, so `:watch` with no query reuses it.
+    pub last_query: Option<String>,
     /// Frontend-local configuration.
     pub config: WorkbenchConfig,
 }
@@ -175,6 +181,8 @@ impl WorkbenchState {
             endpoint: config.endpoint.clone(),
             database: None,
             source_halt: false,
+            watch: None,
+            last_query: None,
             config,
         }
     }
@@ -305,6 +313,15 @@ pub struct WorkbenchConfig {
     /// The config + current connect options, so `:connect` can resolve a profile
     /// or bare endpoint and re-establish (issue 07).
     pub connect: ConnectContext,
+}
+
+/// An active `:watch` (issue 11): which query to re-run and the tick countdown
+/// between runs (the render loop ticks at a fixed period).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchState {
+    pub query: String,
+    pub period_ticks: u32,
+    pub remaining: u32,
 }
 
 /// What the `:connect` edge needs to resolve a target and re-establish (issue 07).
