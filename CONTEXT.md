@@ -17,6 +17,9 @@ the definition here wins until deliberately changed.
 
 - **Session** — a single live conversation with one Memgraph server over which
   queries run and results return, in order.
+- **Endpoint** — the host and port identifying the one Memgraph server a Session
+  connects to: the _where_ of a connection, distinct from the _how_
+  (authentication and transport security).
 - **Value** — a single piece of data Memgraph returns: a node, relationship,
   path, list, map, scalar, temporal value, spatial point, or enum. The console's
   defining job is to render every Value faithfully.
