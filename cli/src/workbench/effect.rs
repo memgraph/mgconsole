@@ -43,6 +43,26 @@ impl ExportFormat {
     }
 }
 
+/// An explicit-transaction operation requested by `:begin`/`:commit`/`:rollback`
+/// (issue 05). The edge applies it to the shared Session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TxOp {
+    Begin,
+    Commit,
+    Rollback,
+}
+
+impl TxOp {
+    /// The confirmation shown when the operation succeeds.
+    pub fn success_message(self) -> &'static str {
+        match self {
+            TxOp::Begin => "transaction open",
+            TxOp::Commit => "transaction committed",
+            TxOp::Rollback => "transaction rolled back",
+        }
+    }
+}
+
 /// An IO action for the edge to perform.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
@@ -80,6 +100,8 @@ pub enum Effect {
     /// Turn read-only mode on the Session (issue 04): the next query carries Bolt
     /// access mode READ. Only ever `true` — the off direction is refused at runtime.
     SetReadOnly(bool),
+    /// Apply an explicit-transaction operation to the Session (issue 05).
+    Transaction(TxOp),
     /// Leave the workbench and restore the terminal.
     Quit,
 }

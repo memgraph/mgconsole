@@ -15,7 +15,7 @@ use mgconsole_core::{Error, QueryAssembler, Record, Summary};
 use crate::repl::{format_summary, meta_command, MetaCommand};
 use crate::syntax::Completer;
 
-use super::effect::Effect;
+use super::effect::{Effect, TxOp};
 use super::event::{Event, Key, KeyCode};
 use super::plan::{is_plan_query, Plan};
 use super::schema::{Schema, SchemaSource};
@@ -61,6 +61,13 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
         }
         Event::HistoryLoaded(entries) => {
             state.history_entries = entries;
+            Vec::new()
+        }
+        Event::TransactionApplied { state: tx, message } => {
+            state.tx = tx;
+            if let Some(message) = message {
+                state.status.message = message;
+            }
             Vec::new()
         }
         Event::ParamEvaluated { name, value } => {
@@ -759,6 +766,21 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             }
             state.editor.clear();
             Vec::new()
+        }
+        // Explicit transactions (issue 05): the reducer requests the effect; the
+        // edge applies it to the Session and reports the outcome via an event.
+        // Evaluation runs on the Session, so refuse while a query is in flight.
+        MetaCommand::Begin | MetaCommand::Commit | MetaCommand::Rollback => {
+            if matches!(state.run, RunState::Running { .. }) {
+                state.status.message = "session busy — cancel first".to_string();
+                return Vec::new();
+            }
+            state.editor.clear();
+            vec![Effect::Transaction(match meta {
+                MetaCommand::Begin => TxOp::Begin,
+                MetaCommand::Commit => TxOp::Commit,
+                _ => TxOp::Rollback,
+            })]
         }
         MetaCommand::Invalid(message) => {
             state.status.message = format!("error: {message}");
@@ -1709,6 +1731,67 @@ mod tests {
         type_str(&mut s, ":set");
         update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
         assert!(s.status.message.contains("readonly = off"), "status: {}", s.status.message);
+    }
+
+    // --- explicit transactions (issue 05) -----------------------------------
+
+    #[test]
+    fn begin_emits_a_transaction_effect_and_clears_the_editor() {
+        let mut s = wb();
+        type_str(&mut s, ":begin");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert_eq!(effects, vec![Effect::Transaction(TxOp::Begin)]);
+        assert_eq!(s.editor.buffer(), "", "command consumed");
+    }
+
+    #[test]
+    fn commit_and_rollback_emit_their_effects() {
+        let mut s = wb();
+        type_str(&mut s, ":commit");
+        assert_eq!(
+            update(&mut s, Event::Key(Key::plain(KeyCode::Enter))),
+            vec![Effect::Transaction(TxOp::Commit)]
+        );
+        type_str(&mut s, ":rollback");
+        assert_eq!(
+            update(&mut s, Event::Key(Key::plain(KeyCode::Enter))),
+            vec![Effect::Transaction(TxOp::Rollback)]
+        );
+    }
+
+    #[test]
+    fn a_transaction_command_is_refused_while_a_query_runs() {
+        let mut s = wb();
+        submit_query(&mut s, "MATCH (n) RETURN n;"); // now Running
+        type_str(&mut s, ":begin");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(effects.is_empty(), "no tx op while a query is in flight");
+        assert!(s.status.message.contains("busy"), "status: {}", s.status.message);
+    }
+
+    #[test]
+    fn the_transaction_applied_event_updates_the_marker_and_message() {
+        use mgconsole_core::TransactionState;
+        let mut s = wb();
+        update(
+            &mut s,
+            Event::TransactionApplied {
+                state: TransactionState::Open,
+                message: Some("transaction open".to_string()),
+            },
+        );
+        assert_eq!(s.tx, TransactionState::Open);
+        assert_eq!(s.status.message, "transaction open");
+        // A silent marker sync (message None) leaves the status untouched.
+        update(
+            &mut s,
+            Event::TransactionApplied {
+                state: TransactionState::Failed,
+                message: None,
+            },
+        );
+        assert_eq!(s.tx, TransactionState::Failed);
+        assert_eq!(s.status.message, "transaction open", "status untouched by a silent sync");
     }
 
     // --- persisted history recall (slice 17) --------------------------------

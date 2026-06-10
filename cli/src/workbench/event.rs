@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use mgconsole_core::{Error, Record, Summary, Value};
+use mgconsole_core::{Error, Record, Summary, TransactionState, Value};
 
 use super::schema::Schema;
 
@@ -126,4 +126,12 @@ pub enum Event {
     /// Prior command history loaded on start (oldest→newest), for recall
     /// (slice 17).
     HistoryLoaded(Vec<String>),
+    /// An explicit-transaction operation finished, or a query changed the
+    /// transaction state (issue 05): the Session's new transaction state, with an
+    /// optional message to show (`Some` for a `:begin`/`:commit`/`:rollback`
+    /// confirmation or error; `None` for a silent marker sync after a query).
+    TransactionApplied {
+        state: TransactionState,
+        message: Option<String>,
+    },
 }

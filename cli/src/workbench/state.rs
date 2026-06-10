@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use mgconsole_core::{Record, Summary, Value};
+use mgconsole_core::{Record, Summary, TransactionState, Value};
 use tui_textarea::{Input, Key as TaKey, TextArea};
 
 use crate::settings::Settings;
@@ -119,6 +119,9 @@ pub struct WorkbenchState {
     /// by `:set readonly on`. Drives the `[read-only]` status-bar marker; the
     /// off-at-runtime refusal is enforced by the reducer.
     pub read_only: bool,
+    /// The explicit-transaction state (issue 05), mirrored from the Session by the
+    /// `TransactionApplied` event. Drives the `[tx]`/`[tx failed]` status marker.
+    pub tx: TransactionState,
     /// Frontend-local configuration.
     pub config: WorkbenchConfig,
 }
@@ -152,6 +155,7 @@ impl WorkbenchState {
             color,
             settings: config.settings.clone(),
             read_only: config.read_only,
+            tx: TransactionState::Auto,
             config,
         }
     }

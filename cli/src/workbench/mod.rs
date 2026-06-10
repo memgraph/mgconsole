@@ -52,6 +52,10 @@ use terminal::TerminalGuard;
 /// terminal on quit and on panic. The Session is shared with the in-flight query
 /// task behind an async mutex so the task can hold it for a query's duration and
 /// release it on completion (or, in slice 07, on cancel).
+// The render loop is one cohesive select-multiplex over input/lifecycle/tick
+// events plus the effect interpreter; splitting it would scatter the shared
+// loop state (session, running task, history) across helpers for no clarity win.
+#[allow(clippy::too_many_lines)]
 pub async fn run(
     session: Session,
     config: WorkbenchConfig,
@@ -147,6 +151,26 @@ pub async fn run(
                     // `true`; the off direction is refused at runtime.
                     session.lock().await.set_read_only(on);
                 }
+                Effect::Transaction(op) => {
+                    // Apply the explicit-transaction operation on the shared Session
+                    // (issue 05) and report the resulting state + message.
+                    let mut guard = session.lock().await;
+                    let outcome = match op {
+                        effect::TxOp::Begin => guard.begin().await,
+                        effect::TxOp::Commit => guard.commit().await,
+                        effect::TxOp::Rollback => guard.rollback().await,
+                    };
+                    let message = match outcome {
+                        Ok(()) => op.success_message().to_string(),
+                        Err(e) => format!("error: {e}"),
+                    };
+                    let state = guard.transaction_state();
+                    drop(guard);
+                    let _ = tx.send(Event::TransactionApplied {
+                        state,
+                        message: Some(message),
+                    });
+                }
                 Effect::Export {
                     format,
                     path,
@@ -187,6 +211,12 @@ async fn run_query(
         Ok(result) => result,
         Err(error) => {
             let _ = tx.send(Event::QueryFailed { id, error });
+            // A query error inside an open transaction poisons it (issue 05); sync
+            // the marker without a message (the error is already surfaced).
+            let _ = tx.send(Event::TransactionApplied {
+                state: session.transaction_state(),
+                message: None,
+            });
             return;
         }
     };

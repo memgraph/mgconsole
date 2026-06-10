@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::time::Duration;
 
-use mgconsole_core::{render, tabular, DisplayMode, Error, QueryAssembler, Value};
+use mgconsole_core::{render, tabular, DisplayMode, Error, QueryAssembler, TransactionState, Value};
 
 use crate::settings::Settings;
 
@@ -58,6 +58,12 @@ pub enum MetaCommand {
     /// `:set <name> <value>` — change one Setting (console behaviour, never query
     /// data — kept distinct from `:param`).
     SetSetting { name: String, value: String },
+    /// `:begin` — open an explicit transaction (ADR 0011).
+    Begin,
+    /// `:commit` — commit the open transaction.
+    Commit,
+    /// `:rollback` — roll back the open transaction.
+    Rollback,
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -80,6 +86,9 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
         "param" => parse_set_param(args),
         "params" => parse_params(args),
         "set" => parse_set_setting(args),
+        "begin" => MetaCommand::Begin,
+        "commit" => MetaCommand::Commit,
+        "rollback" => MetaCommand::Rollback,
         _ => MetaCommand::Unknown(trimmed.to_string()),
     })
 }
@@ -205,7 +214,10 @@ pub fn help_text() -> &'static str {
      \t:params clear          Remove all query parameters\n\
      \t:set                   List all console settings and their values\n\
      \t:set <name> <value>    Change a console setting (e.g. ':set display vertical')\n\
-     \t:set readonly on       Guard the session read-only (off only at connect time)"
+     \t:set readonly on       Guard the session read-only (off only at connect time)\n\
+     \t:begin                 Open an explicit transaction\n\
+     \t:commit                Commit the open transaction\n\
+     \t:rollback              Roll back the open transaction"
 }
 
 /// Documentation pointers, printed by `:docs`. Carried over from `mgconsole`.
@@ -290,6 +302,18 @@ pub trait QueryRunner {
     /// Whether the Session is currently read-only, for the `:set` listing and the
     /// prompt marker.
     fn is_read_only(&self) -> bool;
+
+    /// Open an explicit transaction (`:begin`, ADR 0011).
+    fn begin(&mut self) -> Result<(), Error>;
+
+    /// Commit the open transaction (`:commit`).
+    fn commit(&mut self) -> Result<(), Error>;
+
+    /// Roll back the open transaction (`:rollback`).
+    fn rollback(&mut self) -> Result<(), Error>;
+
+    /// The current explicit-transaction state, for the prompt marker.
+    fn transaction_state(&self) -> TransactionState;
 }
 
 /// Frontend-local REPL configuration.
@@ -308,6 +332,86 @@ pub struct ReplConfig {
 ///
 /// Generic over its IO seams so it runs identically under rustyline-with-a-
 /// Session and under a test's scripted input with a fake runner.
+/// Whether a handled meta-command should end the loop or carry on.
+enum MetaFlow {
+    /// `:quit` — leave the REPL.
+    Quit,
+    /// The command was handled (output already written); re-prompt.
+    Handled,
+}
+
+/// Handle one recognised meta-command, writing its output/errors. Split from
+/// [`run_loop`] so the loop body stays small as the vocabulary grows (issues
+/// 04–13). `Unknown`/`Invalid` are reported here too — every `:`-line is a
+/// command, handled, never run as a query.
+fn dispatch_meta(
+    cmd: MetaCommand,
+    runner: &mut dyn QueryRunner,
+    settings: &mut Settings,
+    params: &mut BTreeMap<String, Value>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> io::Result<MetaFlow> {
+    match cmd {
+        MetaCommand::Quit => return Ok(MetaFlow::Quit),
+        MetaCommand::Help => writeln!(out, "{}", help_text())?,
+        MetaCommand::Docs => writeln!(out, "{}", docs_text())?,
+        // Evaluate the expression server-side with the existing params in scope,
+        // then store the result. A bad expression is reported (the Session
+        // survives it; slice 14) without ending the loop.
+        MetaCommand::SetParam { name, expr } => match runner.evaluate(&expr, params) {
+            Ok(value) => {
+                params.insert(name, value);
+            }
+            Err(e) => writeln!(err, "error: {e}")?,
+        },
+        MetaCommand::ListParams => writeln!(out, "{}", format_params(params))?,
+        MetaCommand::ClearParams => params.clear(),
+        MetaCommand::ListSettings => {
+            writeln!(out, "{}", settings.list())?;
+            // `readonly` is a Session guard, not a render setting, but it lists
+            // alongside for completeness (issue 04).
+            writeln!(out, "readonly = {}", on_off(runner.is_read_only()))?;
+        }
+        // `readonly` is special: it lives on the Session and can only be turned
+        // off at connect time / via a profile (issue 04). Every other setting
+        // goes through the Settings store, kept distinct from `:param`.
+        MetaCommand::SetSetting { name, value } if name == "readonly" => match parse_on_off(&value) {
+            Ok(true) => {
+                runner.set_read_only(true);
+                writeln!(out, "readonly = on")?;
+            }
+            Ok(false) => writeln!(
+                err,
+                "error: read-only can only be turned off at connect time \
+                 (--read-only / a profile), not at runtime"
+            )?,
+            Err(message) => writeln!(err, "error: {message}")?,
+        },
+        MetaCommand::SetSetting { name, value } => match settings.set(&name, &value) {
+            Ok(()) => writeln!(out, "{name} = {}", settings.get(&name).unwrap_or(value))?,
+            Err(message) => writeln!(err, "error: {message}")?,
+        },
+        // Explicit transactions (ADR 0011): honoured identically here and in the
+        // Workbench, surfacing errors without ending the session.
+        MetaCommand::Begin => match runner.begin() {
+            Ok(()) => writeln!(out, "transaction open")?,
+            Err(e) => writeln!(err, "error: {e}")?,
+        },
+        MetaCommand::Commit => match runner.commit() {
+            Ok(()) => writeln!(out, "transaction committed")?,
+            Err(e) => writeln!(err, "error: {e}")?,
+        },
+        MetaCommand::Rollback => match runner.rollback() {
+            Ok(()) => writeln!(out, "transaction rolled back")?,
+            Err(e) => writeln!(err, "error: {e}")?,
+        },
+        MetaCommand::Invalid(message) => writeln!(err, "error: {message}")?,
+        MetaCommand::Unknown(cmd) => writeln!(err, "error: unknown command '{cmd}'")?,
+    }
+    Ok(MetaFlow::Handled)
+}
+
 pub fn run_loop(
     source: &mut dyn LineSource,
     runner: &mut dyn QueryRunner,
@@ -334,80 +438,14 @@ pub fn run_loop(
         };
 
         // A meta-command is only meaningful at the start of a statement; mid-
-        // assembly the same text is ordinary query content.
+        // assembly the same text is ordinary query content. Handled commands and
+        // `:quit` short-circuit; only ordinary query text falls through to run.
         if !continued {
-            match meta_command(&text) {
-                Some(MetaCommand::Quit) => break,
-                Some(MetaCommand::Help) => {
-                    writeln!(out, "{}", help_text())?;
-                    continue;
+            if let Some(cmd) = meta_command(&text) {
+                match dispatch_meta(cmd, runner, &mut settings, &mut params, out, err)? {
+                    MetaFlow::Quit => break,
+                    MetaFlow::Handled => continue,
                 }
-                Some(MetaCommand::Docs) => {
-                    writeln!(out, "{}", docs_text())?;
-                    continue;
-                }
-                // Evaluate the expression server-side with the existing params in
-                // scope, then store the result. A bad expression is reported (the
-                // Session survives it; slice 14) and the loop continues.
-                Some(MetaCommand::SetParam { name, expr }) => {
-                    match runner.evaluate(&expr, &params) {
-                        Ok(value) => {
-                            params.insert(name, value);
-                        }
-                        Err(e) => writeln!(err, "error: {e}")?,
-                    }
-                    continue;
-                }
-                Some(MetaCommand::ListParams) => {
-                    writeln!(out, "{}", format_params(&params))?;
-                    continue;
-                }
-                Some(MetaCommand::ClearParams) => {
-                    params.clear();
-                    continue;
-                }
-                Some(MetaCommand::ListSettings) => {
-                    writeln!(out, "{}", settings.list())?;
-                    // `readonly` is a Session guard, not a render setting, but it
-                    // lists alongside for completeness (issue 04).
-                    writeln!(out, "readonly = {}", on_off(runner.is_read_only()))?;
-                    continue;
-                }
-                // `readonly` is special: it lives on the Session and can only be
-                // turned off at connect time / via a profile (issue 04). Every
-                // other setting goes through the Settings store, kept distinct
-                // from `:param`. A bad name/value is reported; the session survives.
-                Some(MetaCommand::SetSetting { name, value }) if name == "readonly" => {
-                    match parse_on_off(&value) {
-                        Ok(true) => {
-                            runner.set_read_only(true);
-                            writeln!(out, "readonly = on")?;
-                        }
-                        Ok(false) => writeln!(
-                            err,
-                            "error: read-only can only be turned off at connect time \
-                             (--read-only / a profile), not at runtime"
-                        )?,
-                        Err(message) => writeln!(err, "error: {message}")?,
-                    }
-                    continue;
-                }
-                Some(MetaCommand::SetSetting { name, value }) => {
-                    match settings.set(&name, &value) {
-                        Ok(()) => writeln!(out, "{name} = {}", settings.get(&name).unwrap_or(value))?,
-                        Err(message) => writeln!(err, "error: {message}")?,
-                    }
-                    continue;
-                }
-                Some(MetaCommand::Invalid(message)) => {
-                    writeln!(err, "error: {message}")?;
-                    continue;
-                }
-                Some(MetaCommand::Unknown(cmd)) => {
-                    writeln!(err, "error: unknown command '{cmd}'")?;
-                    continue;
-                }
-                None => {}
             }
         }
 
@@ -586,6 +624,31 @@ mod tests {
     }
 
     #[test]
+    fn transaction_commands_parse() {
+        assert_eq!(meta_command(":begin"), Some(MetaCommand::Begin));
+        assert_eq!(meta_command(":commit"), Some(MetaCommand::Commit));
+        assert_eq!(meta_command("  :rollback "), Some(MetaCommand::Rollback));
+    }
+
+    #[test]
+    fn begin_commit_rollback_drive_the_runner() {
+        let (_src, runner, out, _err) = drive(
+            vec![
+                Line::Text(":begin".into()),
+                Line::Text(":commit".into()),
+                Line::Text(":begin".into()),
+                Line::Text(":rollback".into()),
+            ],
+            vec![],
+        );
+        // Ends back in autocommit, with confirmations printed.
+        assert_eq!(runner.transaction_state(), TransactionState::Auto);
+        assert!(out.contains("transaction open"), "begin confirmed: {out}");
+        assert!(out.contains("transaction committed"), "commit confirmed: {out}");
+        assert!(out.contains("transaction rolled back"), "rollback confirmed: {out}");
+    }
+
+    #[test]
     fn format_params_reads_clearly_when_empty() {
         assert_eq!(format_params(&BTreeMap::new()), "No parameters set.");
     }
@@ -657,6 +720,7 @@ mod tests {
         eval_seen: Vec<(String, BTreeMap<String, Value>)>,
         eval_results: VecDeque<Result<Value, Error>>,
         read_only: bool,
+        tx: TransactionState,
     }
 
     impl ScriptedRunner {
@@ -669,6 +733,7 @@ mod tests {
                 eval_seen: Vec::new(),
                 eval_results: VecDeque::new(),
                 read_only: false,
+                tx: TransactionState::Auto,
             }
         }
 
@@ -709,6 +774,25 @@ mod tests {
 
         fn is_read_only(&self) -> bool {
             self.read_only
+        }
+
+        fn begin(&mut self) -> Result<(), Error> {
+            self.tx = TransactionState::Open;
+            Ok(())
+        }
+
+        fn commit(&mut self) -> Result<(), Error> {
+            self.tx = TransactionState::Auto;
+            Ok(())
+        }
+
+        fn rollback(&mut self) -> Result<(), Error> {
+            self.tx = TransactionState::Auto;
+            Ok(())
+        }
+
+        fn transaction_state(&self) -> TransactionState {
+            self.tx
         }
     }
 

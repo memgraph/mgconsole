@@ -479,6 +479,17 @@ fn status_text(state: &WorkbenchState) -> String {
         }
         prefix.push_str("[read-only]");
     }
+    let tx_marker = match state.tx {
+        mgconsole_core::TransactionState::Auto => "",
+        mgconsole_core::TransactionState::Open => "[tx]",
+        mgconsole_core::TransactionState::Failed => "[tx failed]",
+    };
+    if !tx_marker.is_empty() {
+        if !prefix.is_empty() {
+            prefix.push(' ');
+        }
+        prefix.push_str(tx_marker);
+    }
     [prefix, message, hints]
         .into_iter()
         .filter(|part| !part.is_empty())
@@ -545,6 +556,15 @@ mod tests {
         let mut state = WorkbenchState::new(config, true);
         let rendered = render(&mut state);
         assert!(rendered.contains("[read-only]"), "status bar marks read-only");
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_transaction_marker() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.tx = mgconsole_core::TransactionState::Open;
+        assert!(render(&mut state).contains("[tx]"), "open tx marked");
+        state.tx = mgconsole_core::TransactionState::Failed;
+        assert!(render(&mut state).contains("[tx failed]"), "failed tx marked");
     }
 
     #[test]

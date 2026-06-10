@@ -60,6 +60,16 @@ pub enum Error {
     #[error("a previous result is still open; drain or discard it before running another query")]
     ResultStillOpen,
 
+    /// A query failed inside an open transaction, poisoning it (ADR 0011): the
+    /// transaction can no longer make progress and must be rolled back.
+    #[error("transaction failed; :rollback to recover")]
+    TransactionFailed,
+
+    /// `:begin` was issued while a transaction was already open, or `:commit`/
+    /// `:rollback` with no transaction open — a transaction-state misuse.
+    #[error("{0}")]
+    Transaction(String),
+
     /// The Bolt exchange was not understood (handshake/HELLO refused, etc.).
     #[error("protocol error: {0}")]
     Protocol(String),

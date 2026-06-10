@@ -100,6 +100,19 @@ pub struct ConnectOptions {
     pub read_only: bool,
 }
 
+/// The Session's explicit-transaction state (ADR 0011, CONTEXT.md "Transaction").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionState {
+    /// Autocommit: each query is its own transaction (the default).
+    Auto,
+    /// A user transaction is open (`:begin`); queries run within it until
+    /// `:commit` or `:rollback`.
+    Open,
+    /// A query failed inside the open transaction, poisoning it; the transaction
+    /// can make no further progress and only `:rollback` recovers (ADR 0011).
+    Failed,
+}
+
 /// One reconnect attempt the Session is about to make after a fatal connection
 /// error. Surfaced to a Frontend registered via [`Session::on_reconnect`] so it
 /// can tell the user the link dropped and is being re-established (slice 16).
@@ -129,6 +142,9 @@ pub struct Session {
     /// rejects writes). Carried across reconnect so a dropped read-only guard
     /// re-establishes read-only.
     read_only: bool,
+    /// The explicit-transaction state (ADR 0011): autocommit, an open user
+    /// transaction, or a poisoned one awaiting `:rollback`.
+    tx: TransactionState,
 }
 
 impl Session {
@@ -156,7 +172,111 @@ impl Session {
             last: None,
             on_reconnect: None,
             read_only: options.read_only,
+            tx: TransactionState::Auto,
         })
+    }
+
+    /// The current explicit-transaction state (for the prompt/status marker).
+    pub fn transaction_state(&self) -> TransactionState {
+        self.tx
+    }
+
+    /// Open an explicit transaction (`:begin`, ADR 0011). Subsequent queries run
+    /// within it until [`commit`](Self::commit)/[`rollback`](Self::rollback). In
+    /// read-only mode the transaction carries Bolt access mode READ, so writes are
+    /// rejected (issue 04). Errors if a transaction is already open.
+    pub async fn begin(&mut self) -> Result<(), Error> {
+        match self.tx {
+            TransactionState::Auto => {}
+            TransactionState::Open => {
+                return Err(Error::Transaction(
+                    "a transaction is already open; :commit or :rollback first".to_string(),
+                ))
+            }
+            TransactionState::Failed => return Err(Error::TransactionFailed),
+        }
+        self.enforce_one_live_result().await?;
+        let metadata = self
+            .read_only
+            .then(|| Metadata::from_iter([("mode", "r")]));
+        let mut client = self.conn.lock().await;
+        match client.begin(metadata).await.map_err(Error::connection)? {
+            Message::Success(_) => {
+                drop(client);
+                self.tx = TransactionState::Open;
+                Ok(())
+            }
+            Message::Failure(f) => {
+                let error = proto::query_error(f.metadata());
+                client.reset().await.map_err(Error::connection)?;
+                Err(Error::Query(error))
+            }
+            other => Err(Error::Protocol(format!("unexpected BEGIN reply: {other:?}"))),
+        }
+    }
+
+    /// Commit the open transaction (`:commit`), returning to autocommit. Errors if
+    /// no transaction is open, or if it is poisoned (rollback it instead).
+    pub async fn commit(&mut self) -> Result<(), Error> {
+        match self.tx {
+            TransactionState::Auto => {
+                return Err(Error::Transaction("no transaction to commit".to_string()))
+            }
+            TransactionState::Failed => return Err(Error::TransactionFailed),
+            TransactionState::Open => {}
+        }
+        self.enforce_one_live_result().await?;
+        let mut client = self.conn.lock().await;
+        match client.commit().await.map_err(Error::connection)? {
+            Message::Success(_) => {
+                drop(client);
+                self.tx = TransactionState::Auto;
+                Ok(())
+            }
+            Message::Failure(f) => {
+                let error = proto::query_error(f.metadata());
+                client.reset().await.map_err(Error::connection)?;
+                self.tx = TransactionState::Auto;
+                Err(Error::Query(error))
+            }
+            other => Err(Error::Protocol(format!("unexpected COMMIT reply: {other:?}"))),
+        }
+    }
+
+    /// Roll back the open transaction (`:rollback`), returning to autocommit. A
+    /// clean open transaction is `ROLLBACK`ed; a poisoned one (the server is in
+    /// FAILED state) is cleared with `RESET`. Errors if no transaction is open.
+    pub async fn rollback(&mut self) -> Result<(), Error> {
+        match self.tx {
+            TransactionState::Auto => {
+                return Err(Error::Transaction("no transaction to roll back".to_string()))
+            }
+            TransactionState::Open => {
+                self.enforce_one_live_result().await?;
+                let mut client = self.conn.lock().await;
+                match client.rollback().await.map_err(Error::connection)? {
+                    Message::Success(_) => {}
+                    Message::Failure(f) => {
+                        let error = proto::query_error(f.metadata());
+                        client.reset().await.map_err(Error::connection)?;
+                        self.tx = TransactionState::Auto;
+                        return Err(Error::Query(error));
+                    }
+                    other => {
+                        return Err(Error::Protocol(format!(
+                            "unexpected ROLLBACK reply: {other:?}"
+                        )))
+                    }
+                }
+            }
+            TransactionState::Failed => {
+                // The server is parked in FAILED state; RESET clears it to Ready.
+                let mut client = self.conn.lock().await;
+                client.reset().await.map_err(Error::connection)?;
+            }
+        }
+        self.tx = TransactionState::Auto;
+        Ok(())
     }
 
     /// Turn read-only mode on or off (CONTEXT.md "Read-only mode"). The Core
@@ -193,31 +313,46 @@ impl Session {
         query: &str,
         params: &BTreeMap<String, Value>,
     ) -> Result<QueryResult, Error> {
+        // A poisoned transaction can make no progress until rolled back (ADR 0011).
+        if self.tx == TransactionState::Failed {
+            return Err(Error::TransactionFailed);
+        }
         self.enforce_one_live_result().await?;
         let bolt_params = encode_params(params)?;
 
-        let (header, summary) = match self.run_once(query, bolt_params.clone()).await {
+        // Autocommit read-only wraps each query in an internal `BEGIN {mode: r}`
+        // (issue 04); inside an open user transaction the access mode was already
+        // set by `:begin`, so there is no per-query wrap and the user commits.
+        let wrap_read_only = self.tx == TransactionState::Auto && self.read_only;
+
+        let (header, summary) = match self.run_once(query, bolt_params.clone(), wrap_read_only).await
+        {
             Ok(reply) => reply,
             // Fatal transport error: reconnect (bounded) and retry once on the
             // fresh connection. Exhausted retries surface as a terminal error.
             Err(Error::Connection(_)) => {
                 self.reconnect().await?;
-                self.run_once(query, bolt_params).await?
+                self.run_once(query, bolt_params, wrap_read_only).await?
+            }
+            // A query error inside an open transaction poisons it (ADR 0011): the
+            // server is left in FAILED state and only `:rollback` recovers.
+            Err(e @ Error::Query(_)) if self.tx == TransactionState::Open => {
+                self.tx = TransactionState::Failed;
+                return Err(e);
             }
             Err(e) => return Err(e),
         };
 
         let guard = Arc::new(ResultGuard::default());
         self.last = Some(guard.clone());
-        // In read-only mode the query ran inside an explicit `BEGIN {mode: r}`
-        // transaction (Memgraph ignores access mode on auto-commit RUN, but
-        // enforces it on a transaction), so the stream must COMMIT it once drained.
+        // Only an internal autocommit read-only wrap is committed by the stream;
+        // a user transaction is committed explicitly by `:commit`.
         let records = RecordStream::lazy(
             self.conn.clone(),
             DEFAULT_BATCH_SIZE,
             summary,
             guard,
-            self.read_only,
+            wrap_read_only,
         );
         Ok(QueryResult::new(header, records))
     }
@@ -229,13 +364,14 @@ impl Session {
         &self,
         query: &str,
         params: Option<Params>,
+        wrap_read_only: bool,
     ) -> Result<(Vec<String>, Summary), Error> {
         let mut client = self.conn.lock().await;
-        // In read-only mode, open an explicit transaction with Bolt access mode
+        // Autocommit read-only opens an internal transaction with Bolt access mode
         // READ before the query: Memgraph ignores `mode` on an auto-commit RUN but
         // enforces it on a transaction, so the server rejects writes — the Clause
         // scanner is never consulted. The stream COMMITs it once drained.
-        if self.read_only {
+        if wrap_read_only {
             let begin = client
                 .begin(Some(Metadata::from_iter([("mode", "r")])))
                 .await
@@ -262,9 +398,13 @@ impl Session {
             }
             Message::Failure(f) => {
                 let error = proto::query_error(f.metadata());
-                // Bolt parks the connection in FAILED state after a FAILURE; RESET
-                // clears it so the next query runs.
-                client.reset().await.map_err(Error::connection)?;
+                // Bolt parks the connection in FAILED state after a FAILURE. In
+                // autocommit, RESET clears it so the next query runs. Inside an
+                // open user transaction we deliberately leave it FAILED — the
+                // transaction is poisoned and only `:rollback` recovers (ADR 0011).
+                if self.tx != TransactionState::Open {
+                    client.reset().await.map_err(Error::connection)?;
+                }
                 Err(Error::Query(error))
             }
             other => Err(Error::Protocol(format!("unexpected RUN reply: {other:?}"))),
@@ -315,6 +455,9 @@ impl Session {
                 Ok(conn) => {
                     self.conn = conn;
                     self.last = None;
+                    // A reconnect re-establishes a fresh connection; any open
+                    // transaction is gone (issue 06 refines how this surfaces).
+                    self.tx = TransactionState::Auto;
                     return Ok(());
                 }
                 Err(e) => last_err = e.to_string(),

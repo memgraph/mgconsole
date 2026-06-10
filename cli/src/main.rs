@@ -37,7 +37,8 @@ use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
     render_records, run_parallel_ordered, run_parser, run_serial, ConnectOptions, Credentials,
     DisplayMode, Endpoint, Error, Header, ImportFormat, ParserReport, QueryAssembler,
-    ReconnectNotice, RenderOptions, Session, TableOptions, Value, Workers, DEFAULT_ROW_CAP,
+    ReconnectNotice, RenderOptions, Session, TableOptions, TransactionState, Value, Workers,
+    DEFAULT_ROW_CAP,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -221,19 +222,23 @@ fn run_interactive(
         }
         Frontend::Repl => {
             let read_only_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(read_only));
+            let tx_flag = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(tx_to_code(
+                session.transaction_state(),
+            )));
             let mut runner = SessionRunner {
                 runtime,
                 session,
                 table_options,
                 row_cap: DEFAULT_ROW_CAP,
                 read_only: read_only_flag.clone(),
+                tx: tx_flag.clone(),
             };
             let config = ReplConfig {
                 row_cap: DEFAULT_ROW_CAP,
                 settings,
             };
             let mut source =
-                RustylineSource::new(history, colorize, profile.clone(), read_only_flag)?;
+                RustylineSource::new(history, colorize, profile.clone(), read_only_flag, tx_flag)?;
             repl::run_loop(&mut source, &mut runner, out, err, &config)?;
         }
         Frontend::Piped => {
@@ -405,7 +410,7 @@ fn explicit_flags(matches: &clap::ArgMatches) -> ExplicitFlags {
 /// 03) and shows a `[read-only]` marker while the guard is active (issue 04), so
 /// the user always knows which connection they are on and whether writes are
 /// blocked. With neither, the prompt is the plain `memgraph> `.
-fn repl_prompt(profile: Option<&str>, read_only: bool) -> String {
+fn repl_prompt(profile: Option<&str>, read_only: bool, tx: TransactionState) -> String {
     use std::fmt::Write as _;
     let mut prompt = String::from("memgraph");
     if let Some(name) = profile {
@@ -413,6 +418,11 @@ fn repl_prompt(profile: Option<&str>, read_only: bool) -> String {
     }
     if read_only {
         prompt.push_str(" [read-only]");
+    }
+    match tx {
+        TransactionState::Auto => {}
+        TransactionState::Open => prompt.push_str(" [tx]"),
+        TransactionState::Failed => prompt.push_str(" [tx failed]"),
     }
     prompt.push_str("> ");
     prompt
@@ -487,6 +497,9 @@ struct RustylineSource {
     /// Shared read-only flag (issue 04): the `SessionRunner` flips it on a runtime
     /// `:set readonly on`, so the prompt's `[read-only]` marker tracks it live.
     read_only: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Shared transaction-state code (issue 05), so the prompt shows the open /
+    /// failed transaction marker live.
+    tx: std::sync::Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl RustylineSource {
@@ -495,6 +508,7 @@ impl RustylineSource {
         colorize: bool,
         profile: Option<String>,
         read_only: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        tx: std::sync::Arc<std::sync::atomic::AtomicU8>,
     ) -> rustyline::Result<Self> {
         let mut editor = Editor::new()?;
         editor.set_helper(Some(MgHelper::new(colorize)));
@@ -506,6 +520,7 @@ impl RustylineSource {
             history,
             profile,
             read_only,
+            tx,
         })
     }
 }
@@ -515,6 +530,7 @@ impl LineSource for RustylineSource {
         let primary = repl_prompt(
             self.profile.as_deref(),
             self.read_only.load(std::sync::atomic::Ordering::Relaxed),
+            tx_from_code(self.tx.load(std::sync::atomic::Ordering::Relaxed)),
         );
         let prompt = if continued { "      -> " } else { &primary };
         match self.editor.readline(prompt) {
@@ -542,6 +558,39 @@ struct SessionRunner<'a> {
     row_cap: usize,
     /// Shared read-only flag, mirrored to the prompt source (issue 04).
     read_only: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Shared transaction-state code, mirrored to the prompt source (issue 05):
+    /// 0 = autocommit, 1 = open, 2 = failed.
+    tx: std::sync::Arc<std::sync::atomic::AtomicU8>,
+}
+
+/// Encode a [`TransactionState`] for the shared atomic the prompt reads.
+fn tx_to_code(state: TransactionState) -> u8 {
+    match state {
+        TransactionState::Auto => 0,
+        TransactionState::Open => 1,
+        TransactionState::Failed => 2,
+    }
+}
+
+/// Decode the shared transaction-state atomic back for the prompt.
+fn tx_from_code(code: u8) -> TransactionState {
+    match code {
+        1 => TransactionState::Open,
+        2 => TransactionState::Failed,
+        _ => TransactionState::Auto,
+    }
+}
+
+impl SessionRunner<'_> {
+    /// Mirror the Session's transaction state into the shared atomic so the prompt
+    /// reflects it (after begin/commit/rollback, and after a query that may have
+    /// poisoned an open transaction).
+    fn sync_tx(&self) {
+        self.tx.store(
+            tx_to_code(self.session.transaction_state()),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
 }
 
 impl QueryRunner for SessionRunner<'_> {
@@ -563,7 +612,7 @@ impl QueryRunner for SessionRunner<'_> {
             term_width: terminal_size::terminal_size().map(|(width, _)| width.0),
         };
 
-        runtime.block_on(async move {
+        let result = runtime.block_on(async move {
             let start = Instant::now();
             let mut result = session.run_with_params(query, params).await?;
             let header = Header::new(result.header());
@@ -589,7 +638,11 @@ impl QueryRunner for SessionRunner<'_> {
                 overflowed,
                 elapsed,
             })
-        })
+        });
+        // A query error inside an open transaction poisons it (issue 05); mirror
+        // the new state so the prompt marker updates.
+        self.sync_tx();
+        result
     }
 
     fn evaluate(&mut self, expr: &str, params: &BTreeMap<String, Value>) -> Result<Value, Error> {
@@ -620,6 +673,28 @@ impl QueryRunner for SessionRunner<'_> {
     fn is_read_only(&self) -> bool {
         self.session.is_read_only()
     }
+
+    fn begin(&mut self) -> Result<(), Error> {
+        let result = self.runtime.block_on(self.session.begin());
+        self.sync_tx();
+        result
+    }
+
+    fn commit(&mut self) -> Result<(), Error> {
+        let result = self.runtime.block_on(self.session.commit());
+        self.sync_tx();
+        result
+    }
+
+    fn rollback(&mut self) -> Result<(), Error> {
+        let result = self.runtime.block_on(self.session.rollback());
+        self.sync_tx();
+        result
+    }
+
+    fn transaction_state(&self) -> TransactionState {
+        self.session.transaction_state()
+    }
 }
 
 #[cfg(test)]
@@ -634,13 +709,16 @@ mod tests {
 
     #[test]
     fn the_prompt_names_the_active_profile_and_read_only_marker() {
-        assert_eq!(repl_prompt(None, false), "memgraph> ");
-        assert_eq!(repl_prompt(Some("prod"), false), "memgraph (prod)> ");
-        assert_eq!(repl_prompt(None, true), "memgraph [read-only]> ");
+        use TransactionState::{Auto, Failed, Open};
+        assert_eq!(repl_prompt(None, false, Auto), "memgraph> ");
+        assert_eq!(repl_prompt(Some("prod"), false, Auto), "memgraph (prod)> ");
+        assert_eq!(repl_prompt(None, true, Auto), "memgraph [read-only]> ");
         assert_eq!(
-            repl_prompt(Some("prod"), true),
+            repl_prompt(Some("prod"), true, Auto),
             "memgraph (prod) [read-only]> "
         );
+        assert_eq!(repl_prompt(None, false, Open), "memgraph [tx]> ");
+        assert_eq!(repl_prompt(None, false, Failed), "memgraph [tx failed]> ");
     }
 
     #[test]

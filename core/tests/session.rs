@@ -482,3 +482,116 @@ async fn read_only_streams_a_large_read_and_stays_usable() {
     let rec = next.records().next().await.expect("ok").expect("one row");
     assert_eq!(rec.fields(), &[Value::Integer(2)]);
 }
+
+#[tokio::test]
+async fn explicit_transaction_commits_visible_writes() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+    assert_eq!(session.transaction_state(), mgconsole_core::TransactionState::Auto);
+
+    session.begin().await.expect("begin");
+    assert_eq!(session.transaction_state(), mgconsole_core::TransactionState::Open);
+    session
+        .run("CREATE (:Account {n: 1})")
+        .await
+        .expect("write in tx")
+        .records()
+        .discard()
+        .await
+        .expect("drain");
+    session.commit().await.expect("commit");
+    assert_eq!(session.transaction_state(), mgconsole_core::TransactionState::Auto);
+
+    // The committed write is visible afterwards.
+    let mut count = session.run("MATCH (a:Account) RETURN count(a)").await.expect("read");
+    let rec = count.records().next().await.expect("ok").expect("row");
+    assert_eq!(rec.fields(), &[Value::Integer(1)]);
+}
+
+#[tokio::test]
+async fn rollback_discards_a_transactions_writes() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    session.begin().await.expect("begin");
+    session
+        .run("CREATE (:Temp)")
+        .await
+        .expect("write")
+        .records()
+        .discard()
+        .await
+        .expect("drain");
+    session.rollback().await.expect("rollback");
+
+    let mut count = session.run("MATCH (t:Temp) RETURN count(t)").await.expect("read");
+    let rec = count.records().next().await.expect("ok").expect("row");
+    assert_eq!(rec.fields(), &[Value::Integer(0)], "rolled-back write is gone");
+}
+
+#[tokio::test]
+async fn a_failed_query_poisons_the_transaction_until_rollback() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    session.begin().await.expect("begin");
+    // A syntax error inside the transaction poisons it.
+    match session.run("THIS IS NOT CYPHER").await {
+        Err(Error::Query(_)) => {}
+        Err(other) => panic!("expected a query error, got {other:?}"),
+        Ok(_) => panic!("bad cypher must fail"),
+    }
+    assert_eq!(session.transaction_state(), mgconsole_core::TransactionState::Failed);
+
+    // Further queries are refused until rollback.
+    match session.run("RETURN 1").await {
+        Err(Error::TransactionFailed) => {}
+        Err(other) => panic!("expected TransactionFailed, got {other:?}"),
+        Ok(_) => panic!("a poisoned tx must refuse queries"),
+    }
+
+    // Rollback recovers the session to autocommit.
+    session.rollback().await.expect("rollback recovers");
+    assert_eq!(session.transaction_state(), mgconsole_core::TransactionState::Auto);
+    let mut ok = session.run("RETURN 1 AS n").await.expect("usable again");
+    let rec = ok.records().next().await.expect("ok").expect("row");
+    assert_eq!(rec.fields(), &[Value::Integer(1)]);
+}
+
+#[tokio::test]
+async fn read_only_transaction_rejects_writes() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+    session.set_read_only(true);
+
+    // The explicit transaction carries Bolt access mode READ (issue 04 ∩ 05).
+    session.begin().await.expect("begin read tx");
+    match session.run("CREATE (:Nope)").await {
+        Err(Error::Query(_)) => {}
+        Err(other) => panic!("a write in a read-only transaction must be rejected, got {other:?}"),
+        Ok(_) => panic!("a write in a read-only transaction must be rejected"),
+    }
+    assert_eq!(session.transaction_state(), mgconsole_core::TransactionState::Failed);
+    session.rollback().await.expect("rollback");
+}
+
+#[tokio::test]
+async fn one_live_result_still_holds_inside_a_transaction() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    session.begin().await.expect("begin");
+    let mut open = session
+        .run("UNWIND range(1, 100) AS i RETURN i")
+        .await
+        .expect("first");
+    let _ = open.records().next().await.expect("one row");
+    // A second run while the first result is open is refused (ADR 0005), inside a tx.
+    match session.run("RETURN 1").await {
+        Err(Error::ResultStillOpen) => {}
+        Err(other) => panic!("expected ResultStillOpen inside a tx, got {other:?}"),
+        Ok(_) => panic!("a second live result must be refused"),
+    }
+    open.records().discard().await.expect("drain");
+    session.rollback().await.expect("rollback");
+}
