@@ -13,6 +13,13 @@ workspace = true
 name = "mgconsole"
 path = "src/main.rs"
 
+[features]
+# The full-screen TUI workbench (ADR 0010) is the default interactive Frontend,
+# so `tui` is in the default set; `cargo build --no-default-features` yields a
+# lean REPL-only binary that compiles without ratatui/crossterm (issue 01 AC 6).
+default = ["tui"]
+tui = ["dep:ratatui", "dep:tui-textarea"]
+
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
 mgconsole-core = { path = "../core" }
@@ -20,6 +27,10 @@ rpassword = "7.5.4"
 rustyline = { version = "15", features = ["derive", "with-file-history"] }
 terminal_size = "0.4"
 tokio = { workspace = true }
+# Workbench (feature `tui`). Pinned to ratatui 0.29 so tui-textarea 0.7 shares a
+# single ratatui (and a single crossterm, used via `ratatui::crossterm`).
+ratatui = { version = "0.29", optional = true }
+tui-textarea = { version = "0.7", optional = true }
 
 [dev-dependencies]
 testcontainers = "0.27"

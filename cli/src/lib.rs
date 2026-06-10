@@ -8,10 +8,13 @@
 
 use clap::{Parser, ValueEnum};
 
+pub mod frontend;
 pub mod history;
 pub mod keywords;
 pub mod repl;
 pub mod syntax;
+#[cfg(feature = "tui")]
+pub mod workbench;
 
 /// Output format for a Query result (CONTEXT.md: tabular buffers; csv/jsonl/
 /// cypherl stream). `jsonl` is the addition over today's mgconsole flags.
@@ -104,6 +107,12 @@ pub struct Cli {
     /// Truncate tabular output to fit the terminal width.
     #[arg(long)]
     pub fit_to_screen: bool,
+
+    /// Use the line-based REPL instead of the full-screen TUI workbench (ADR
+    /// 0010). The workbench is the default for a capable interactive terminal;
+    /// `--plain` forces the minimal REPL, as does an incapable terminal.
+    #[arg(long)]
+    pub plain: bool,
 
     /// When to syntax-highlight Cypher input: auto (on for an interactive
     /// terminal), always, or never. Honours the `NO_COLOR` convention.
@@ -209,6 +218,7 @@ mod tests {
         assert!(cli.use_ssl);
         assert_eq!(cli.output_format, OutputFormat::Tabular);
         assert!(!cli.fit_to_screen);
+        assert!(!cli.plain, "the workbench is the default; --plain is opt-in");
         assert_eq!(cli.color, ColorChoice::Auto);
         assert_eq!(cli.csv_delimiter, ',');
         assert_eq!(cli.csv_escapechar, None);
@@ -261,6 +271,12 @@ mod tests {
         assert!(!no_color_active(None));
         assert!(!no_color_active(Some("")));
         assert!(no_color_active(Some("1")));
+    }
+
+    #[test]
+    fn plain_selects_the_repl_frontend() {
+        assert!(!parse(&[]).expect("bare").plain);
+        assert!(parse(&["--plain"]).expect("--plain parses").plain);
     }
 
     #[test]

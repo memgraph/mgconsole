@@ -20,9 +20,12 @@ use rustyline::highlight::{CmdKind, Highlighter as RustylineHighlighter};
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Editor, Helper, Hinter};
 
+use mgconsole::frontend::{select_frontend, Frontend};
 use mgconsole::history::{self, HistoryFile};
 use mgconsole::repl::{self, Line, LineSource, QueryRunner, Rendered, ReplConfig};
 use mgconsole::syntax::{self, Completer};
+#[cfg(feature = "tui")]
+use mgconsole::workbench;
 use mgconsole::{no_color_active, resolve_password, Cli, ImportMode, OutputFormat};
 use mgconsole_core::format::CsvOptions;
 use mgconsole_core::{
@@ -112,28 +115,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut out = io::stdout();
     let mut err = io::stderr();
 
-    // A terminal gets the interactive REPL (line editor, tabular results); a pipe
+    // An interactive terminal gets one of the two interactive Frontends, chosen by
+    // the pure resolver (ADR 0010): the full-screen workbench by default, the line
+    // REPL when `--plain` is set or the terminal cannot host the workbench. A pipe
     // gets the non-interactive serial import path (slice 25), which streams output
     // in the selected format and exits non-zero if any query fails.
     if io::stdin().is_terminal() {
-        let mut runner = SessionRunner {
-            runtime: &runtime,
-            session,
-            table_options,
-            row_cap: DEFAULT_ROW_CAP,
-        };
-        let config = ReplConfig {
-            row_cap: DEFAULT_ROW_CAP,
-        };
-        let history = open_history(&cli);
-        // Resolve input colouring here, at the IO boundary: the REPL branch is
-        // already an interactive terminal, and NO_COLOR is read from the env.
-        let colorize = cli.color.resolve(
-            no_color_active(std::env::var("NO_COLOR").ok().as_deref()),
-            io::stdin().is_terminal(),
-        );
-        let mut source = RustylineSource::new(history, colorize)?;
-        repl::run_loop(&mut source, &mut runner, &mut out, &mut err, &config)?;
+        run_interactive(&cli, session, &runtime, table_options, &mut out, &mut err)?;
     } else {
         let queries = read_queries(io::stdin().lock())?;
         let format = import_format(&cli, table_options);
@@ -149,6 +137,72 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Drive the chosen interactive Frontend over a connected Session (ADR 0010):
+/// the workbench by default, the line REPL when `--plain` is set or the terminal
+/// cannot host the workbench. Colour is resolved here at the IO boundary and
+/// governs colour *within* whichever Frontend runs, independently of the choice.
+fn run_interactive(
+    cli: &Cli,
+    session: Session,
+    runtime: &tokio::runtime::Runtime,
+    table_options: TableOptions,
+    out: &mut io::Stdout,
+    err: &mut io::Stderr,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let colorize = cli.color.resolve(
+        no_color_active(std::env::var("NO_COLOR").ok().as_deref()),
+        true,
+    );
+    // `supports_tui` folds in the compile-time feature: a `--no-default-features`
+    // build has no workbench and always falls back to the REPL.
+    let supports_tui = {
+        #[cfg(feature = "tui")]
+        {
+            terminal_supports_tui()
+        }
+        #[cfg(not(feature = "tui"))]
+        {
+            false
+        }
+    };
+    match select_frontend(cli.plain, true, supports_tui) {
+        Frontend::Workbench => {
+            #[cfg(feature = "tui")]
+            {
+                workbench::run(session, runtime, workbench::WorkbenchConfig::default(), colorize)?;
+            }
+            #[cfg(not(feature = "tui"))]
+            unreachable!("the resolver cannot pick the workbench without the tui feature");
+        }
+        Frontend::Repl => {
+            let mut runner = SessionRunner {
+                runtime,
+                session,
+                table_options,
+                row_cap: DEFAULT_ROW_CAP,
+            };
+            let config = ReplConfig {
+                row_cap: DEFAULT_ROW_CAP,
+            };
+            let history = open_history(cli);
+            let mut source = RustylineSource::new(history, colorize)?;
+            repl::run_loop(&mut source, &mut runner, out, err, &config)?;
+        }
+        Frontend::Piped => {
+            unreachable!("the piped path is handled by the non-terminal branch")
+        }
+    }
+    Ok(())
+}
+
+/// Whether the current terminal can host the full-screen workbench: stdout is a
+/// terminal and `TERM` is not the capability-less `dumb` terminal. The resolver
+/// falls back to the REPL otherwise (ADR 0010's auto-fallback).
+#[cfg(feature = "tui")]
+fn terminal_supports_tui() -> bool {
+    io::stdout().is_terminal() && std::env::var("TERM").map_or(true, |term| term != "dumb")
 }
 
 /// Read a piped query stream into complete queries, in input order. Physical

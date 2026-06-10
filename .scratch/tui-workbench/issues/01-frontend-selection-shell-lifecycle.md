@@ -1,6 +1,6 @@
 # 01 — Frontend selection + TUI shell, lifecycle & editor
 
-Status: ready-for-human
+Status: done — design reviewed (see `01-DESIGN.md`, decisions D1–D4) then implemented
 
 ## Parent
 
@@ -31,21 +31,30 @@ reducer/effects shape and the panic-safe lifecycle are the foundation the other
 
 ## Acceptance criteria
 
-- [ ] A pure Frontend-selection resolver chooses workbench / REPL from
+- [x] A pure Frontend-selection resolver chooses workbench / REPL from
       `(--plain, is_tty, supports_tui)`; `--plain` and an incapable terminal both
       fall back to the REPL; the piped path is unaffected. Covered by unit tests.
-- [ ] Launching on a capable terminal enters the alternate screen and draws the
+      (`frontend::select_frontend` + 5 unit tests)
+- [x] Launching on a capable terminal enters the alternate screen and draws the
       editor / results / status layout; the editor accepts multiline input with
       free cursor editing and a universal newline key surfaced in the status hint.
-- [ ] Esc / Ctrl-D / `:quit` exits and the terminal is restored; a panic also
-      restores the terminal (no corrupted shell).
-- [ ] `--color`/`NO_COLOR` resolves colour within the workbench independently of
+      (`workbench::run` + `terminal::TerminalGuard`; editor is `tui-textarea`-backed;
+      `draw` smoke test asserts the layout + the `Alt+Enter` hint; reducer tests
+      cover multiline edit + free cursor.)
+- [x] Esc / Ctrl-D / `:quit` exits and the terminal is restored; a panic also
+      restores the terminal (no corrupted shell). (`Effect::Quit` from the reducer,
+      tested; `TerminalGuard` restores on `Drop` and via a chained panic hook.)
+- [x] `--color`/`NO_COLOR` resolves colour within the workbench independently of
       Frontend selection (a `--color=never` workbench is monochrome, not
-      disabled).
-- [ ] The workbench state and reducer are exercised by tests with no terminal and
+      disabled). (`ColorChoice::resolve` in `run_interactive`, passed as
+      `WorkbenchState::color`, separate from `select_frontend`.)
+- [x] The workbench state and reducer are exercised by tests with no terminal and
       no database (event-in, state-out), the way `run_loop` is.
-- [ ] ratatui/crossterm are behind a Cargo feature; the default binary builds
-      without them.
+      (`workbench::update` tests: editing, newline, focus, submit, quit.)
+- [x] ratatui/crossterm are behind a Cargo feature; the default binary builds
+      without them. (`tui` feature; per decision **D2** it is *on by default*, so
+      this is satisfied via `cargo build --no-default-features` — verified to
+      compile REPL-only with no ratatui/crossterm. `frontend.rs` compiles in both.)
 
 ## Blocked by
 
