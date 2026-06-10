@@ -1,6 +1,6 @@
 # 15 — PROFILE annotations on the plan tree
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -16,10 +16,15 @@ annotations.
 
 ## Acceptance criteria
 
-- [ ] A `PROFILE` query's plan tree shows per-operator hits/time annotations.
-- [ ] An `EXPLAIN` plan renders without annotations (no empty/zero columns).
-- [ ] The annotation parsing/attachment is covered by unit tests; a thin
-      `TestBackend` render asserts annotated nodes.
+- [x] A `PROFILE` query's plan tree shows per-operator hits/time annotations.
+      (`plan::annotation` builds "N hits · rel% · abs ms" from the extra columns;
+      `draw_plan` trails it dimmed after each operator.)
+- [x] An `EXPLAIN` plan renders without annotations (no empty/zero columns).
+      (an `EXPLAIN` row has only the operator column, so `annotation` is `None`.)
+- [x] The annotation parsing/attachment is covered by unit tests; a thin
+      `TestBackend` render asserts annotated nodes. (`a_profile_row_carries_...`
+      + EXPLAIN-no-annotation unit tests; `renders_a_profile_plan_with_annotations`
+      golden.)
 
 ## Blocked by
 

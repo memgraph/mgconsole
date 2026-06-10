@@ -23,13 +23,15 @@ pub fn is_plan_query(query: &str) -> bool {
         })
 }
 
-/// One operator line of a plan: its indentation depth, its text, and whether its
-/// subtree is collapsed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One operator line of a plan: its indentation depth, its text, whether its
+/// subtree is collapsed, and — for a `PROFILE` plan — its per-operator execution
+/// annotation (hits/time, slice 15). `EXPLAIN` has no annotation.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PlanLine {
     pub depth: usize,
     pub operator: String,
     pub collapsed: bool,
+    pub annotation: Option<String>,
 }
 
 /// A parsed query plan: the operator lines in order, with a selection cursor for
@@ -42,13 +44,19 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Parse the operator column (column 0) of a plan result into lines.
+    /// Parse the operator column (column 0) of a plan result into lines, with the
+    /// per-operator annotation from a `PROFILE` result's extra columns (slice 15).
     pub fn parse(rows: &[Record]) -> Self {
         let lines = rows
             .iter()
-            .filter_map(|row| match row.fields().first() {
-                Some(Value::String(text)) => Some(parse_line(text)),
-                _ => None,
+            .filter_map(|row| {
+                let fields = row.fields();
+                let Some(Value::String(text)) = fields.first() else {
+                    return None;
+                };
+                let mut line = parse_line(text);
+                line.annotation = annotation(fields);
+                Some(line)
             })
             .collect();
         Self { lines, selected: 0 }
@@ -124,6 +132,27 @@ fn parse_line(text: &str) -> PlanLine {
         depth,
         operator,
         collapsed: false,
+        annotation: None,
+    }
+}
+
+/// The per-operator annotation from a `PROFILE` row's extra columns
+/// (`ACTUAL HITS`, `RELATIVE TIME`, `ABSOLUTE TIME`), or `None` for an `EXPLAIN`
+/// row (which has only the operator column). Verified against Memgraph 3.10.1.
+fn annotation(fields: &[Value]) -> Option<String> {
+    let Some(Value::Integer(hits)) = fields.get(1) else {
+        return None;
+    };
+    let relative = string_cell(fields.get(2));
+    let absolute = string_cell(fields.get(3));
+    Some(format!("{hits} hits · {relative} · {absolute}"))
+}
+
+/// A trimmed string cell, or empty when absent / not a string.
+fn string_cell(cell: Option<&Value>) -> String {
+    match cell {
+        Some(Value::String(text)) => text.trim().to_string(),
+        _ => String::new(),
     }
 }
 
@@ -152,6 +181,23 @@ mod tests {
         assert_eq!(plan.lines.len(), 2);
         assert_eq!(plan.lines[0].operator, "Produce {n}");
         assert_eq!(plan.lines[0].depth, 1);
+        assert!(plan.lines[0].annotation.is_none(), "EXPLAIN has no annotation");
+    }
+
+    #[test]
+    fn a_profile_row_carries_a_hits_and_time_annotation() {
+        // [OPERATOR, ACTUAL HITS, RELATIVE TIME, ABSOLUTE TIME] (PROFILE shape).
+        let row = Record::new(vec![
+            Value::String("* Produce {n}".to_string()),
+            Value::Integer(2),
+            Value::String(" 14.04 %".to_string()),
+            Value::String("  0.0037 ms".to_string()),
+        ]);
+        let plan = Plan::parse(&[row]);
+        let annotation = plan.lines[0].annotation.as_ref().expect("annotation");
+        assert!(annotation.contains("2 hits"), "{annotation}");
+        assert!(annotation.contains("14.04 %"));
+        assert!(annotation.contains("0.0037 ms"));
     }
 
     #[test]
@@ -159,10 +205,10 @@ mod tests {
         // depth 0 root with two deeper children, then a depth-0 sibling.
         let plan = Plan {
             lines: vec![
-                PlanLine { depth: 0, operator: "Root".into(), collapsed: false },
-                PlanLine { depth: 2, operator: "ChildA".into(), collapsed: false },
-                PlanLine { depth: 2, operator: "ChildB".into(), collapsed: false },
-                PlanLine { depth: 0, operator: "Sibling".into(), collapsed: false },
+                PlanLine { depth: 0, operator: "Root".into(), collapsed: false, annotation: None },
+                PlanLine { depth: 2, operator: "ChildA".into(), collapsed: false, annotation: None },
+                PlanLine { depth: 2, operator: "ChildB".into(), collapsed: false, annotation: None },
+                PlanLine { depth: 0, operator: "Sibling".into(), collapsed: false, annotation: None },
             ],
             selected: 0,
         };
@@ -176,9 +222,9 @@ mod tests {
     fn navigation_skips_hidden_lines() {
         let mut plan = Plan {
             lines: vec![
-                PlanLine { depth: 0, operator: "Root".into(), collapsed: true },
-                PlanLine { depth: 2, operator: "Child".into(), collapsed: false },
-                PlanLine { depth: 0, operator: "Sibling".into(), collapsed: false },
+                PlanLine { depth: 0, operator: "Root".into(), collapsed: true, annotation: None },
+                PlanLine { depth: 2, operator: "Child".into(), collapsed: false, annotation: None },
+                PlanLine { depth: 0, operator: "Sibling".into(), collapsed: false, annotation: None },
             ],
             selected: 0,
         };
@@ -190,7 +236,7 @@ mod tests {
     #[test]
     fn toggle_does_nothing_on_a_leaf() {
         let mut plan = Plan {
-            lines: vec![PlanLine { depth: 0, operator: "Leaf".into(), collapsed: false }],
+            lines: vec![PlanLine { depth: 0, operator: "Leaf".into(), collapsed: false, annotation: None }],
             selected: 0,
         };
         plan.toggle();

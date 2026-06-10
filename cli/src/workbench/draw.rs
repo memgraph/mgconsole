@@ -255,13 +255,23 @@ fn draw_plan(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool) {
             } else {
                 "  "
             };
-            let text = format!("{}{marker}{}", " ".repeat(node.depth), node.operator);
-            let style = if focused && index == plan.selected {
+            let operator = format!("{}{marker}{}", " ".repeat(node.depth), node.operator);
+            let row_style = if focused && index == plan.selected {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
                 Style::default()
             };
-            Line::styled(text, style)
+            // PROFILE annotation (hits/time) trails the operator, dimmed.
+            match &node.annotation {
+                Some(annotation) => Line::from(vec![
+                    Span::styled(format!("{operator}  "), row_style),
+                    Span::styled(
+                        annotation.clone(),
+                        row_style.add_modifier(Modifier::DIM),
+                    ),
+                ]),
+                None => Line::styled(operator, row_style),
+            }
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), area);
@@ -415,8 +425,8 @@ mod tests {
         let mut result = CurrentResult::new("EXPLAIN ...".to_string(), vec!["QUERY PLAN".to_string()]);
         result.plan = Some(Plan {
             lines: vec![
-                PlanLine { depth: 0, operator: "Produce {n}".into(), collapsed: false },
-                PlanLine { depth: 2, operator: "ScanAll (n)".into(), collapsed: false },
+                PlanLine { depth: 0, operator: "Produce {n}".into(), collapsed: false, annotation: None },
+                PlanLine { depth: 2, operator: "ScanAll (n)".into(), collapsed: false, annotation: None },
             ],
             selected: 0,
         });
@@ -426,6 +436,26 @@ mod tests {
         assert!(rendered.contains("ScanAll (n)"), "child operator drawn");
         assert!(rendered.contains("plan"), "title marks plan mode");
         assert!(rendered.contains('▾'), "an expandable node shows a marker");
+    }
+
+    #[test]
+    fn renders_a_profile_plan_with_annotations() {
+        use crate::workbench::plan::{Plan, PlanLine};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let mut result = CurrentResult::new("PROFILE ...".to_string(), vec!["OPERATOR".to_string()]);
+        result.plan = Some(Plan {
+            lines: vec![PlanLine {
+                depth: 0,
+                operator: "Produce {n}".into(),
+                collapsed: false,
+                annotation: Some("2 hits".to_string()),
+            }],
+            selected: 0,
+        });
+        state.history.push(result);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Produce {n}"), "operator drawn");
+        assert!(rendered.contains("2 hits"), "annotation drawn");
     }
 
     #[test]
