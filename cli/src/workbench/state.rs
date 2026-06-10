@@ -85,6 +85,9 @@ pub struct Buffer {
 }
 
 /// The complete workbench state for the current slice.
+// A flat aggregate of mostly-independent UI flags (focus markers, open overlays,
+// colour); grouping the bools to satisfy the lint would obscure that 1:1 mapping.
+#[allow(clippy::struct_excessive_bools)]
 pub struct WorkbenchState {
     /// The multiline query editor.
     pub editor: EditorState,
@@ -115,6 +118,9 @@ pub struct WorkbenchState {
     pub export: Option<ExportPrompt>,
     /// When `Some`, in-result search is open over the shown result (issue 16).
     pub search: Option<SearchState>,
+    /// Whether the `:help` keybinding overlay is open, and how far it is scrolled.
+    pub help: bool,
+    pub help_scroll: u16,
     /// When `Some`, the completion popup is open (slice 11).
     pub completion: Option<Completion>,
     /// The completion candidate source(s): the static keyword/function vocabulary
@@ -230,6 +236,8 @@ impl WorkbenchState {
             detail_scroll: 0,
             export: None,
             search: None,
+            help: false,
+            help_scroll: 0,
             completion: None,
             completer: Completer::with_static_vocabulary(),
             schema: None,

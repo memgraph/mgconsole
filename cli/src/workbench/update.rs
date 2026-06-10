@@ -14,7 +14,7 @@ use mgconsole_core::{Error, QueryAssembler, Record, Summary};
 
 use crate::repl::{format_summary, meta_command, MetaCommand};
 use crate::syntax::Completer;
-use crate::theme::{Chord, ChordKey, Gesture};
+use crate::theme::{Chord, ChordKey, Gesture, KeyBindings};
 
 use super::effect::{Effect, TxOp};
 use super::event::{Event, Key, KeyCode, MouseEvent, MouseKind};
@@ -322,6 +322,9 @@ fn interrupt(state: &mut WorkbenchState) -> Vec<Effect> {
 fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     // Overlays capture keys while open — including Esc, so it dismisses the
     // overlay rather than quitting the workbench.
+    if state.help {
+        return help_key(state, key);
+    }
     if state.detail.is_some() {
         return detail_key(state, key);
     }
@@ -378,7 +381,11 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// modal overlay (cell-detail, export, completion) is open, the mouse is ignored
 /// so it never fights the keyboard-driven overlay.
 fn update_mouse(state: &mut WorkbenchState, mouse: MouseEvent) -> Vec<Effect> {
-    if state.detail.is_some() || state.export.is_some() || state.completion.is_some() {
+    if state.help
+        || state.detail.is_some()
+        || state.export.is_some()
+        || state.completion.is_some()
+    {
         return Vec::new();
     }
     let (col, row) = (mouse.column, mouse.row);
@@ -1062,6 +1069,21 @@ fn confirm_export(state: &mut WorkbenchState) -> Vec<Effect> {
     }]
 }
 
+/// Keys while the `:help` overlay is open: scroll it, or dismiss it.
+fn help_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Up | KeyCode::PageUp => {
+            state.help_scroll = state.help_scroll.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::PageDown => {
+            state.help_scroll = state.help_scroll.saturating_add(1);
+        }
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => state.help = false,
+        _ => {}
+    }
+    Vec::new()
+}
+
 /// Keys while the cell-detail overlay is open: scroll it, or dismiss it back to
 /// the table (with the table selection intact, since it was never changed).
 fn detail_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
@@ -1442,12 +1464,88 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             state.status.message = format!("unknown command '{command}'");
             Vec::new()
         }
-        // The help/docs text lands in slice 19; acknowledge for now.
+        // `:help`/`:docs` open the keybinding + command overlay (its chords reflect
+        // the live `[keys]` bindings). Dismissed by Esc/Enter/q.
         MetaCommand::Help | MetaCommand::Docs => {
-            state.status.message = "help/docs arrive in slice 19".to_string();
+            state.help = true;
+            state.help_scroll = 0;
+            state.editor.clear();
             Vec::new()
         }
     }
+}
+
+/// The `:help` overlay text (issue 14/18 follow-up): every gesture with its
+/// *current* chord, so a `[keys]` rebinding shows the real binding rather than the
+/// default. Fixed (non-rebindable) gestures are listed verbatim, then the
+/// `:`-command reference. Pure over the [`KeyBindings`], so it is unit-tested.
+pub fn keybindings_help(keys: &KeyBindings) -> String {
+    use std::fmt::Write as _;
+    // A rebindable gesture's live chord, formatted as it appears in `[keys]`.
+    let chord = |g: Gesture| keys.chord(g).to_string();
+    let mut out = String::new();
+    let section = |out: &mut String, title: &str, rows: &[(String, &str)]| {
+        out.push_str(title);
+        out.push('\n');
+        for (key, desc) in rows {
+            // Left-pad the key column to a fixed width for an aligned table.
+            let _ = writeln!(out, "  {key:<18}{desc}");
+        }
+        out.push('\n');
+    };
+
+    section(
+        &mut out,
+        "Editing & running",
+        &[
+            ("Enter".to_string(), "Run the query in the editor"),
+            ("Alt+Enter / Ctrl+J".to_string(), "Insert a newline (also Shift/Ctrl+Enter)"),
+            ("Tab".to_string(), "Complete the word, or switch pane focus"),
+            ("Ctrl+Up / Ctrl+Down".to_string(), "Recall older / newer query (command history)"),
+            ("Ctrl+C".to_string(), "Cancel a running query, or clear the editor"),
+            ("Esc / Ctrl+D".to_string(), "Quit the workbench"),
+        ],
+    );
+    section(
+        &mut out,
+        "Results",
+        &[
+            ("[ / ]".to_string(), "Previous / next result (result history)"),
+            ("Up/Down/PgUp/PgDn".to_string(), "Move the row selection"),
+            ("Left / Right".to_string(), "Move the column selection"),
+            ("Enter".to_string(), "Expand the selected cell"),
+            ("e".to_string(), "Export the on-screen result"),
+            (chord(Gesture::Search), "Search / filter rows in the result"),
+        ],
+    );
+    section(
+        &mut out,
+        "Buffers (tabs)",
+        &[
+            (chord(Gesture::NewBuffer), "New tab"),
+            (chord(Gesture::CloseBuffer), "Close tab"),
+            (chord(Gesture::NextBuffer), "Next tab"),
+            (chord(Gesture::PrevBuffer), "Previous tab"),
+        ],
+    );
+    section(
+        &mut out,
+        "Drawers & tools",
+        &[
+            (chord(Gesture::ToggleSchema), "Toggle the schema sidebar"),
+            (chord(Gesture::ToggleParams), "Toggle the parameters drawer"),
+            (chord(Gesture::ToggleSummary), "Toggle the notifications/stats drawer"),
+            (chord(Gesture::RefreshSchema), "Refresh the schema"),
+            (chord(Gesture::FormatBuffer), "Auto-format the Cypher in the editor"),
+        ],
+    );
+    out.push_str(
+        "Commands (type at the editor)\n  \
+         :param :params · :set · :begin :commit :rollback · :connect :use · :sysinfo\n  \
+         :source :watch :o · :save :saved :load :forget · :help :docs :quit\n\n\
+         Tab chords and tool chords are rebindable in ~/.mgconsole/config.toml under [keys].",
+    );
+    out
 }
 
 /// Split the editor buffer into complete statements using the Core's
@@ -3173,6 +3271,40 @@ mod tests {
         let effects = submit_meta(&mut s, ":forget gone");
         assert!(effects.is_empty(), "nothing to persist for an absent name");
         assert!(s.status.message.contains("no saved query named 'gone'"));
+    }
+
+    // --- :help keybinding overlay ---------------------------------------------
+
+    #[test]
+    fn help_opens_a_dismissable_overlay() {
+        let mut s = wb();
+        submit_meta(&mut s, ":help");
+        assert!(s.help, "the help overlay opened");
+        assert_eq!(s.editor.buffer(), "", "the command was consumed");
+        // While open, Down scrolls and Esc closes (the overlay owns input).
+        update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
+        assert_eq!(s.help_scroll, 1);
+        update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
+        assert!(!s.help, "Esc dismisses the overlay rather than quitting");
+    }
+
+    #[test]
+    fn the_help_text_lists_gestures_with_their_live_chords() {
+        // Default bindings show through; a [keys] rebinding is reflected, not the
+        // default — the help reads the live KeyBindings.
+        let help = keybindings_help(&KeyBindings::default());
+        assert!(help.contains("New tab"), "buffers section present: {help}");
+        assert!(help.contains("ctrl+t"), "default new-buffer chord shown");
+        assert!(help.contains("Search / filter"), "search listed");
+        assert!(help.contains(":save"), "commands referenced");
+
+        let (keys, _) = crate::theme::resolve_keys(&BTreeMap::from([(
+            "new-buffer".to_string(),
+            "ctrl+n".to_string(),
+        )]));
+        let rebound = keybindings_help(&keys);
+        assert!(rebound.contains("ctrl+n"), "the rebound chord is shown: {rebound}");
+        assert!(!rebound.contains("ctrl+t"), "the old default chord is gone");
     }
 
     // --- Theme + keybindings (issue 14) ---------------------------------------

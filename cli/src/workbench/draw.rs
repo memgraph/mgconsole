@@ -17,6 +17,7 @@ use mgconsole_core::Value;
 
 use super::highlight;
 use super::plan::Plan;
+use super::update;
 use super::schema::Schema;
 use super::state::{
     Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, SearchState,
@@ -128,6 +129,9 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     frame.render_widget(Paragraph::new(status_text(state)), status_area);
 
     // Overlays, drawn last so they sit above the panes (at most one is open).
+    if state.help {
+        draw_help(frame, &update::keybindings_help(&state.keys), state.help_scroll);
+    }
     if let Some(value) = state.detail.as_ref() {
         draw_detail(frame, value, state.detail_scroll);
     }
@@ -352,6 +356,25 @@ fn draw_detail(frame: &mut Frame, value: &Value, scroll: u16) {
     frame.render_widget(block, area);
     frame.render_widget(
         Paragraph::new(render::tabular(value))
+            .wrap(Wrap { trim: false })
+            .scroll((scroll, 0)),
+        inner,
+    );
+}
+
+/// Draw the `:help` overlay: a centred, scrollable box listing every gesture with
+/// its current chord (so `[keys]` rebindings show through) and the commands.
+fn draw_help(frame: &mut Frame, text: &str, scroll: u16) {
+    let area = centered_rect(frame.area(), 70, 80);
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title("Help — keys & commands (↑/↓ scroll · Esc/Enter/q close)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(text.to_string())
             .wrap(Wrap { trim: false })
             .scroll((scroll, 0)),
         inner,
@@ -750,6 +773,17 @@ mod tests {
         assert!(rendered.contains("name"), "header column drawn");
         assert!(rendered.contains("Ada"), "a row cell drawn");
         assert!(rendered.contains("2 rows"), "live row count in the title");
+    }
+
+    #[test]
+    fn the_help_overlay_lists_keys_and_commands() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.help = true;
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Help"), "the overlay title is drawn");
+        // The top section is visible in the small test viewport.
+        assert!(rendered.contains("Editing"), "a section header is drawn");
+        assert!(rendered.contains("Run the query"), "a gesture is listed");
     }
 
     #[test]
