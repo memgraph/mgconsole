@@ -70,11 +70,13 @@ fn render(value: &Value, quote: bool) -> String {
             format!("[{}]", inner.join(", "))
         }
         Value::Map(m) => format!("{{{}}}", render_pairs(m)),
-        // Provisional renderings — refined by slices 05–07.
-        Value::Node(n) => format!("{:?}", n),
-        Value::Relationship(r) => format!("{:?}", r),
-        Value::UnboundRelationship(r) => format!("{:?}", r),
-        Value::Path(p) => format!("{:?}", p),
+        Value::Node(n) => render_node(n),
+        Value::Relationship(r) => {
+            rel_body(&r.rel_type, &r.properties)
+        }
+        Value::UnboundRelationship(r) => rel_body(&r.rel_type, &r.properties),
+        Value::Path(p) => render_path(p),
+        // Provisional renderings — refined by slices 06–07.
         Value::Date(d) => d.to_string(),
         Value::Time(t, off) => format!("{t}{off}"),
         Value::LocalTime(t) => t.to_string(),
@@ -85,6 +87,52 @@ fn render(value: &Value, quote: bool) -> String {
         Value::Point2d(p) => format!("{:?}", p),
         Value::Point3d(p) => format!("{:?}", p),
     }
+}
+
+/// `(:Label1:Label2 {props})`. No labels and/or no props collapse cleanly.
+fn render_node(n: &crate::value::Node) -> String {
+    let labels: String = n.labels.iter().map(|l| format!(":{l}")).collect();
+    let mut inner = labels;
+    if !n.properties.is_empty() {
+        if !inner.is_empty() {
+            inner.push(' ');
+        }
+        inner.push_str(&format!("{{{}}}", render_pairs(&n.properties)));
+    }
+    format!("({inner})")
+}
+
+/// `[:TYPE {props}]` — shared by bound and unbound relationships (the standalone
+/// form shows no endpoints; direction is supplied by the path).
+fn rel_body(rel_type: &str, properties: &std::collections::BTreeMap<String, Value>) -> String {
+    let mut inner = format!(":{rel_type}");
+    if !properties.is_empty() {
+        inner.push_str(&format!(" {{{}}}", render_pairs(properties)));
+    }
+    format!("[{inner}]")
+}
+
+/// Reconstruct a path as `(n)-[r]->(n)...` from Bolt's node/rel/sequence form.
+/// The sequence alternates a signed 1-based relationship index (sign = forward
+/// vs backward) and a 0-based node index for the hop's far end.
+fn render_path(p: &crate::value::Path) -> String {
+    let mut out = String::new();
+    if let Some(first) = p.nodes.first() {
+        out.push_str(&render_node(first));
+    }
+    for hop in p.sequence.chunks_exact(2) {
+        let rel_signed = hop[0];
+        let node_idx = hop[1] as usize;
+        let rel = &p.relationships[rel_signed.unsigned_abs() as usize - 1];
+        let body = rel_body(&rel.rel_type, &rel.properties);
+        if rel_signed >= 0 {
+            out.push_str(&format!("-{body}->"));
+        } else {
+            out.push_str(&format!("<-{body}-"));
+        }
+        out.push_str(&render_node(&p.nodes[node_idx]));
+    }
+    out
 }
 
 /// Render `key: value` pairs (unquoted keys, nested values), comma-separated.
@@ -116,6 +164,7 @@ fn quoted(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::value::{Node, Path, Relationship, UnboundRelationship};
 
     #[test]
     fn renders_scalars() {
@@ -178,6 +227,109 @@ mod tests {
 
     fn map(pairs: &[(&str, Value)]) -> Value {
         Value::Map(pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
+    }
+
+    fn props(pairs: &[(&str, Value)]) -> std::collections::BTreeMap<String, Value> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    }
+
+    #[test]
+    fn renders_nodes() {
+        assert_eq!(
+            tabular(&Value::Node(Node {
+                id: 0,
+                labels: vec!["Person".into()],
+                properties: props(&[("name", Value::String("Ada".into())), ("age", Value::Integer(36))]),
+            })),
+            "(:Person {age: 36, name: \"Ada\"})"
+        );
+        assert_eq!(
+            tabular(&Value::Node(Node {
+                id: 1,
+                labels: vec!["A".into(), "B".into()],
+                properties: props(&[]),
+            })),
+            "(:A:B)"
+        );
+        assert_eq!(
+            tabular(&Value::Node(Node {
+                id: 2,
+                labels: vec![],
+                properties: props(&[]),
+            })),
+            "()"
+        );
+    }
+
+    #[test]
+    fn renders_relationships() {
+        assert_eq!(
+            tabular(&Value::Relationship(Relationship {
+                id: 0,
+                start_node_id: 1,
+                end_node_id: 2,
+                rel_type: "KNOWS".into(),
+                properties: props(&[("since", Value::Integer(2020))]),
+            })),
+            "[:KNOWS {since: 2020}]"
+        );
+        assert_eq!(
+            tabular(&Value::UnboundRelationship(UnboundRelationship {
+                id: 0,
+                rel_type: "KNOWS".into(),
+                properties: props(&[]),
+            })),
+            "[:KNOWS]"
+        );
+    }
+
+    #[test]
+    fn renders_paths_with_direction() {
+        let nodes = vec![
+            Node { id: 0, labels: vec!["A".into()], properties: props(&[]) },
+            Node { id: 1, labels: vec!["B".into()], properties: props(&[]) },
+            Node { id: 2, labels: vec!["C".into()], properties: props(&[]) },
+        ];
+        let rels = vec![
+            UnboundRelationship { id: 10, rel_type: "R1".into(), properties: props(&[]) },
+            UnboundRelationship { id: 11, rel_type: "R2".into(), properties: props(&[]) },
+        ];
+        // Forward single hop.
+        assert_eq!(
+            tabular(&Value::Path(Path {
+                nodes: nodes[..2].to_vec(),
+                relationships: rels[..1].to_vec(),
+                sequence: vec![1, 1],
+            })),
+            "(:A)-[:R1]->(:B)"
+        );
+        // Reverse single hop.
+        assert_eq!(
+            tabular(&Value::Path(Path {
+                nodes: nodes[..2].to_vec(),
+                relationships: rels[..1].to_vec(),
+                sequence: vec![-1, 1],
+            })),
+            "(:A)<-[:R1]-(:B)"
+        );
+        // Two hops.
+        assert_eq!(
+            tabular(&Value::Path(Path {
+                nodes: nodes.clone(),
+                relationships: rels.clone(),
+                sequence: vec![1, 1, 2, 2],
+            })),
+            "(:A)-[:R1]->(:B)-[:R2]->(:C)"
+        );
+        // Single-node path.
+        assert_eq!(
+            tabular(&Value::Path(Path {
+                nodes: nodes[..1].to_vec(),
+                relationships: vec![],
+                sequence: vec![],
+            })),
+            "(:A)"
+        );
     }
 
     #[test]

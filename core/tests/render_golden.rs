@@ -3,7 +3,12 @@
 
 mod golden;
 
+use mgconsole_core::value::{Node, Path, Relationship, UnboundRelationship};
 use mgconsole_core::Value;
+
+fn props(pairs: &[(&str, Value)]) -> std::collections::BTreeMap<String, Value> {
+    pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+}
 
 #[test]
 fn scalar_tabular_goldens() {
@@ -83,4 +88,80 @@ fn container_tabular_goldens() {
         ),
     ];
     golden::check_tabular("containers", &cases);
+}
+
+#[test]
+fn graph_tabular_goldens() {
+    let node_a = Node { id: 0, labels: vec!["A".into()], properties: props(&[]) };
+    let node_b = Node { id: 1, labels: vec!["B".into()], properties: props(&[]) };
+    let node_c = Node { id: 2, labels: vec!["C".into()], properties: props(&[]) };
+    let r1 = UnboundRelationship { id: 10, rel_type: "R1".into(), properties: props(&[]) };
+    let r2 = UnboundRelationship { id: 11, rel_type: "R2".into(), properties: props(&[]) };
+
+    let cases: Vec<(&str, Value)> = vec![
+        (
+            "node_labelled_with_props",
+            Value::Node(Node {
+                id: 0,
+                labels: vec!["Person".into()],
+                properties: props(&[
+                    ("name", Value::String("Ada".into())),
+                    ("age", Value::Integer(36)),
+                    ("active", Value::Boolean(true)),
+                ]),
+            }),
+        ),
+        (
+            "node_multi_label",
+            Value::Node(Node { id: 1, labels: vec!["A".into(), "B".into()], properties: props(&[]) }),
+        ),
+        ("node_bare", Value::Node(Node { id: 2, labels: vec![], properties: props(&[]) })),
+        (
+            "relationship",
+            Value::Relationship(Relationship {
+                id: 0,
+                start_node_id: 1,
+                end_node_id: 2,
+                rel_type: "KNOWS".into(),
+                properties: props(&[("since", Value::Integer(2020))]),
+            }),
+        ),
+        (
+            "unbound_relationship",
+            Value::UnboundRelationship(UnboundRelationship {
+                id: 0,
+                rel_type: "KNOWS".into(),
+                properties: props(&[]),
+            }),
+        ),
+        (
+            "path_forward",
+            Value::Path(Path {
+                nodes: vec![node_a.clone(), node_b.clone()],
+                relationships: vec![r1.clone()],
+                sequence: vec![1, 1],
+            }),
+        ),
+        (
+            "path_reverse",
+            Value::Path(Path {
+                nodes: vec![node_a.clone(), node_b.clone()],
+                relationships: vec![r1.clone()],
+                sequence: vec![-1, 1],
+            }),
+        ),
+        (
+            "path_two_hops",
+            Value::Path(Path {
+                nodes: vec![node_a.clone(), node_b, node_c],
+                relationships: vec![r1, r2],
+                sequence: vec![1, 1, 2, 2],
+            }),
+        ),
+        (
+            "path_single_node",
+            Value::Path(Path { nodes: vec![node_a], relationships: vec![], sequence: vec![] }),
+        ),
+    ];
+    golden::check_tabular("graph", &cases);
 }

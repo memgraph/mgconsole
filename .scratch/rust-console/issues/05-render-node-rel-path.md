@@ -1,6 +1,6 @@
 # 05 — Render nodes + relationships + paths (tabular)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -15,11 +15,11 @@ harness from slice 03. Pure function, no database.
 
 ## Acceptance criteria
 
-- [ ] Nodes render with labels and properties
-- [ ] Relationships render with type and properties; unbound relationships render correctly
-- [ ] Paths render as their alternating node/relationship sequence with direction
-- [ ] Property values reuse scalar/list/map rendering from slices 03–04
-- [ ] Golden fixtures cover the above; tests are pure
+- [x] Nodes render with labels and properties
+- [x] Relationships render with type and properties; unbound relationships render correctly
+- [x] Paths render as their alternating node/relationship sequence with direction
+- [x] Property values reuse scalar/list/map rendering from slices 03–04
+- [x] Golden fixtures cover the above; tests are pure
 
 ## Blocked by
 
