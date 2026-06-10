@@ -18,6 +18,7 @@ pub mod session;
 pub mod tabular;
 mod transport;
 pub mod value;
+pub mod workers;
 
 pub use clause::{scan_clauses, Clause};
 pub use error::Error;
@@ -30,3 +31,4 @@ pub use result::{ExecutionInfo, Notification, QueryResult, Record, RecordStream,
 pub use tabular::{render_table, TableOptions, DEFAULT_ROW_CAP};
 pub use session::{ConnectOptions, Credentials, ReconnectNotice, Session};
 pub use value::Value;
+pub use workers::Workers;
