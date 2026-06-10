@@ -202,3 +202,18 @@ fn temporal_tabular_goldens() {
     ];
     golden::check_tabular("temporal", &cases);
 }
+
+#[test]
+fn point_and_enum_tabular_goldens() {
+    use mgconsole_core::value::{Point2d, Point3d};
+
+    let cases: Vec<(&str, Value)> = vec![
+        ("point_2d_cartesian", Value::Point2d(Point2d { srid: 7203, x: 1.0, y: 2.0 })),
+        ("point_2d_wgs84", Value::Point2d(Point2d { srid: 4326, x: 1.0, y: 2.0 })),
+        ("point_3d_cartesian", Value::Point3d(Point3d { srid: 9157, x: 1.0, y: 2.0, z: 3.0 })),
+        ("point_3d_wgs84", Value::Point3d(Point3d { srid: 4979, x: 1.0, y: 2.0, z: 3.0 })),
+        ("point_2d_fractional", Value::Point2d(Point2d { srid: 4326, x: 1.5, y: 2.25 })),
+        ("enum", Value::Enum("Status::Active".into())),
+    ];
+    golden::check_tabular("point_enum", &cases);
+}

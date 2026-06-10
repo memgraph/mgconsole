@@ -1,6 +1,6 @@
 # 07 — Render spatial points + enums (tabular)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -21,10 +21,10 @@ the sentinel-map detection lives in the boundary, not here.
 
 ## Acceptance criteria
 
-- [ ] 2D and 3D points render with their coordinates and coordinate system (SRID)
-- [ ] `Value::Enum` renders as its qualified value, e.g. `Status::Active`
-- [ ] Rendering matches the Core `Value` model (ADR 0003), not `bolt_proto::Value`
-- [ ] Golden fixtures cover the above; tests are pure
+- [x] 2D and 3D points render with their coordinates and coordinate system (SRID)
+- [x] `Value::Enum` renders as its qualified value, e.g. `Status::Active`
+- [x] Rendering matches the Core `Value` model (ADR 0003), not `bolt_proto::Value`
+- [x] Golden fixtures cover the above; tests are pure
 
 ## Blocked by
 

@@ -108,9 +108,16 @@ fn render(value: &Value, quote: bool) -> String {
             dt.format("%Y-%m-%dT%H:%M:%S%.6f%:z"),
             dt.timezone().name()
         ),
-        // Provisional renderings — refined by slice 07.
-        Value::Point2d(p) => format!("{:?}", p),
-        Value::Point3d(p) => format!("{:?}", p),
+        Value::Point2d(p) => {
+            format!("point({{srid: {}, x: {}, y: {}}})", p.srid, float(p.x), float(p.y))
+        }
+        Value::Point3d(p) => format!(
+            "point({{srid: {}, x: {}, y: {}, z: {}}})",
+            p.srid,
+            float(p.x),
+            float(p.y),
+            float(p.z)
+        ),
     }
 }
 
@@ -344,6 +351,23 @@ mod tests {
         assert_eq!(
             tabular(&Value::DateTimeZoned(dtz)),
             "2021-06-15T12:34:56.000000+02:00[Europe/Zagreb]"
+        );
+    }
+
+    #[test]
+    fn renders_points_with_srid() {
+        use crate::value::{Point2d, Point3d};
+        assert_eq!(
+            tabular(&Value::Point2d(Point2d { srid: 7203, x: 1.0, y: 2.0 })),
+            "point({srid: 7203, x: 1.0, y: 2.0})"
+        );
+        assert_eq!(
+            tabular(&Value::Point3d(Point3d { srid: 9157, x: 1.0, y: 2.0, z: 3.0 })),
+            "point({srid: 9157, x: 1.0, y: 2.0, z: 3.0})"
+        );
+        assert_eq!(
+            tabular(&Value::Point2d(Point2d { srid: 4326, x: 1.5, y: 2.25 })),
+            "point({srid: 4326, x: 1.5, y: 2.25})"
         );
     }
 
