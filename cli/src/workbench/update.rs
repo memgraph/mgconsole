@@ -56,20 +56,22 @@ fn on_started(state: &mut WorkbenchState, id: u64, header: Vec<String>) {
     if !is_current(state, id) {
         return;
     }
-    state.result = Some(CurrentResult {
-        header,
-        rows: Vec::new(),
-        summary: None,
-    });
+    state.result = Some(CurrentResult::new(header));
 }
 
-/// A record streamed in: append it to the live result.
+/// A record streamed in: append it to the live result, up to the row-cap
+/// backstop (beyond which rows are dropped and the result marked truncated —
+/// a memory guard, not a usability limit).
 fn on_record(state: &mut WorkbenchState, id: u64, record: Record) {
     if !is_current(state, id) {
         return;
     }
     if let Some(result) = state.result.as_mut() {
-        result.rows.push(record);
+        if result.rows.len() < state.config.row_cap {
+            result.rows.push(record);
+        } else {
+            result.truncated = true;
+        }
     }
 }
 
@@ -183,11 +185,36 @@ fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     }
 }
 
-/// Keys while the results pane has focus. Empty until slice 03 fills the pane;
-/// Tab returns focus to the editor.
+/// Keys while the results pane has focus: navigate the table (the cursor is
+/// clamped to the rows/columns that exist), or Tab back to the editor. Paging
+/// uses the viewport height the draw last cached. Only the visible window is
+/// ever rendered, so navigation over a huge result is cheap.
 fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     if key.code == KeyCode::Tab {
         state.focus = Focus::Editor;
+        return Vec::new();
+    }
+    let page = state.viewport_rows.max(1);
+    if let Some(result) = state.result.as_mut() {
+        let last_row = result.rows.len().saturating_sub(1);
+        let last_col = result.header.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Up => result.selected_row = result.selected_row.saturating_sub(1),
+            KeyCode::Down => result.selected_row = (result.selected_row + 1).min(last_row),
+            KeyCode::PageUp => result.selected_row = result.selected_row.saturating_sub(page),
+            KeyCode::PageDown => result.selected_row = (result.selected_row + page).min(last_row),
+            KeyCode::Home => result.selected_row = 0,
+            KeyCode::End => result.selected_row = last_row,
+            KeyCode::Left => result.selected_col = result.selected_col.saturating_sub(1),
+            KeyCode::Right => result.selected_col = (result.selected_col + 1).min(last_col),
+            _ => {}
+        }
+        // Keep the selected row within the visible window.
+        if result.selected_row < result.scroll {
+            result.scroll = result.selected_row;
+        } else if result.selected_row >= result.scroll + page {
+            result.scroll = result.selected_row + 1 - page;
+        }
     }
     Vec::new()
 }
@@ -481,6 +508,87 @@ mod tests {
         // The next query runs (the session was not lost).
         let next = submit_query(&mut s, "RETURN 1;");
         assert_eq!(next, 1);
+    }
+
+    // --- results table navigation (slice 03) --------------------------------
+
+    /// A workbench focused on a results pane holding `n` two-column rows, with a
+    /// viewport of `viewport` data rows.
+    fn with_result(n: usize, viewport: usize) -> WorkbenchState {
+        let mut s = wb();
+        s.focus = Focus::Results;
+        s.viewport_rows = viewport;
+        s.result = Some(CurrentResult {
+            header: vec!["a".to_string(), "b".to_string()],
+            rows: (0..n).map(|_| one_row()).collect(),
+            ..CurrentResult::default()
+        });
+        s
+    }
+
+    fn press(state: &mut WorkbenchState, code: KeyCode) {
+        update(state, Event::Key(Key::plain(code)));
+    }
+
+    #[test]
+    fn row_navigation_moves_and_clamps_within_bounds() {
+        let mut s = with_result(5, 10);
+        press(&mut s, KeyCode::Down);
+        press(&mut s, KeyCode::Down);
+        assert_eq!(s.result.as_ref().unwrap().selected_row, 2);
+        for _ in 0..10 {
+            press(&mut s, KeyCode::Down);
+        }
+        assert_eq!(s.result.as_ref().unwrap().selected_row, 4, "clamped to last row");
+        for _ in 0..10 {
+            press(&mut s, KeyCode::Up);
+        }
+        assert_eq!(s.result.as_ref().unwrap().selected_row, 0, "clamped to first row");
+    }
+
+    #[test]
+    fn home_and_end_jump_to_first_and_last_row() {
+        let mut s = with_result(50, 10);
+        press(&mut s, KeyCode::End);
+        assert_eq!(s.result.as_ref().unwrap().selected_row, 49);
+        press(&mut s, KeyCode::Home);
+        assert_eq!(s.result.as_ref().unwrap().selected_row, 0);
+    }
+
+    #[test]
+    fn column_navigation_clamps_to_the_header_width() {
+        let mut s = with_result(3, 10);
+        press(&mut s, KeyCode::Right);
+        assert_eq!(s.result.as_ref().unwrap().selected_col, 1);
+        press(&mut s, KeyCode::Right); // only two columns, so clamp at 1
+        assert_eq!(s.result.as_ref().unwrap().selected_col, 1);
+        press(&mut s, KeyCode::Left);
+        assert_eq!(s.result.as_ref().unwrap().selected_col, 0);
+    }
+
+    #[test]
+    fn the_scroll_window_follows_the_selection() {
+        // Viewport of 3 rows over 20: paging down scrolls the window so the
+        // selection stays visible (only the visible window is ever drawn).
+        let mut s = with_result(20, 3);
+        press(&mut s, KeyCode::PageDown);
+        let r = s.result.as_ref().unwrap();
+        assert_eq!(r.selected_row, 3);
+        assert_eq!(r.scroll, 1, "scrolled so row 3 sits at the window bottom");
+    }
+
+    #[test]
+    fn rows_beyond_the_cap_are_dropped_and_the_result_is_marked_truncated() {
+        let mut s = wb();
+        s.config.row_cap = 2;
+        let id = submit_query(&mut s, "MATCH (n) RETURN n;");
+        update(&mut s, Event::QueryStarted { id, header: vec!["n".to_string()] });
+        for _ in 0..5 {
+            update(&mut s, Event::RecordArrived { id, record: one_row() });
+        }
+        let result = s.result.as_ref().unwrap();
+        assert_eq!(result.rows.len(), 2, "held rows capped at the backstop");
+        assert!(result.truncated, "truncation flagged");
     }
 
     #[test]

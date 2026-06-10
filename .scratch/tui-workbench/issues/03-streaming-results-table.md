@@ -1,6 +1,6 @@
 # 03 — Streaming results table widget
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -19,15 +19,21 @@ with no columns (e.g. a write) shows just the summary.
 
 ## Acceptance criteria
 
-- [ ] Rows appear incrementally as they stream in, with a live count; the header
-      stays pinned while scrolling.
-- [ ] Only the visible window is rendered (a result far larger than the old cap
+- [x] Rows appear incrementally as they stream in, with a live count; the header
+      stays pinned while scrolling. (`on_record` appends; count in the pane title;
+      `Table::header` pins the header row.)
+- [x] Only the visible window is rendered (a result far larger than the old cap
       is navigable); a high configurable backstop bounds memory.
-- [ ] Cell text is produced by the Core's existing per-Value renderer; the
+      (`draw_result` renders only `rows[scroll..scroll+viewport]`;
+      `WorkbenchConfig::row_cap` = `DEFAULT_ROW_CAP` 1_000_000.)
+- [x] Cell text is produced by the Core's existing per-Value renderer; the
       whole-result table renderer used by the REPL/serial paths is untouched.
-- [ ] Scrolling, paging, and column navigation work via the keyboard.
-- [ ] Table state (scroll position, row count, visible window) is covered at the
+      (`render::tabular` per cell; `render_table` unchanged.)
+- [x] Scrolling, paging, and column navigation work via the keyboard.
+      (`results_key`: Up/Down/PageUp/PageDown/Home/End/Left/Right, clamped.)
+- [x] Table state (scroll position, row count, visible window) is covered at the
       reducer seam, with a thin ratatui `TestBackend` golden render.
+      (navigation/scroll-follow/row-cap reducer tests + a table render test.)
 
 ## Blocked by
 

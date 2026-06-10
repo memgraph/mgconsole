@@ -54,7 +54,7 @@ pub async fn run(session: Session, config: WorkbenchConfig, color: bool) -> io::
     let mut running: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
-        terminal.draw(|frame| draw::draw(frame, &state))?;
+        terminal.draw(|frame| draw::draw(frame, &mut state))?;
 
         // Multiplex terminal input and query-lifecycle events; never block.
         let event = tokio::select! {

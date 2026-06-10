@@ -24,8 +24,12 @@ pub struct WorkbenchState {
     /// Statements from one multi-statement submit still to run, in order.
     pub pending: VecDeque<String>,
     /// The result currently on screen (rows stream into it); `None` before the
-    /// first query. Slice 03 makes it a navigable table; slice 10 a history stack.
+    /// first query. Slice 10 turns this into a history stack.
     pub result: Option<CurrentResult>,
+    /// The results-table viewport height (data rows) from the last draw, cached so
+    /// the reducer can page and keep the selection visible without re-deriving the
+    /// layout. The draw is the only writer.
+    pub viewport_rows: usize,
     /// The `:param` store bound to every query (populated in slice 16).
     pub params: BTreeMap<String, Value>,
     /// Monotonic id stamped on each query, so its lifecycle events match.
@@ -48,6 +52,7 @@ impl WorkbenchState {
             run: RunState::Idle,
             pending: VecDeque::new(),
             result: None,
+            viewport_rows: 0,
             params: BTreeMap::new(),
             next_id: 0,
             status: StatusLine::default(),
@@ -66,14 +71,35 @@ pub enum RunState {
     Running { id: u64 },
 }
 
-/// The result on screen: a column header and the rows streamed so far. Slice 03
-/// renders this as a navigable table; for now the draw shows a minimal view.
+/// The result on screen: a column header, the rows streamed so far, and the
+/// table-navigation cursor. Rendered as a navigable ratatui table (only the
+/// visible window is drawn, so a huge result stays navigable).
 #[derive(Debug, Default, Clone)]
 pub struct CurrentResult {
     pub header: Vec<String>,
     pub rows: Vec<Record>,
+    /// The selected row, for navigation and cell-expand (slice 08).
+    pub selected_row: usize,
+    /// The selected column.
+    pub selected_col: usize,
+    /// The first visible data row (scroll offset), kept so the selection stays in
+    /// view; the draw renders only `rows[scroll .. scroll + viewport]`.
+    pub scroll: usize,
+    /// Set when the row-cap backstop was hit and further rows were dropped (a
+    /// memory guard, not a usability limit — the cap is high and configurable).
+    pub truncated: bool,
     /// The trailing summary, available once the query completes (slice 18).
     pub summary: Option<Summary>,
+}
+
+impl CurrentResult {
+    /// A fresh result for a query's `header`, cursor at the top-left.
+    pub fn new(header: Vec<String>) -> Self {
+        Self {
+            header,
+            ..Self::default()
+        }
+    }
 }
 
 /// Which pane the keyboard drives. The results pane fills in from slice 03;
@@ -92,6 +118,12 @@ pub struct StatusLine {
     pub message: String,
 }
 
+/// A high backstop on rows held in memory for one result. Unlike the REPL's
+/// `DEFAULT_ROW_CAP` (a usability limit on a buffered table), this is purely a
+/// memory guard: only the visible window is ever drawn, so a result of this size
+/// is still navigable. Configurable; reached only by a pathological result.
+pub const DEFAULT_ROW_CAP: usize = 1_000_000;
+
 /// Frontend-local configuration resolved at startup.
 #[derive(Debug, Clone)]
 pub struct WorkbenchConfig {
@@ -100,6 +132,8 @@ pub struct WorkbenchConfig {
     /// The universal newline key, shown in the status hint (slice 01). Ctrl/Shift
     /// +Enter on capable terminals is negotiated in slice 06.
     pub newline_hint: &'static str,
+    /// The memory backstop on rows held for one result (see [`DEFAULT_ROW_CAP`]).
+    pub row_cap: usize,
 }
 
 impl Default for WorkbenchConfig {
@@ -107,6 +141,7 @@ impl Default for WorkbenchConfig {
         Self {
             editor_percent: 40,
             newline_hint: "Alt+Enter",
+            row_cap: DEFAULT_ROW_CAP,
         }
     }
 }
