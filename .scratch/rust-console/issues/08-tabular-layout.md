@@ -1,6 +1,6 @@
 # 08 — Tabular layout: column sizing, fit-to-screen, row-cap warning
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -16,11 +16,11 @@ buffer-all table crate (e.g. `comfy-table`) for the buffered path.
 
 ## Acceptance criteria
 
-- [ ] Columns are sized to the widest rendered value per column and aligned
-- [ ] Header row renders above the data
-- [ ] fit-to-screen fits the table to a given terminal width
-- [ ] Exceeding the row cap emits a warning and suggests a streaming format, without buffering past the cap unboundedly
-- [ ] Golden fixtures cover sizing, fit-to-screen on/off, and the cap warning
+- [x] Columns are sized to the widest rendered value per column and aligned
+- [x] Header row renders above the data
+- [x] fit-to-screen fits the table to a given terminal width
+- [x] Exceeding the row cap emits a warning and suggests a streaming format, without buffering past the cap unboundedly
+- [x] Golden fixtures cover sizing, fit-to-screen on/off, and the cap warning
 
 ## Blocked by
 

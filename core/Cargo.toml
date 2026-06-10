@@ -14,6 +14,7 @@ bolt-proto = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 thiserror = { workspace = true }
+comfy-table = "7.2.2"
 
 [dev-dependencies]
 testcontainers = "0.27"

@@ -7,7 +7,7 @@
 
 use std::io::Read;
 
-use mgconsole_core::{render, Error, Session};
+use mgconsole_core::{render_table, tabular, Error, Session, TableOptions, Value, DEFAULT_ROW_CAP};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut query = String::new();
@@ -30,9 +30,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runtime.block_on(async {
         let mut session = Session::connect(&host, port).await?;
         let mut result = session.run(query).await?;
-        while let Some(record) = result.records().next().await? {
-            let cells: Vec<String> = record.fields().iter().map(render::tabular).collect();
-            println!("{}", cells.join("\t"));
+        let header = result.header().to_vec();
+        let (records, overflowed) = result.records().collect_capped(DEFAULT_ROW_CAP).await?;
+        let rows: Vec<Vec<Value>> = records.into_iter().map(|r| r.into_fields()).collect();
+
+        println!("{}", render_table(&header, &rows, &TableOptions::default()));
+        if overflowed {
+            eprintln!("{}", tabular::row_cap_warning(DEFAULT_ROW_CAP));
         }
         Ok::<(), Error>(())
     })?;

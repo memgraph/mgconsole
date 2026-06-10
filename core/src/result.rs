@@ -61,6 +61,57 @@ impl RecordStream {
         }
         Ok(out)
     }
+
+    /// Collect up to `cap` Records, returning them and whether more remained.
+    ///
+    /// Used by the tabular path (ADR 0002): it never holds more than `cap`
+    /// Records (one extra is pulled transiently to detect overflow, then
+    /// dropped), so the buffered renderer is bounded even on a huge result.
+    pub async fn collect_capped(&mut self, cap: usize) -> Result<(Vec<Record>, bool), Error> {
+        let mut rows = Vec::new();
+        while rows.len() < cap {
+            match self.next().await? {
+                Some(r) => rows.push(r),
+                None => return Ok((rows, false)),
+            }
+        }
+        let overflowed = self.next().await?.is_some();
+        Ok((rows, overflowed))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stream(n: usize) -> RecordStream {
+        RecordStream::from_buffered(
+            (0..n)
+                .map(|i| Record::new(vec![Value::Integer(i as i64)]))
+                .collect(),
+        )
+    }
+
+    #[tokio::test]
+    async fn collect_capped_under_cap_reports_no_overflow() {
+        let (rows, overflowed) = stream(3).collect_capped(10).await.unwrap();
+        assert_eq!(rows.len(), 3);
+        assert!(!overflowed);
+    }
+
+    #[tokio::test]
+    async fn collect_capped_over_cap_caps_and_flags_overflow() {
+        let (rows, overflowed) = stream(100).collect_capped(10).await.unwrap();
+        assert_eq!(rows.len(), 10);
+        assert!(overflowed);
+    }
+
+    #[tokio::test]
+    async fn collect_capped_exactly_at_cap_is_not_overflow() {
+        let (rows, overflowed) = stream(10).collect_capped(10).await.unwrap();
+        assert_eq!(rows.len(), 10);
+        assert!(!overflowed);
+    }
 }
 
 /// Metadata the server attaches after the records (timing, notifications,
