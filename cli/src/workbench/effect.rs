@@ -107,6 +107,9 @@ pub enum Effect {
     Connect(String),
     /// Switch the active Database within the Session (`:use`, issue 08).
     UseDatabase(String),
+    /// Read a file for `:source` (issue 10); its statements then run as a
+    /// stop-on-error batch.
+    Source(PathBuf),
     /// Leave the workbench and restore the terminal.
     Quit,
 }

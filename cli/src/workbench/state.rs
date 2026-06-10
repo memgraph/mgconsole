@@ -133,6 +133,10 @@ pub struct WorkbenchState {
     /// The active Database once switched with `:use` (issue 08); `None` keeps the
     /// server default. Shown in the status bar; reset by a `:connect` swap.
     pub database: Option<String>,
+    /// Set while running a `:source` batch (issue 10): a failed statement then
+    /// stops the batch (drops the queue) rather than continuing, mirroring the
+    /// REPL's stop-on-first-error.
+    pub source_halt: bool,
     /// Frontend-local configuration.
     pub config: WorkbenchConfig,
 }
@@ -170,6 +174,7 @@ impl WorkbenchState {
             profile: config.profile.clone(),
             endpoint: config.endpoint.clone(),
             database: None,
+            source_halt: false,
             config,
         }
     }

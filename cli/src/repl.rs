@@ -71,6 +71,8 @@ pub enum MetaCommand {
     Use(String),
     /// `:sysinfo` — run the server-status queries and render them (issue 09).
     Sysinfo,
+    /// `:source <file>` — run a file through the normal query path (issue 10).
+    Source(String),
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -114,6 +116,13 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
             }
         }
         "sysinfo" => MetaCommand::Sysinfo,
+        "source" => {
+            if args.is_empty() {
+                MetaCommand::Invalid(":source needs a file path, e.g. ':source setup.cypher'".to_string())
+            } else {
+                MetaCommand::Source(args.to_string())
+            }
+        }
         _ => MetaCommand::Unknown(trimmed.to_string()),
     })
 }
@@ -245,7 +254,8 @@ pub fn help_text() -> &'static str {
      \t:rollback              Roll back the open transaction\n\
      \t:connect <target>      Swap to another server (a profile or host[:port])\n\
      \t:use <db>              Switch the active database (multi-tenancy)\n\
-     \t:sysinfo               Show server version and storage/runtime info"
+     \t:sysinfo               Show server version and storage/runtime info\n\
+     \t:source <file>         Run a file's queries and commands in this session"
 }
 
 /// Documentation pointers, printed by `:docs`. Carried over from `mgconsole`.
@@ -377,8 +387,9 @@ pub struct ReplConfig {
 pub const SYSINFO_QUERIES: &[&str] = &["SHOW VERSION", "SHOW STORAGE INFO"];
 
 /// Run one query and print its rendered table, summary, and any overflow warning
-/// — the shared body of the loop's per-query handling and `:sysinfo`. A query
-/// error is reported without ending the loop.
+/// — the shared body of the loop's per-query handling, `:sysinfo`, and `:source`.
+/// Returns whether the query succeeded (so `:source` can stop on the first
+/// error); a query error is reported either way without ending the loop.
 fn execute_query(
     runner: &mut dyn QueryRunner,
     query: &str,
@@ -387,7 +398,7 @@ fn execute_query(
     row_cap: usize,
     out: &mut dyn Write,
     err: &mut dyn Write,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     match runner.run(query, params, display) {
         Ok(result) => {
             if !result.table.is_empty() {
@@ -397,12 +408,15 @@ fn execute_query(
             if result.overflowed {
                 writeln!(err, "{}", tabular::row_cap_warning(row_cap))?;
             }
+            Ok(true)
         }
         // The Session classifies recoverable vs fatal and recovers internally
         // (slice 14); the REPL reports and keeps going.
-        Err(e) => writeln!(err, "error: {e}")?,
+        Err(e) => {
+            writeln!(err, "error: {e}")?;
+            Ok(false)
+        }
     }
-    Ok(())
 }
 
 /// Whether a handled meta-command should end the loop or carry on.
@@ -503,10 +517,61 @@ fn dispatch_meta(
                 execute_query(runner, query, params, settings.display, row_cap, out, err)?;
             }
         }
+        // `:source` feeds a file through the same line/query path (issue 10), so a
+        // file may carry meta-commands too. A missing file is reported without
+        // ending the session.
+        MetaCommand::Source(path) => match std::fs::read_to_string(&path) {
+            Ok(content) => source_content(&content, runner, settings, params, row_cap, out, err)?,
+            Err(e) => writeln!(err, "error: cannot read source file '{path}': {e}")?,
+        },
         MetaCommand::Invalid(message) => writeln!(err, "error: {message}")?,
         MetaCommand::Unknown(cmd) => writeln!(err, "error: unknown command '{cmd}'")?,
     }
     Ok(MetaFlow::Handled)
+}
+
+/// Run a sourced file's contents through the same line/query path the loop uses
+/// (issue 10): meta-commands are honoured, queries are assembled and run, each is
+/// echoed before its result, and execution stops on the first query error. A
+/// `:quit` inside a source ends sourcing, not the session.
+fn source_content(
+    content: &str,
+    runner: &mut dyn QueryRunner,
+    settings: &mut Settings,
+    params: &mut BTreeMap<String, Value>,
+    row_cap: usize,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> io::Result<()> {
+    let mut assembler = QueryAssembler::new();
+    for line in content.lines() {
+        if !assembler.has_pending() {
+            if let Some(cmd) = meta_command(line) {
+                writeln!(out, "{line}")?;
+                if matches!(cmd, MetaCommand::Quit) {
+                    return Ok(());
+                }
+                dispatch_meta(cmd, runner, settings, params, row_cap, out, err)?;
+                continue;
+            }
+        }
+        for query in assembler.push(&format!("{line}\n")) {
+            writeln!(out, "{query}")?;
+            if !execute_query(runner, &query, params, settings.display, row_cap, out, err)? {
+                writeln!(err, "source stopped at the failed statement")?;
+                return Ok(());
+            }
+        }
+    }
+    // A trailing statement with no terminating `;` still runs.
+    if assembler.has_pending() {
+        let query = assembler.pending().trim().to_string();
+        if !query.is_empty() {
+            writeln!(out, "{query}")?;
+            execute_query(runner, &query, params, settings.display, row_cap, out, err)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn run_loop(
@@ -783,6 +848,57 @@ mod tests {
             SYSINFO_QUERIES.iter().map(ToString::to_string).collect::<Vec<_>>()
         );
         assert_eq!(out.matches("row in set").count(), SYSINFO_QUERIES.len());
+    }
+
+    fn write_temp(name: &str, content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, content).expect("write temp source");
+        path
+    }
+
+    #[test]
+    fn source_runs_queries_in_order_honouring_meta_and_echoing() {
+        let path = write_temp(
+            "mg_source_ok.cypher",
+            ":set display vertical\nRETURN 1;\nRETURN 2;\n",
+        );
+        let (_src, runner, out, _err) = drive(
+            vec![Line::Text(format!(":source {}", path.display()))],
+            vec![Ok(ok_result("a", 1)), Ok(ok_result("b", 1))],
+        );
+        // Both queries ran in order, under the display the sourced :set chose.
+        assert_eq!(runner.seen, vec!["RETURN 1".to_string(), "RETURN 2".to_string()]);
+        assert_eq!(runner.seen_display, vec![DisplayMode::Vertical, DisplayMode::Vertical]);
+        // Each statement was echoed before its result.
+        assert!(out.contains("RETURN 1") && out.contains("RETURN 2"), "echoed: {out}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn source_stops_on_the_first_error() {
+        let path = write_temp("mg_source_err.cypher", "RETURN 1;\nBAD;\nRETURN 3;\n");
+        let boom = Error::Query(mgconsole_core::error::QueryError {
+            code: "Memgraph.ClientError.MemgraphError.SyntaxError".to_string(),
+            message: "bad".to_string(),
+        });
+        let (_src, runner, _out, err) = drive(
+            vec![Line::Text(format!(":source {}", path.display()))],
+            vec![Ok(ok_result("a", 1)), Err(boom)],
+        );
+        // Stopped after the failing statement; the third never ran.
+        assert_eq!(runner.seen, vec!["RETURN 1".to_string(), "BAD".to_string()]);
+        assert!(err.contains("source stopped"), "stop reported: {err}");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn source_of_a_missing_file_reports_a_clear_error() {
+        let (_src, runner, _out, err) = drive(
+            vec![Line::Text(":source /no/such/mg/file.cypher".into())],
+            vec![],
+        );
+        assert!(runner.seen.is_empty(), "nothing ran");
+        assert!(err.contains("cannot read source file"), "clear error: {err}");
     }
 
     #[test]

@@ -95,6 +95,24 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Event::SourceLoaded(result) => match result {
+            Ok(content) => {
+                let statements = split_statements(&content);
+                if statements.is_empty() {
+                    return Vec::new();
+                }
+                // Run as a stop-on-error batch (issue 10).
+                state.source_halt = true;
+                let mut statements = statements.into_iter();
+                let first = statements.next().expect("non-empty checked");
+                state.pending = statements.collect();
+                start_query(state, first)
+            }
+            Err(message) => {
+                state.status.message = format!("error: {message}");
+                Vec::new()
+            }
+        },
         Event::ParamEvaluated { name, value } => {
             match value {
                 Ok(value) => {
@@ -188,6 +206,13 @@ fn on_failed(state: &mut WorkbenchState, id: u64, error: &Error) -> Vec<Effect> 
         return Vec::new();
     }
     state.status.message = format!("error: {error}");
+    // A `:source` batch stops on the first error (issue 10): drop the rest.
+    if state.source_halt {
+        state.source_halt = false;
+        state.pending.clear();
+        state.run = RunState::Idle;
+        return Vec::new();
+    }
     advance(state)
 }
 
@@ -198,6 +223,8 @@ fn advance(state: &mut WorkbenchState) -> Vec<Effect> {
         start_query(state, next)
     } else {
         state.run = RunState::Idle;
+        // The `:source` batch (issue 10) finished cleanly; leave stop-on-error mode.
+        state.source_halt = false;
         Vec::new()
     }
 }
@@ -833,6 +860,18 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             }
             state.editor.clear();
             vec![Effect::UseDatabase(database)]
+        }
+        // `:source` reads a file (issue 10) then runs its statements as a
+        // stop-on-error batch. The file read is an effect; the run happens when
+        // its contents arrive. (Interleaved meta-commands in a sourced file are a
+        // REPL feature; the Workbench sources Cypher statements.)
+        MetaCommand::Source(path) => {
+            if matches!(state.run, RunState::Running { .. }) {
+                state.status.message = "session busy — cancel first".to_string();
+                return Vec::new();
+            }
+            state.editor.clear();
+            vec![Effect::Source(PathBuf::from(path))]
         }
         // `:sysinfo` runs the server-status queries as a normal batch (issue 09):
         // each result lands in the result pane, rendered like any other.
@@ -1879,6 +1918,48 @@ mod tests {
         update(&mut s, Event::Connected(Err("refused".to_string())));
         assert_eq!(s.endpoint, "old:7687", "prior connection display intact");
         assert!(s.status.message.contains("error"));
+    }
+
+    #[test]
+    fn source_reads_the_file_then_runs_a_stop_on_error_batch() {
+        let mut s = wb();
+        type_str(&mut s, ":source setup.cypher");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert_eq!(effects, vec![Effect::Source(PathBuf::from("setup.cypher"))]);
+
+        // The contents arrive and run as a batch with stop-on-error armed.
+        let effects = update(
+            &mut s,
+            Event::SourceLoaded(Ok("RETURN 1;\nRETURN 2;\n".to_string())),
+        );
+        match effects.first() {
+            Some(Effect::RunQuery { query, .. }) => assert_eq!(query, "RETURN 1"),
+            other => panic!("expected RunQuery, got {other:?}"),
+        }
+        assert_eq!(s.pending.len(), 1);
+        assert!(s.source_halt, "stop-on-error armed");
+
+        // A failure halts the batch: the queued statement is dropped.
+        let id = match s.run {
+            RunState::Running { id } => id,
+            RunState::Idle => panic!("should be running"),
+        };
+        let boom = Error::Query(QueryError {
+            code: "X.SyntaxError".to_string(),
+            message: "bad".to_string(),
+        });
+        update(&mut s, Event::QueryFailed { id, error: boom });
+        assert!(s.pending.is_empty(), "rest of the batch dropped on error");
+        assert!(!s.source_halt, "stop-on-error mode cleared");
+        assert!(matches!(s.run, RunState::Idle));
+    }
+
+    #[test]
+    fn source_of_a_missing_file_reports_an_error() {
+        let mut s = wb();
+        update(&mut s, Event::SourceLoaded(Err("cannot read x: nope".to_string())));
+        assert!(s.status.message.contains("error"), "status: {}", s.status.message);
+        assert!(matches!(s.run, RunState::Idle));
     }
 
     #[test]

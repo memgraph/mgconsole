@@ -140,6 +140,9 @@ pub enum Event {
     /// A `:use` switch finished (issue 08): `Ok(db)` is the newly-active Database;
     /// `Err` is a message and the current Database stays active.
     DatabaseChanged(Result<String, String>),
+    /// A `:source` file was read (issue 10): `Ok(contents)` to run as a
+    /// stop-on-error batch, or `Err(message)` for a missing/unreadable file.
+    SourceLoaded(Result<String, String>),
 }
 
 /// The new connection facts after a successful `:connect` swap (issue 07).

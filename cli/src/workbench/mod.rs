@@ -190,6 +190,17 @@ pub async fn run(
                     };
                     let _ = tx.send(Event::Connected(outcome));
                 }
+                Effect::Source(path) => {
+                    // Read the file off the render loop; the reducer runs its
+                    // statements as a stop-on-error batch when the contents arrive
+                    // (issue 10).
+                    let tx = tx.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let result = std::fs::read_to_string(&path)
+                            .map_err(|e| format!("cannot read source file {}: {e}", path.display()));
+                        let _ = tx.send(Event::SourceLoaded(result));
+                    });
+                }
                 Effect::UseDatabase(database) => {
                     // Switch the active Database on the shared Session (issue 08).
                     // On success re-fetch the Schema so completion + the sidebar
