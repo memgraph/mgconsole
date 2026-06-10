@@ -444,8 +444,18 @@ fn draw_plan_table(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool) {
         ])
         .style(style)
     });
+    // Size the operator column to its content (clamped) rather than letting it
+    // grow greedily — so the metric columns sit right beside the tree instead of
+    // floating at the far edge. The unused width stays empty on the right.
+    let op_width = plan
+        .visible()
+        .into_iter()
+        .map(|index| plan_tree_cell(plan, index).chars().count())
+        .max()
+        .unwrap_or(8)
+        .clamp(8, 120) as u16;
     let widths = [
-        Constraint::Min(20),
+        Constraint::Length(op_width),
         Constraint::Length(12),
         Constraint::Length(11),
         Constraint::Length(12),

@@ -57,21 +57,43 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Parse the operator column (column 0) of a plan result into lines, with the
+    /// Parse the operator column (column 0) of a plan result into a tree, with the
     /// per-operator annotation from a `PROFILE` result's extra columns (slice 15).
+    ///
+    /// Memgraph prints the spine flat (each `* Op` line is the child of the one
+    /// above) and draws each second input as an ASCII branch: a `|\` marker, then
+    /// the branch's operators prefixed with `| `. This reconstructs the real tree
+    /// depth from those markers — so both inputs of a `Union`/`Apply`/`Cartesian`
+    /// indent as siblings — and drops the marker rows. `next_depth[level]` is the
+    /// depth the next operator at each branch level takes; a `|\` at level *k*
+    /// starts that branch one below the last spine operator at level *k-1*.
     pub fn parse(rows: &[Record]) -> Self {
-        let lines = rows
-            .iter()
-            .filter_map(|row| {
-                let fields = row.fields();
-                let Some(Value::String(text)) = fields.first() else {
-                    return None;
-                };
-                let mut line = parse_line(text);
-                line.annotation = annotation(fields);
-                Some(line)
-            })
-            .collect();
+        let mut lines = Vec::new();
+        let mut next_depth: Vec<usize> = vec![0];
+        for row in rows {
+            let fields = row.fields();
+            let Some(Value::String(text)) = fields.first() else {
+                continue;
+            };
+            match classify(text) {
+                (level, ParsedLine::Marker) => {
+                    // A branch at `level` hangs off the last operator at `level-1`,
+                    // so its first operator sits one deeper than that parent.
+                    let parent_next = next_depth.get(level.saturating_sub(1)).copied().unwrap_or(0);
+                    set_depth(&mut next_depth, level, parent_next);
+                }
+                (level, ParsedLine::Operator(operator)) => {
+                    let depth = next_depth.get(level).copied().unwrap_or(0);
+                    set_depth(&mut next_depth, level, depth + 1);
+                    lines.push(PlanLine {
+                        depth,
+                        operator,
+                        collapsed: false,
+                        annotation: annotation(fields),
+                    });
+                }
+            }
+        }
         Self { lines, selected: 0 }
     }
 
@@ -142,17 +164,43 @@ impl Plan {
     }
 }
 
-/// Parse one operator string into a [`PlanLine`]: leading spaces are the depth,
-/// the rest (after the `*` bullet) is the operator text.
-fn parse_line(text: &str) -> PlanLine {
-    let depth = text.chars().take_while(|c| *c == ' ').count();
-    let operator = text.trim_start().trim_start_matches('*').trim().to_string();
-    PlanLine {
-        depth,
-        operator,
-        collapsed: false,
-        annotation: None,
+/// One classified plan-text line: an operator, or a `|\` branch marker (which
+/// carries no operator and is dropped after it has set the branch depth).
+enum ParsedLine {
+    Operator(String),
+    Marker,
+}
+
+/// Classify one operator-column line into its branch level (the number of leading
+/// `|` markers) and its kind. `* Op` is an operator (the `*` bullet stripped);
+/// `|\` is a branch marker. Spaces between/around the markers are ignored.
+fn classify(text: &str) -> (usize, ParsedLine) {
+    let mut rest = text;
+    let mut level = 0;
+    loop {
+        rest = rest.trim_start();
+        match rest.strip_prefix('|') {
+            Some(after) => {
+                level += 1;
+                rest = after;
+            }
+            None => break,
+        }
     }
+    let rest = rest.trim_start();
+    if rest.starts_with('\\') {
+        (level, ParsedLine::Marker)
+    } else {
+        (level, ParsedLine::Operator(rest.trim_start_matches('*').trim().to_string()))
+    }
+}
+
+/// Set `depths[index]`, growing the vector with zeros as needed.
+fn set_depth(depths: &mut Vec<usize>, index: usize, value: usize) {
+    if index >= depths.len() {
+        depths.resize(index + 1, 0);
+    }
+    depths[index] = value;
 }
 
 /// The per-operator metrics from a `PROFILE` row's extra columns (`ACTUAL HITS`,
@@ -197,13 +245,55 @@ mod tests {
     }
 
     #[test]
-    fn parses_operator_lines_with_depth() {
+    fn parses_a_flat_spine_into_a_parent_child_chain() {
+        // Memgraph prints the spine flat; each operator is the child of the one
+        // above, so consecutive lines deepen by one.
         let rows = vec![plan_row(" * Produce {n}"), plan_row(" * ScanAll (n)")];
         let plan = Plan::parse(&rows);
         assert_eq!(plan.lines.len(), 2);
         assert_eq!(plan.lines[0].operator, "Produce {n}");
-        assert_eq!(plan.lines[0].depth, 1);
+        assert_eq!(plan.lines[0].depth, 0);
+        assert_eq!(plan.lines[1].operator, "ScanAll (n)");
+        assert_eq!(plan.lines[1].depth, 1, "the next operator is a child");
+        assert!(plan.has_children(0), "Produce has ScanAll as a child");
         assert!(plan.lines[0].annotation.is_none(), "EXPLAIN has no annotation");
+    }
+
+    #[test]
+    fn reconstructs_branches_from_memgraph_pipe_markers() {
+        // A Union: the `|\` marker introduces the right input; both inputs of the
+        // Union must indent as siblings one below it (not as a flat list).
+        let rows = vec![
+            plan_row(" * Distinct"),
+            plan_row(" * Union {kind, c : kind, c}"),
+            plan_row(" |\\"),
+            plan_row(" | * Produce {kind, c}"),
+            plan_row(" | * Unwind"),
+            plan_row(" | * Once"),
+            plan_row(" * Produce {kind, c}"),
+            plan_row(" * Aggregate {COUNT-1} {n}"),
+            plan_row(" * ScanAll (n)"),
+            plan_row(" * Once"),
+        ];
+        let plan = Plan::parse(&rows);
+        // The `|\` marker row is dropped.
+        assert_eq!(plan.lines.len(), 9, "marker row dropped");
+        let depth = |op: &str| plan.lines.iter().find(|l| l.operator == op).unwrap().depth;
+        assert_eq!(depth("Distinct"), 0);
+        assert_eq!(depth("Union {kind, c : kind, c}"), 1);
+        // Both of the Union's inputs are at depth 2 — siblings under the Union.
+        let produces: Vec<usize> = plan
+            .lines
+            .iter()
+            .filter(|l| l.operator == "Produce {kind, c}")
+            .map(|l| l.depth)
+            .collect();
+        assert_eq!(produces, vec![2, 2], "both Union inputs indent as siblings");
+        // The branch deepens normally: Produce(2) → Unwind(3) → Once(4).
+        assert_eq!(depth("Unwind"), 3);
+        // The main spine continues: Produce(2) → Aggregate(3) → ScanAll(4).
+        assert_eq!(depth("Aggregate {COUNT-1} {n}"), 3);
+        assert_eq!(depth("ScanAll (n)"), 4);
     }
 
     #[test]
