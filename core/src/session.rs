@@ -92,6 +92,12 @@ pub struct ConnectOptions {
     pub credentials: Option<Credentials>,
     /// Encrypt the Bolt stream with TLS (rustls; ADR 0007).
     pub use_tls: bool,
+    /// Start the Session in read-only mode: every transaction runs with Bolt
+    /// access mode READ, so the server rejects writes (the safety guard of
+    /// CONTEXT.md "Read-only mode"). Set at connect time / via a profile; can be
+    /// turned on later with [`Session::set_read_only`] but the Frontend refuses to
+    /// turn it off at runtime.
+    pub read_only: bool,
 }
 
 /// One reconnect attempt the Session is about to make after a fatal connection
@@ -119,6 +125,10 @@ pub struct Session {
     /// Optional Frontend hook notified before each reconnect attempt (ADR 0002:
     /// the Core stays Frontend-agnostic; surfacing is the Frontend's choice).
     on_reconnect: Option<ReconnectObserver>,
+    /// Whether every transaction runs with Bolt access mode READ (the server
+    /// rejects writes). Carried across reconnect so a dropped read-only guard
+    /// re-establishes read-only.
+    read_only: bool,
 }
 
 impl Session {
@@ -145,7 +155,20 @@ impl Session {
             options: options.clone(),
             last: None,
             on_reconnect: None,
+            read_only: options.read_only,
         })
+    }
+
+    /// Turn read-only mode on or off (CONTEXT.md "Read-only mode"). The Core
+    /// allows either direction; the asymmetry "on at runtime, off only at connect"
+    /// is a Frontend policy, not a Core invariant. Takes effect on the next query.
+    pub fn set_read_only(&mut self, on: bool) {
+        self.read_only = on;
+    }
+
+    /// Whether the Session is currently in read-only mode.
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Register a hook called once before each reconnect attempt, so a Frontend
@@ -186,7 +209,16 @@ impl Session {
 
         let guard = Arc::new(ResultGuard::default());
         self.last = Some(guard.clone());
-        let records = RecordStream::lazy(self.conn.clone(), DEFAULT_BATCH_SIZE, summary, guard);
+        // In read-only mode the query ran inside an explicit `BEGIN {mode: r}`
+        // transaction (Memgraph ignores access mode on auto-commit RUN, but
+        // enforces it on a transaction), so the stream must COMMIT it once drained.
+        let records = RecordStream::lazy(
+            self.conn.clone(),
+            DEFAULT_BATCH_SIZE,
+            summary,
+            guard,
+            self.read_only,
+        );
         Ok(QueryResult::new(header, records))
     }
 
@@ -199,6 +231,27 @@ impl Session {
         params: Option<Params>,
     ) -> Result<(Vec<String>, Summary), Error> {
         let mut client = self.conn.lock().await;
+        // In read-only mode, open an explicit transaction with Bolt access mode
+        // READ before the query: Memgraph ignores `mode` on an auto-commit RUN but
+        // enforces it on a transaction, so the server rejects writes — the Clause
+        // scanner is never consulted. The stream COMMITs it once drained.
+        if self.read_only {
+            let begin = client
+                .begin(Some(Metadata::from_iter([("mode", "r")])))
+                .await
+                .map_err(Error::connection)?;
+            match begin {
+                Message::Success(_) => {}
+                Message::Failure(f) => {
+                    let error = proto::query_error(f.metadata());
+                    client.reset().await.map_err(Error::connection)?;
+                    return Err(Error::Query(error));
+                }
+                other => {
+                    return Err(Error::Protocol(format!("unexpected BEGIN reply: {other:?}")))
+                }
+            }
+        }
         let reply = client
             .run(query, params, None)
             .await

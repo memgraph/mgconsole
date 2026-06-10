@@ -85,6 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             password,
         }),
         use_tls: connection.use_ssl,
+        read_only: connection.readonly,
     };
     let endpoint = Endpoint::new(connection.host.clone(), connection.port);
 
@@ -198,6 +199,10 @@ fn run_interactive(
     };
     // History resolution is shared by both interactive Frontends (slice 17).
     let history = open_history(cli);
+    // The Session may already be read-only (connect-time flag/profile); seed the
+    // marker state from it. The REPL shares a flag with its prompt so a runtime
+    // `:set readonly on` updates the prompt too.
+    let read_only = session.is_read_only();
     match select_frontend(cli.plain, true, supports_tui) {
         Frontend::Workbench => {
             #[cfg(feature = "tui")]
@@ -206,6 +211,7 @@ fn run_interactive(
                     verbose: cli.verbose_execution_info,
                     settings,
                     profile,
+                    read_only,
                     ..workbench::WorkbenchConfig::default()
                 };
                 runtime.block_on(workbench::run(session, config, colorize, history))?;
@@ -214,17 +220,20 @@ fn run_interactive(
             unreachable!("the resolver cannot pick the workbench without the tui feature");
         }
         Frontend::Repl => {
+            let read_only_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(read_only));
             let mut runner = SessionRunner {
                 runtime,
                 session,
                 table_options,
                 row_cap: DEFAULT_ROW_CAP,
+                read_only: read_only_flag.clone(),
             };
             let config = ReplConfig {
                 row_cap: DEFAULT_ROW_CAP,
                 settings,
             };
-            let mut source = RustylineSource::new(history, colorize, repl_prompt(profile.as_deref()))?;
+            let mut source =
+                RustylineSource::new(history, colorize, profile.clone(), read_only_flag)?;
             repl::run_loop(&mut source, &mut runner, out, err, &config)?;
         }
         Frontend::Piped => {
@@ -392,14 +401,21 @@ fn explicit_flags(matches: &clap::ArgMatches) -> ExplicitFlags {
     }
 }
 
-/// The REPL primary prompt, naming the active profile when one is selected so the
-/// user always knows which connection they are on (issue 03). With no profile the
-/// prompt is the plain `memgraph> `.
-fn repl_prompt(profile: Option<&str>) -> String {
-    match profile {
-        Some(name) => format!("memgraph ({name})> "),
-        None => "memgraph> ".to_string(),
+/// The REPL primary prompt: names the active profile when one is selected (issue
+/// 03) and shows a `[read-only]` marker while the guard is active (issue 04), so
+/// the user always knows which connection they are on and whether writes are
+/// blocked. With neither, the prompt is the plain `memgraph> `.
+fn repl_prompt(profile: Option<&str>, read_only: bool) -> String {
+    use std::fmt::Write as _;
+    let mut prompt = String::from("memgraph");
+    if let Some(name) = profile {
+        write!(prompt, " ({name})").unwrap();
     }
+    if read_only {
+        prompt.push_str(" [read-only]");
+    }
+    prompt.push_str("> ");
+    prompt
 }
 
 /// rustyline helper for the REPL: multiline validation (slice 16), static
@@ -466,16 +482,19 @@ impl RustylineHighlighter for MgHelper {
 struct RustylineSource {
     editor: Editor<MgHelper, rustyline::history::DefaultHistory>,
     history: Option<HistoryFile>,
-    /// The primary prompt, carrying the active profile name when one is selected
-    /// (issue 03), so the user always sees which connection they are on.
-    prompt: String,
+    /// The active profile name (issue 03), shown in the primary prompt.
+    profile: Option<String>,
+    /// Shared read-only flag (issue 04): the `SessionRunner` flips it on a runtime
+    /// `:set readonly on`, so the prompt's `[read-only]` marker tracks it live.
+    read_only: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl RustylineSource {
     fn new(
         history: Option<HistoryFile>,
         colorize: bool,
-        prompt: String,
+        profile: Option<String>,
+        read_only: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> rustyline::Result<Self> {
         let mut editor = Editor::new()?;
         editor.set_helper(Some(MgHelper::new(colorize)));
@@ -485,14 +504,19 @@ impl RustylineSource {
         Ok(Self {
             editor,
             history,
-            prompt,
+            profile,
+            read_only,
         })
     }
 }
 
 impl LineSource for RustylineSource {
     fn read(&mut self, continued: bool) -> io::Result<Line> {
-        let prompt = if continued { "      -> " } else { &self.prompt };
+        let primary = repl_prompt(
+            self.profile.as_deref(),
+            self.read_only.load(std::sync::atomic::Ordering::Relaxed),
+        );
+        let prompt = if continued { "      -> " } else { &primary };
         match self.editor.readline(prompt) {
             Ok(line) => {
                 if let Some(history) = &self.history {
@@ -516,6 +540,8 @@ struct SessionRunner<'a> {
     session: Session,
     table_options: TableOptions,
     row_cap: usize,
+    /// Shared read-only flag, mirrored to the prompt source (issue 04).
+    read_only: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl QueryRunner for SessionRunner<'_> {
@@ -584,6 +610,16 @@ impl QueryRunner for SessionRunner<'_> {
                 .unwrap_or(Value::Null))
         })
     }
+
+    fn set_read_only(&mut self, on: bool) {
+        self.session.set_read_only(on);
+        self.read_only
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn is_read_only(&self) -> bool {
+        self.session.is_read_only()
+    }
 }
 
 #[cfg(test)]
@@ -597,9 +633,14 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_names_the_active_profile() {
-        assert_eq!(repl_prompt(None), "memgraph> ");
-        assert_eq!(repl_prompt(Some("prod")), "memgraph (prod)> ");
+    fn the_prompt_names_the_active_profile_and_read_only_marker() {
+        assert_eq!(repl_prompt(None, false), "memgraph> ");
+        assert_eq!(repl_prompt(Some("prod"), false), "memgraph (prod)> ");
+        assert_eq!(repl_prompt(None, true), "memgraph [read-only]> ");
+        assert_eq!(
+            repl_prompt(Some("prod"), true),
+            "memgraph (prod) [read-only]> "
+        );
     }
 
     #[test]

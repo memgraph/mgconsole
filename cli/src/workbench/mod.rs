@@ -141,6 +141,12 @@ pub async fn run(
                         file.record(&mut history_store, &line);
                     }
                 }
+                Effect::SetReadOnly(on) => {
+                    // Apply to the shared Session so the next query carries Bolt
+                    // access mode READ (issue 04). The reducer only ever emits
+                    // `true`; the off direction is refused at runtime.
+                    session.lock().await.set_read_only(on);
+                }
                 Effect::Export {
                     format,
                     path,

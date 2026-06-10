@@ -105,6 +105,12 @@ pub struct Cli {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub use_ssl: bool,
 
+    /// Start in read-only mode: every transaction runs with Bolt access mode
+    /// READ, so the server rejects writes. Can be turned on later with
+    /// `:set readonly on`, but turned off only at connect time or via a profile.
+    #[arg(long)]
+    pub read_only: bool,
+
     /// Output format for query results.
     #[arg(long, value_enum, default_value_t = OutputFormat::Tabular)]
     pub output_format: OutputFormat,
@@ -246,7 +252,9 @@ pub fn resolve_connection(
             profile.and_then(|p| p.password.clone()),
         ),
         use_ssl: pick(explicit.use_ssl, cli.use_ssl, profile.and_then(|p| p.use_ssl)),
-        readonly: profile.and_then(|p| p.readonly).unwrap_or(false),
+        // `--read-only` only ever turns the guard *on*; with the flag unset the
+        // profile decides (it can also turn it off, the connect-time exception).
+        readonly: cli.read_only || profile.and_then(|p| p.readonly).unwrap_or(false),
     }
 }
 
@@ -304,6 +312,7 @@ mod tests {
         assert_eq!(cli.username, "");
         assert_eq!(cli.password, "");
         assert!(cli.use_ssl);
+        assert!(!cli.read_only, "read-only is opt-in");
         assert_eq!(cli.output_format, OutputFormat::Tabular);
         assert!(!cli.fit_to_screen);
         assert_eq!(cli.display, None, "no --display flag: the built-in default applies");
@@ -431,6 +440,39 @@ mod tests {
         );
         assert_eq!(overridden.host, "localhost", "explicit flag beats profile");
         assert_eq!(overridden.port, 7688, "unset flag still takes the profile");
+    }
+
+    #[test]
+    fn read_only_comes_from_the_flag_or_the_profile() {
+        // The flag forces it on.
+        let conn = resolve_connection(
+            &parse(&["--read-only"]).expect("flag"),
+            &ExplicitFlags::default(),
+            None,
+        );
+        assert!(conn.readonly);
+        // A profile can pin it on with no flag...
+        let ro_profile = Profile {
+            readonly: Some(true),
+            ..Profile::default()
+        };
+        assert!(resolve_connection(
+            &parse(&[]).expect("bare"),
+            &ExplicitFlags::default(),
+            Some(&ro_profile)
+        )
+        .readonly);
+        // ...or leave it off.
+        let rw_profile = Profile {
+            readonly: Some(false),
+            ..Profile::default()
+        };
+        assert!(!resolve_connection(
+            &parse(&[]).expect("bare"),
+            &ExplicitFlags::default(),
+            Some(&rw_profile)
+        )
+        .readonly);
     }
 
     #[test]

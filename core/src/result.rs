@@ -91,6 +91,11 @@ struct Lazy {
     batch: VecDeque<Record>,
     more: bool,
     batch_size: i64,
+    /// When set (read-only mode, issue 04), the query runs inside an explicit
+    /// `BEGIN {mode: r}` transaction the Session opened; the stream must `COMMIT`
+    /// it once the records are drained or discarded, so the connection returns to
+    /// Ready for the next query.
+    commit_on_done: bool,
 }
 
 impl RecordStream {
@@ -108,6 +113,7 @@ impl RecordStream {
         batch_size: i64,
         summary: Summary,
         guard: Arc<ResultGuard>,
+        commit_on_done: bool,
     ) -> Self {
         Self {
             inner: Inner::Lazy(Lazy {
@@ -115,6 +121,7 @@ impl RecordStream {
                 batch: VecDeque::new(),
                 more: true,
                 batch_size,
+                commit_on_done,
             }),
             summary,
             guard,
@@ -211,6 +218,7 @@ impl Lazy {
                 self.more = proto::has_more(s.metadata());
                 if !self.more {
                     summary.absorb_terminal(s.metadata());
+                    self.commit_if_wrapped().await?;
                 }
             }
             Message::Failure(f) => {
@@ -252,7 +260,27 @@ impl Lazy {
                 )))
             }
         }
+        self.commit_if_wrapped().await?;
         Ok(())
+    }
+
+    /// Commit the read transaction the Session opened for a read-only query (issue
+    /// 04), once the records have drained or been discarded. A no-op outside
+    /// read-only mode. Idempotent in practice: only the terminal pull/discard
+    /// reaches here, and each stream wraps at most one transaction.
+    async fn commit_if_wrapped(&mut self) -> Result<(), Error> {
+        if !self.commit_on_done {
+            return Ok(());
+        }
+        // Commit at most once: clear the flag so a later discard after a drained
+        // stream does not try to commit an already-closed transaction.
+        self.commit_on_done = false;
+        let mut client = self.conn.lock().await;
+        match client.commit().await.map_err(Error::connection)? {
+            Message::Success(_) => Ok(()),
+            Message::Failure(f) => Err(Error::Query(proto::query_error(f.metadata()))),
+            other => Err(Error::Protocol(format!("unexpected COMMIT reply: {other:?}"))),
+        }
     }
 }
 

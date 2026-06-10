@@ -720,9 +720,32 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
         }
         // `:set` shares the REPL's Settings spine (issue 01): list every setting,
         // or change one and report it — kept distinct from the `:param` store.
+        // `readonly` (issue 04) is special: a Session guard, turned off only at
+        // connect time.
         MetaCommand::ListSettings => {
-            state.status.message = state.settings.list().replace('\n', " · ");
+            state.status.message = format!(
+                "{} · readonly = {}",
+                state.settings.list().replace('\n', " · "),
+                crate::repl::on_off(state.read_only)
+            );
             state.editor.clear();
+            Vec::new()
+        }
+        MetaCommand::SetSetting { name, value } if name == "readonly" => {
+            state.editor.clear();
+            match crate::repl::parse_on_off(&value) {
+                Ok(true) => {
+                    state.read_only = true;
+                    state.status.message = "readonly = on".to_string();
+                    return vec![Effect::SetReadOnly(true)];
+                }
+                Ok(false) => {
+                    state.status.message =
+                        "error: read-only can only be turned off at connect time, not at runtime"
+                            .to_string();
+                }
+                Err(message) => state.status.message = format!("error: {message}"),
+            }
             Vec::new()
         }
         MetaCommand::SetSetting { name, value } => {
@@ -1657,6 +1680,35 @@ mod tests {
         type_str(&mut s, ":set display vertical");
         update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
         assert!(s.params.is_empty(), ":set must not populate the :param store");
+    }
+
+    #[test]
+    fn set_readonly_on_marks_state_and_emits_the_effect() {
+        let mut s = wb();
+        type_str(&mut s, ":set readonly on");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(s.read_only, "state marked read-only");
+        assert_eq!(effects, vec![Effect::SetReadOnly(true)], "session told to apply it");
+        assert_eq!(s.editor.buffer(), "", "command consumed");
+    }
+
+    #[test]
+    fn set_readonly_off_at_runtime_is_refused() {
+        let mut s = wb();
+        s.read_only = true;
+        type_str(&mut s, ":set readonly off");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(s.read_only, "still read-only — runtime off is refused");
+        assert!(effects.is_empty(), "no effect on a refused change");
+        assert!(s.status.message.contains("connect time"), "status: {}", s.status.message);
+    }
+
+    #[test]
+    fn bare_set_lists_readonly_in_the_status() {
+        let mut s = wb();
+        type_str(&mut s, ":set");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(s.status.message.contains("readonly = off"), "status: {}", s.status.message);
     }
 
     // --- persisted history recall (slice 17) --------------------------------

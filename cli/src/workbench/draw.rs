@@ -466,13 +466,19 @@ fn status_text(state: &WorkbenchState) -> String {
     } else {
         state.status.message.clone()
     };
-    // The active profile is a stable prefix so it survives transient messages.
-    let prefix = state
-        .config
-        .profile
-        .as_ref()
-        .map(|name| format!("[{name}]"))
-        .unwrap_or_default();
+    // Stable prefixes that survive transient messages: the active profile (issue
+    // 03) and the read-only guard (issue 04).
+    let mut prefix = String::new();
+    if let Some(name) = &state.config.profile {
+        use std::fmt::Write as _;
+        write!(prefix, "[{name}]").unwrap();
+    }
+    if state.read_only {
+        if !prefix.is_empty() {
+            prefix.push(' ');
+        }
+        prefix.push_str("[read-only]");
+    }
     [prefix, message, hints]
         .into_iter()
         .filter(|part| !part.is_empty())
@@ -528,6 +534,17 @@ mod tests {
         let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
         let rendered = render(&mut state);
         assert!(!rendered.contains('['), "no stale profile marker: {rendered}");
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_read_only_marker() {
+        let config = WorkbenchConfig {
+            read_only: true,
+            ..WorkbenchConfig::default()
+        };
+        let mut state = WorkbenchState::new(config, true);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("[read-only]"), "status bar marks read-only");
     }
 
     #[test]

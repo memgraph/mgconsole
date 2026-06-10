@@ -115,6 +115,10 @@ pub struct WorkbenchState {
     ///
     /// [`params`]: Self::params
     pub settings: Settings,
+    /// Whether the Session is read-only (issue 04): seeded from config, turned on
+    /// by `:set readonly on`. Drives the `[read-only]` status-bar marker; the
+    /// off-at-runtime refusal is enforced by the reducer.
+    pub read_only: bool,
     /// Frontend-local configuration.
     pub config: WorkbenchConfig,
 }
@@ -147,6 +151,7 @@ impl WorkbenchState {
             status: StatusLine::default(),
             color,
             settings: config.settings.clone(),
+            read_only: config.read_only,
             config,
         }
     }
@@ -268,6 +273,8 @@ pub struct WorkbenchConfig {
     /// The active connection profile's name (issue 03), shown in the status bar so
     /// the user always knows which connection they are on. `None` = no profile.
     pub profile: Option<String>,
+    /// Whether the Session started read-only (issue 04), seeding the marker state.
+    pub read_only: bool,
 }
 
 impl Default for WorkbenchConfig {
@@ -279,6 +286,7 @@ impl Default for WorkbenchConfig {
             verbose: false,
             settings: Settings::default(),
             profile: None,
+            read_only: false,
         }
     }
 }

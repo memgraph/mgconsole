@@ -132,6 +132,25 @@ fn parse_set_setting(args: &str) -> MetaCommand {
     }
 }
 
+/// Parse an on/off toggle value (`:set readonly on`). Accepts the common
+/// spellings; anything else is a clear error rather than a silent default.
+pub fn parse_on_off(value: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" => Ok(true),
+        "off" | "false" | "no" | "0" => Ok(false),
+        other => Err(format!("expected on or off, got '{other}'")),
+    }
+}
+
+/// Render a toggle as `on`/`off` for listings and confirmations.
+pub fn on_off(value: bool) -> &'static str {
+    if value {
+        "on"
+    } else {
+        "off"
+    }
+}
+
 /// Split a string into its first whitespace-delimited word and the trimmed
 /// remainder. Both are `""` when absent.
 fn split_first_word(s: &str) -> (&str, &str) {
@@ -185,7 +204,8 @@ pub fn help_text() -> &'static str {
      \t:params                List all currently set query parameters\n\
      \t:params clear          Remove all query parameters\n\
      \t:set                   List all console settings and their values\n\
-     \t:set <name> <value>    Change a console setting (e.g. ':set display vertical')"
+     \t:set <name> <value>    Change a console setting (e.g. ':set display vertical')\n\
+     \t:set readonly on       Guard the session read-only (off only at connect time)"
 }
 
 /// Documentation pointers, printed by `:docs`. Carried over from `mgconsole`.
@@ -261,6 +281,15 @@ pub trait QueryRunner {
     /// scope, returning the resulting Value to store. Implemented by running
     /// `RETURN <expr>` and taking the single value back.
     fn evaluate(&mut self, expr: &str, params: &BTreeMap<String, Value>) -> Result<Value, Error>;
+
+    /// Turn read-only mode on or off on the underlying Session (issue 04). The
+    /// loop enforces the asymmetry (off refused at runtime); the runner only
+    /// applies the change so the next query carries Bolt access mode READ.
+    fn set_read_only(&mut self, on: bool);
+
+    /// Whether the Session is currently read-only, for the `:set` listing and the
+    /// prompt marker.
+    fn is_read_only(&self) -> bool;
 }
 
 /// Frontend-local REPL configuration.
@@ -339,10 +368,30 @@ pub fn run_loop(
                 }
                 Some(MetaCommand::ListSettings) => {
                     writeln!(out, "{}", settings.list())?;
+                    // `readonly` is a Session guard, not a render setting, but it
+                    // lists alongside for completeness (issue 04).
+                    writeln!(out, "readonly = {}", on_off(runner.is_read_only()))?;
                     continue;
                 }
-                // A bad name or value is reported (the session survives it) and
-                // the store is left untouched; never touches the `:param` store.
+                // `readonly` is special: it lives on the Session and can only be
+                // turned off at connect time / via a profile (issue 04). Every
+                // other setting goes through the Settings store, kept distinct
+                // from `:param`. A bad name/value is reported; the session survives.
+                Some(MetaCommand::SetSetting { name, value }) if name == "readonly" => {
+                    match parse_on_off(&value) {
+                        Ok(true) => {
+                            runner.set_read_only(true);
+                            writeln!(out, "readonly = on")?;
+                        }
+                        Ok(false) => writeln!(
+                            err,
+                            "error: read-only can only be turned off at connect time \
+                             (--read-only / a profile), not at runtime"
+                        )?,
+                        Err(message) => writeln!(err, "error: {message}")?,
+                    }
+                    continue;
+                }
                 Some(MetaCommand::SetSetting { name, value }) => {
                     match settings.set(&name, &value) {
                         Ok(()) => writeln!(out, "{name} = {}", settings.get(&name).unwrap_or(value))?,
@@ -607,6 +656,7 @@ mod tests {
         results: VecDeque<Result<Rendered, Error>>,
         eval_seen: Vec<(String, BTreeMap<String, Value>)>,
         eval_results: VecDeque<Result<Value, Error>>,
+        read_only: bool,
     }
 
     impl ScriptedRunner {
@@ -618,6 +668,7 @@ mod tests {
                 results: results.into(),
                 eval_seen: Vec::new(),
                 eval_results: VecDeque::new(),
+                read_only: false,
             }
         }
 
@@ -650,6 +701,14 @@ mod tests {
         ) -> Result<Value, Error> {
             self.eval_seen.push((expr.to_string(), params.clone()));
             self.eval_results.pop_front().unwrap_or(Ok(Value::Null))
+        }
+
+        fn set_read_only(&mut self, on: bool) {
+            self.read_only = on;
+        }
+
+        fn is_read_only(&self) -> bool {
+            self.read_only
         }
     }
 
@@ -932,6 +991,35 @@ mod tests {
         // The session survived: the following query still ran (with the default).
         assert_eq!(runner.seen, vec!["RETURN 1".to_string()]);
         assert_eq!(runner.seen_display, vec![DisplayMode::Auto]);
+    }
+
+    #[test]
+    fn set_readonly_on_turns_the_session_read_only() {
+        let (_src, runner, out, _err) = drive(
+            vec![Line::Text(":set readonly on".into())],
+            vec![],
+        );
+        assert!(runner.is_read_only(), "the runner was switched read-only");
+        assert!(out.contains("readonly = on"), "confirmed: {out}");
+    }
+
+    #[test]
+    fn set_readonly_off_at_runtime_is_refused() {
+        // Start read-only, then try to clear it at runtime.
+        let mut runner = ScriptedRunner::returning(vec![]);
+        runner.set_read_only(true);
+        let (_src, runner, _out, err) = drive_with(
+            vec![Line::Text(":set readonly off".into())],
+            runner,
+        );
+        assert!(runner.is_read_only(), "still read-only — runtime off is refused");
+        assert!(err.contains("connect time"), "explains the asymmetry: {err}");
+    }
+
+    #[test]
+    fn bare_set_lists_readonly_state() {
+        let (_src, _runner, out, _err) = drive(vec![Line::Text(":set".into())], vec![]);
+        assert!(out.contains("readonly = off"), "listing includes readonly: {out}");
     }
 
     #[test]

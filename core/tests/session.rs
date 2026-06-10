@@ -438,3 +438,47 @@ async fn discard_after_partial_read_leaves_connection_usable() {
     let rec = next.records().next().await.expect("ok").expect("one row");
     assert_eq!(rec.fields(), &[Value::Integer(7)]);
 }
+
+#[tokio::test]
+async fn read_only_mode_makes_the_server_reject_writes() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+
+    // Turn read-only on at runtime (the Frontend's `:set readonly on` path).
+    session.set_read_only(true);
+    assert!(session.is_read_only());
+
+    // A write is rejected by the server (Bolt access mode READ), not by any
+    // client-side clause inspection.
+    match session.run("CREATE (:Person {name: 'Ada'})").await {
+        Err(Error::Query(_)) => {}
+        Err(other) => panic!("a write under read-only must be a query error, got {other:?}"),
+        Ok(_) => panic!("a write under read-only must be rejected by the server"),
+    }
+
+    // The Session survives the rejection: a read still works.
+    let mut read = session.run("RETURN 1 AS n").await.expect("read allowed");
+    let rec = read.records().next().await.expect("ok").expect("one row");
+    assert_eq!(rec.fields(), &[Value::Integer(1)]);
+}
+
+#[tokio::test]
+async fn read_only_streams_a_large_read_and_stays_usable() {
+    let mut lease = common::lease().await;
+    let session = &mut lease.session;
+    session.set_read_only(true);
+
+    // A multi-batch read drains across several PULLs and COMMITs the wrapping read
+    // transaction at the end (issue 04), leaving the Session ready for the next.
+    let mut result = session
+        .run("UNWIND range(1, 5000) AS i RETURN i")
+        .await
+        .expect("read runs");
+    let rows = result.records().collect().await.expect("drain");
+    assert_eq!(rows.len(), 5000);
+
+    // The wrapping transaction was committed, so a second read runs cleanly.
+    let mut next = session.run("RETURN 2 AS n").await.expect("session usable");
+    let rec = next.records().next().await.expect("ok").expect("one row");
+    assert_eq!(rec.fields(), &[Value::Integer(2)]);
+}

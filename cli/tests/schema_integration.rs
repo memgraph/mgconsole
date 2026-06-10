@@ -39,6 +39,7 @@ async fn start() -> (ContainerAsync<GenericImage>, Session) {
     let options = ConnectOptions {
         credentials: None,
         use_tls: false,
+        ..ConnectOptions::default()
     };
     for attempt in 0..30 {
         match Session::connect_with(&endpoint, &options).await {

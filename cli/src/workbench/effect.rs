@@ -77,6 +77,9 @@ pub enum Effect {
     },
     /// Append a submitted query to the persisted command history (slice 17).
     AppendHistory(String),
+    /// Turn read-only mode on the Session (issue 04): the next query carries Bolt
+    /// access mode READ. Only ever `true` — the off direction is refused at runtime.
+    SetReadOnly(bool),
     /// Leave the workbench and restore the terminal.
     Quit,
 }
