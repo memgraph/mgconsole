@@ -7,6 +7,7 @@
 //! hand-built keys in tests with no terminal. Query-lifecycle events (a record
 //! arrived, a query completed) carry the `id` of the query they belong to.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use mgconsole_core::{Error, Record, Summary};
@@ -108,4 +109,6 @@ pub enum Event {
     },
     /// The query failed; the Session survives (ADR 0005) and the next runs.
     QueryFailed { id: u64, error: Error },
+    /// An export finished: `Ok(path)` written, or `Err(message)` (slice 09).
+    ExportFinished(Result<PathBuf, String>),
 }

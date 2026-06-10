@@ -14,7 +14,7 @@ use ratatui::Frame;
 use mgconsole_core::Value;
 
 use super::highlight;
-use super::state::{CurrentResult, Focus, RunState, WorkbenchState};
+use super::state::{CurrentResult, ExportPrompt, Focus, RunState, WorkbenchState};
 
 /// Braille spinner frames for the running-query indicator (slice 07).
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -81,10 +81,28 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     // Status bar: the transient message, then the keybind hints.
     frame.render_widget(Paragraph::new(status_text(state)), status_area);
 
-    // Cell-detail overlay (slice 08), drawn last so it sits above the panes.
+    // Overlays, drawn last so they sit above the panes (at most one is open).
     if let Some(value) = state.detail.as_ref() {
         draw_detail(frame, value, state.detail_scroll);
     }
+    if let Some(prompt) = state.export.as_ref() {
+        draw_export(frame, prompt);
+    }
+}
+
+/// Draw the export prompt (slice 09): the chosen format and the destination path
+/// being typed, in a centred box.
+fn draw_export(frame: &mut Frame, prompt: &ExportPrompt) {
+    let area = centered_rect(frame.area(), 60, 30);
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title("Export result (Tab: format · Enter: write · Esc: cancel)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let text = format!("Format: {}\nPath:   {}_", prompt.format.label(), prompt.path);
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
 }
 
 /// Draw the cell-detail overlay: a centred box showing the full Value rendered by

@@ -22,7 +22,9 @@ pub use state::{WorkbenchConfig, WorkbenchState};
 pub use update::update;
 
 use std::collections::BTreeMap;
-use std::io::{self, stdout};
+use std::fs::File;
+use std::io::{self, stdout, BufWriter, Write as _};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -35,8 +37,10 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::{mpsc, Mutex};
 
-use mgconsole_core::{Session, Value};
+use mgconsole_core::format::{CsvOptions, CsvWriter, CypherlWriter, Header, JsonlWriter, RowWriter};
+use mgconsole_core::{Record, Session, Value};
 
+use effect::ExportFormat;
 use terminal::TerminalGuard;
 
 /// Run the workbench to completion over a connected Session, restoring the
@@ -101,6 +105,19 @@ pub async fn run(session: Session, config: WorkbenchConfig, color: bool) -> io::
                         task.abort();
                     }
                 }
+                Effect::Export {
+                    format,
+                    path,
+                    header,
+                    rows,
+                } => {
+                    // File IO on the blocking pool so the render loop never stalls.
+                    let tx = tx.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let outcome = write_export(format, &path, &header, &rows).map(|()| path);
+                        let _ = tx.send(Event::ExportFinished(outcome));
+                    });
+                }
             }
         }
     }
@@ -161,6 +178,42 @@ async fn run_query(
             }
         }
     }
+}
+
+/// Write the on-screen result to `path` in `format`, reusing the Core's streaming
+/// row writers (slice 09). Returns a human-readable message on failure.
+fn write_export(
+    format: ExportFormat,
+    path: &Path,
+    header: &[String],
+    rows: &[Record],
+) -> Result<(), String> {
+    let file = File::create(path).map_err(|e| e.to_string())?;
+    let mut sink = BufWriter::new(file);
+    let header = Header::new(header.to_vec());
+    match format {
+        ExportFormat::Csv => write_rows(
+            &mut CsvWriter::new(&mut sink, &CsvOptions::default()),
+            &header,
+            rows,
+        )?,
+        ExportFormat::Jsonl => write_rows(&mut JsonlWriter::new(&mut sink), &header, rows)?,
+        ExportFormat::Cypherl => write_rows(&mut CypherlWriter::new(&mut sink), &header, rows)?,
+    }
+    sink.flush().map_err(|e| e.to_string())
+}
+
+/// Drive the in-memory rows through a [`RowWriter`]: header, then each row.
+fn write_rows<W: RowWriter>(
+    writer: &mut W,
+    header: &Header,
+    rows: &[Record],
+) -> Result<(), String> {
+    writer.write_header(header).map_err(|e| e.to_string())?;
+    for row in rows {
+        writer.write_row(row.fields()).map_err(|e| e.to_string())?;
+    }
+    writer.finish().map_err(|e| e.to_string())
 }
 
 /// Translate a crossterm event into a workbench [`Event`], or `None` for one the

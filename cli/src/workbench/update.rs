@@ -7,6 +7,7 @@
 //! quit; query execution and its lifecycle events arrive in slice 02. Driven in
 //! tests by hand-built [`Event`]s, with no terminal and no database.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use mgconsole_core::{Error, QueryAssembler, Record, Summary};
@@ -15,7 +16,7 @@ use crate::repl::{format_summary, meta_command, MetaCommand};
 
 use super::effect::Effect;
 use super::event::{Event, Key, KeyCode};
-use super::state::{CurrentResult, Focus, RunState, WorkbenchState};
+use super::state::{CurrentResult, ExportPrompt, Focus, RunState, WorkbenchState};
 
 /// Apply one event to the state, returning the effects to perform.
 // Events are consumed by value: slice 02's lifecycle events carry owned data
@@ -42,6 +43,13 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
             elapsed,
         } => on_completed(state, id, summary, elapsed),
         Event::QueryFailed { id, error } => on_failed(state, id, &error),
+        Event::ExportFinished(outcome) => {
+            state.status.message = match outcome {
+                Ok(path) => format!("exported to {}", path.display()),
+                Err(message) => format!("export failed: {message}"),
+            };
+            Vec::new()
+        }
         Event::Tick => {
             // Advance the running-query spinner; idle ticks change nothing.
             if matches!(state.run, RunState::Running { .. }) {
@@ -162,10 +170,13 @@ fn interrupt(state: &mut WorkbenchState) -> Vec<Effect> {
 }
 
 fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
-    // The cell-detail overlay (slice 08) captures keys while open — including
-    // Esc, so it dismisses the overlay rather than quitting the workbench.
+    // Overlays capture keys while open — including Esc, so it dismisses the
+    // overlay rather than quitting the workbench.
     if state.detail.is_some() {
         return detail_key(state, key);
+    }
+    if state.export.is_some() {
+        return export_key(state, key);
     }
     // Quit gestures work from any pane (ADR 0010 AC: Esc / Ctrl-D leave).
     if key.code == KeyCode::Esc || (key.ctrl && key.code == KeyCode::Char('d')) {
@@ -253,6 +264,11 @@ fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
         open_detail(state);
         return Vec::new();
     }
+    // 'e' opens the export prompt for the on-screen result (slice 09).
+    if key.code == KeyCode::Char('e') {
+        open_export(state);
+        return Vec::new();
+    }
     let page = state.viewport_rows.max(1);
     if let Some(result) = state.result.as_mut() {
         let last_row = result.rows.len().saturating_sub(1);
@@ -293,6 +309,67 @@ fn open_detail(state: &mut WorkbenchState) {
         state.detail = Some(value);
         state.detail_scroll = 0;
     }
+}
+
+/// Open the export prompt for the on-screen result (slice 09), if there is one.
+fn open_export(state: &mut WorkbenchState) {
+    if state.result.is_some() {
+        state.export = Some(ExportPrompt::default());
+    } else {
+        state.status.message = "no result to export".to_string();
+    }
+}
+
+/// Keys while the export prompt is open: Tab cycles the format, typing edits the
+/// destination path, Enter confirms (emitting the export effect), Esc cancels.
+fn export_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Enter => return confirm_export(state),
+        KeyCode::Esc => {
+            state.export = None;
+            return Vec::new();
+        }
+        _ => {}
+    }
+    if let Some(prompt) = state.export.as_mut() {
+        match key.code {
+            KeyCode::Tab => prompt.format = prompt.format.next(),
+            KeyCode::Backspace => {
+                prompt.path.pop();
+            }
+            KeyCode::Char(c) => prompt.path.push(c),
+            _ => {}
+        }
+    }
+    Vec::new()
+}
+
+/// Confirm an export: build the [`Effect::Export`] from the prompt and the
+/// on-screen rows (a partial result after a cancel exports its partial rows). A
+/// blank path keeps the prompt open with a hint.
+fn confirm_export(state: &mut WorkbenchState) -> Vec<Effect> {
+    let Some(prompt) = state.export.as_ref() else {
+        return Vec::new();
+    };
+    if prompt.path.trim().is_empty() {
+        state.status.message = "export: enter a destination path".to_string();
+        return Vec::new();
+    }
+    let format = prompt.format;
+    let path = PathBuf::from(prompt.path.trim());
+    let Some(result) = state.result.as_ref() else {
+        return Vec::new();
+    };
+    let header = result.header.clone();
+    let rows = result.rows.clone();
+    state.export = None;
+    state.status.message = format!("exporting to {}…", path.display());
+    vec![Effect::Export {
+        format,
+        path,
+        header,
+        rows,
+    }]
 }
 
 /// Keys while the cell-detail overlay is open: scroll it, or dismiss it back to
@@ -806,6 +883,57 @@ mod tests {
         assert_eq!(s.detail_scroll, 2);
         update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
         assert_eq!(s.detail_scroll, 1);
+    }
+
+    // --- export (slice 09) --------------------------------------------------
+
+    #[test]
+    fn e_opens_the_export_prompt_and_enter_emits_the_export_effect() {
+        use crate::workbench::effect::ExportFormat;
+        let mut s = with_one_cell(Value::String("Ada".into()));
+        update(&mut s, Event::Key(Key::char('e')));
+        assert!(s.export.is_some(), "prompt opened");
+        // Cycle the format once (csv -> jsonl) and type a path.
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        type_str(&mut s, "/tmp/out.jsonl");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert_eq!(effects.len(), 1);
+        match &effects[0] {
+            Effect::Export { format, path, rows, .. } => {
+                assert_eq!(*format, ExportFormat::Jsonl);
+                assert_eq!(path.to_str(), Some("/tmp/out.jsonl"));
+                assert_eq!(rows.len(), 1, "exports the on-screen rows");
+            }
+            other => panic!("expected Export, got {other:?}"),
+        }
+        assert!(s.export.is_none(), "prompt closed on confirm");
+    }
+
+    #[test]
+    fn export_with_a_blank_path_keeps_the_prompt_open() {
+        let mut s = with_one_cell(Value::Integer(1));
+        update(&mut s, Event::Key(Key::char('e')));
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(effects.is_empty(), "no export with a blank path");
+        assert!(s.export.is_some(), "prompt stays open");
+    }
+
+    #[test]
+    fn esc_cancels_the_export_prompt_without_quitting() {
+        let mut s = with_one_cell(Value::Integer(1));
+        update(&mut s, Event::Key(Key::char('e')));
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
+        assert!(effects.is_empty(), "Esc cancels, does not quit");
+        assert!(s.export.is_none());
+    }
+
+    #[test]
+    fn export_finished_reports_the_outcome_in_the_status() {
+        let mut s = wb();
+        update(&mut s, Event::ExportFinished(Ok(PathBuf::from("/tmp/out.csv"))));
+        assert!(s.status.message.contains("/tmp/out.csv"));
+        update(&mut s, Event::ExportFinished(Err("disk full".to_string())));
+        assert!(s.status.message.contains("disk full"));
     }
 
     #[test]

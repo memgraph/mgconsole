@@ -1,6 +1,6 @@
 # 09 — Export on-screen result
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -16,11 +16,14 @@ clearly the case). Success/failure is reported in the status.
 
 ## Acceptance criteria
 
-- [ ] The current result can be exported to csv, jsonl, or cypherl via the
-      existing Core writers.
-- [ ] The export reflects the loaded rows (including a partial result after a
-      cancel); the outcome is reported in the status.
-- [ ] Format selection and the export effect are covered at the reducer seam.
+- [x] The current result can be exported to csv, jsonl, or cypherl via the
+      existing Core writers. (`write_export` drives the rows through
+      `CsvWriter`/`JsonlWriter`/`CypherlWriter` via the `RowWriter` trait.)
+- [x] The export reflects the loaded rows (including a partial result after a
+      cancel); the outcome is reported in the status. (`confirm_export` clones the
+      on-screen `result.rows`; `ExportFinished` sets the status.)
+- [x] Format selection and the export effect are covered at the reducer seam.
+      (open/format-cycle/confirm, blank-path, Esc-cancel, finished-outcome tests.)
 
 ## Blocked by
 

@@ -9,8 +9,39 @@
 //! is `PartialEq` only) — enough to assert effects in the reducer tests.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
-use mgconsole_core::Value;
+use mgconsole_core::{Record, Value};
+
+/// The on-screen result can be exported in any of the Core's streaming formats
+/// (slice 09); tabular is the buffered REPL format and not an export target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    Csv,
+    Jsonl,
+    Cypherl,
+}
+
+impl ExportFormat {
+    /// Cycle to the next format (the export prompt's Tab).
+    #[must_use]
+    pub fn next(self) -> Self {
+        match self {
+            ExportFormat::Csv => ExportFormat::Jsonl,
+            ExportFormat::Jsonl => ExportFormat::Cypherl,
+            ExportFormat::Cypherl => ExportFormat::Csv,
+        }
+    }
+
+    /// The format's display name.
+    pub fn label(self) -> &'static str {
+        match self {
+            ExportFormat::Csv => "csv",
+            ExportFormat::Jsonl => "jsonl",
+            ExportFormat::Cypherl => "cypherl",
+        }
+    }
+}
 
 /// An IO action for the edge to perform.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +57,15 @@ pub enum Effect {
     /// Cancel the in-flight query `id`: abort its task and recover the Session
     /// via Bolt `RESET` (ADR 0005). Rows already streamed stay on screen.
     Cancel { id: u64 },
+    /// Write the on-screen result to `path` in `format`, reusing the Core's
+    /// streaming writers (slice 09). Carries the loaded rows (including a partial
+    /// result after a cancel), so the export reflects exactly what is shown.
+    Export {
+        format: ExportFormat,
+        path: PathBuf,
+        header: Vec<String>,
+        rows: Vec<Record>,
+    },
     /// Leave the workbench and restore the terminal.
     Quit,
 }

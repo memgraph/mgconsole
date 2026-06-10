@@ -11,7 +11,25 @@ use std::collections::{BTreeMap, VecDeque};
 use mgconsole_core::{Record, Summary, Value};
 use tui_textarea::{Input, Key as TaKey, TextArea};
 
+use super::effect::ExportFormat;
 use super::event::{Key, KeyCode};
+
+/// The export prompt's state (slice 09): the chosen format and the destination
+/// path being typed.
+#[derive(Debug, Clone)]
+pub struct ExportPrompt {
+    pub format: ExportFormat,
+    pub path: String,
+}
+
+impl Default for ExportPrompt {
+    fn default() -> Self {
+        Self {
+            format: ExportFormat::Csv,
+            path: String::new(),
+        }
+    }
+}
 
 /// The complete workbench state for the current slice.
 pub struct WorkbenchState {
@@ -34,6 +52,9 @@ pub struct WorkbenchState {
     pub detail: Option<Value>,
     /// Vertical scroll of the detail overlay, for a Value taller than the box.
     pub detail_scroll: u16,
+    /// When `Some`, the export prompt is open (slice 09): pick a format and type
+    /// a destination path for the on-screen result.
+    pub export: Option<ExportPrompt>,
     /// The results-table viewport height (data rows) from the last draw, cached so
     /// the reducer can page and keep the selection visible without re-deriving the
     /// layout. The draw is the only writer.
@@ -63,6 +84,7 @@ impl WorkbenchState {
             spinner: 0,
             detail: None,
             detail_scroll: 0,
+            export: None,
             viewport_rows: 0,
             params: BTreeMap::new(),
             next_id: 0,
