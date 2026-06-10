@@ -14,7 +14,11 @@ use ratatui::Frame;
 use mgconsole_core::Value;
 
 use super::highlight;
-use super::state::{Completion, CurrentResult, ExportPrompt, Focus, RunState, WorkbenchState};
+use super::schema::Schema;
+use super::state::{
+    Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, WorkbenchState,
+};
+use ratatui::text::Span;
 
 /// Braille spinner frames for the running-query indicator (slice 07).
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -33,12 +37,23 @@ fn border_style(focused: bool) -> Style {
 /// height it just laid out, so the reducer can page correctly; no logical state
 /// is changed.
 pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
+    // When a side drawer is open it takes a fixed column on the right; the rest
+    // is the main editor/results/status stack.
+    let main_area = if matches!(state.drawer, Some(DrawerKind::Schema)) {
+        let columns =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(32)]).split(frame.area());
+        draw_sidebar(frame, columns[1], state.schema.as_ref());
+        columns[0]
+    } else {
+        frame.area()
+    };
+
     let areas = Layout::vertical([
         Constraint::Percentage(state.config.editor_percent),
         Constraint::Min(3),
         Constraint::Length(1),
     ])
-    .split(frame.area());
+    .split(main_area);
     let (editor_area, results_area, status_area) = (areas[0], areas[1], areas[2]);
 
     // Editor pane: a bordered block with the query editor rendered inside it.
@@ -146,6 +161,41 @@ fn draw_completion(frame: &mut Frame, completion: &Completion, cursor_x: u16, cu
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Draw the schema sidebar (slice 13): the labels, relationship types, and
+/// property keys the database holds, each in its own section. Refresh is shared
+/// with completion (Ctrl-R); the drawer is only opened when a Schema exists.
+fn draw_sidebar(frame: &mut Frame, area: Rect, schema: Option<&Schema>) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Schema (Ctrl-R refresh · Ctrl-B close)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(schema) = schema {
+        section(&mut lines, "Labels", &schema.labels);
+        section(&mut lines, "Relationship types", &schema.rel_types);
+        section(&mut lines, "Property keys", &schema.property_keys);
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+/// Append a titled section of names to the sidebar lines.
+fn section(lines: &mut Vec<Line<'static>>, title: &str, items: &[String]) {
+    lines.push(Line::from(Span::styled(
+        title.to_string(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    if items.is_empty() {
+        lines.push(Line::from("  (none)"));
+    } else {
+        for item in items {
+            lines.push(Line::from(format!("  {item}")));
+        }
+    }
+    lines.push(Line::from(""));
 }
 
 /// Draw the export prompt (slice 09): the chosen format and the destination path
@@ -317,6 +367,22 @@ mod tests {
         assert!(rendered.contains("Query"), "editor pane titled");
         assert!(rendered.contains("Results"), "results pane titled");
         assert!(rendered.contains("Alt+Enter"), "newline key surfaced in the hint");
+    }
+
+    #[test]
+    fn renders_the_schema_sidebar_when_open() {
+        use crate::workbench::schema::Schema;
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.schema = Some(Schema {
+            labels: vec!["Person".to_string()],
+            rel_types: vec!["WORKS_AT".to_string()],
+            property_keys: vec!["name".to_string()],
+        });
+        state.drawer = Some(DrawerKind::Schema);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Labels"), "section header drawn");
+        assert!(rendered.contains("Person"), "a label listed");
+        assert!(rendered.contains("WORKS_AT"), "a relationship type listed");
     }
 
     #[test]

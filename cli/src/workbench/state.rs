@@ -82,6 +82,8 @@ pub struct WorkbenchState {
     /// The fetched database Schema (slice 12): `None` when the metadata feature
     /// is off/unfetched. Backs both schema completion and the sidebar (slice 13).
     pub schema: Option<Schema>,
+    /// The open side drawer, if any (slice 13+). At most one is open at a time.
+    pub drawer: Option<DrawerKind>,
     /// The results-table viewport height (data rows) from the last draw, cached so
     /// the reducer can page and keep the selection visible without re-deriving the
     /// layout. The draw is the only writer.
@@ -116,6 +118,7 @@ impl WorkbenchState {
             completion: None,
             completer: Completer::with_static_vocabulary(),
             schema: None,
+            drawer: None,
             viewport_rows: 0,
             params: BTreeMap::new(),
             next_id: 0,
@@ -192,6 +195,13 @@ impl CurrentResult {
 pub enum Focus {
     Editor,
     Results,
+}
+
+/// A toggleable side drawer. Schema lands in slice 13; parameters (slice 16) and
+/// the summary (slice 18) join it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawerKind {
+    Schema,
 }
 
 /// The one-line status message. Distinct from the keybind hint, which the draw

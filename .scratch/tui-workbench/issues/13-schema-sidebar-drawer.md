@@ -1,6 +1,6 @@
 # 13 — Schema sidebar drawer + refresh
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -15,12 +15,16 @@ nothing to browse), consistent with the silent static-only degradation.
 
 ## Acceptance criteria
 
-- [ ] A keybind toggles a sidebar drawer listing labels, relationship types, and
-      property keys from the fetched Schema.
-- [ ] A refresh action re-fetches and updates the drawer (shared with the
-      completion source's refresh).
-- [ ] The drawer does not appear when the schema feature is unavailable.
-- [ ] Drawer visibility and contents are covered at the reducer seam.
+- [x] A keybind toggles a sidebar drawer listing labels, relationship types, and
+      property keys from the fetched Schema. (Ctrl-B toggles `drawer`;
+      `draw_sidebar` lists the three sections; render test asserts the contents.)
+- [x] A refresh action re-fetches and updates the drawer (shared with the
+      completion source's refresh). (Ctrl-R → `FetchSchema` → `set_schema`; the
+      sidebar reads `state.schema`, so it updates with completion.)
+- [x] The drawer does not appear when the schema feature is unavailable.
+      (`toggle_schema_sidebar` only opens when `state.schema.is_some()`.)
+- [x] Drawer visibility and contents are covered at the reducer seam.
+      (toggle-open/close and unavailable-no-open tests; sidebar render test.)
 
 ## Blocked by
 

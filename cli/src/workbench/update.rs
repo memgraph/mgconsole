@@ -18,7 +18,9 @@ use crate::syntax::Completer;
 use super::effect::Effect;
 use super::event::{Event, Key, KeyCode};
 use super::schema::{Schema, SchemaSource};
-use super::state::{Completion, CurrentResult, ExportPrompt, Focus, RunState, WorkbenchState};
+use super::state::{
+    Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, WorkbenchState,
+};
 
 /// Apply one event to the state, returning the effects to perform.
 // Events are consumed by value: slice 02's lifecycle events carry owned data
@@ -207,6 +209,12 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
         state.status.message = "refreshing schema…".to_string();
         return vec![Effect::FetchSchema];
     }
+    // Ctrl-B toggles the schema sidebar (slice 13); it is unavailable when no
+    // Schema was fetched (the feature is off — nothing to browse).
+    if key.ctrl && key.code == KeyCode::Char('b') {
+        toggle_schema_sidebar(state);
+        return Vec::new();
+    }
     match state.focus {
         Focus::Editor => editor_key(state, key),
         Focus::Results => results_key(state, key),
@@ -303,6 +311,18 @@ fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             state.editor.edit(other);
             Vec::new()
         }
+    }
+}
+
+/// Toggle the schema sidebar drawer (slice 13). The drawer is unavailable when
+/// no Schema is loaded — the feature is off, so there is nothing to browse.
+fn toggle_schema_sidebar(state: &mut WorkbenchState) {
+    if state.drawer == Some(DrawerKind::Schema) {
+        state.drawer = None;
+    } else if state.schema.is_some() {
+        state.drawer = Some(DrawerKind::Schema);
+    } else {
+        state.status.message = "no schema to browse".to_string();
     }
 }
 
@@ -1230,6 +1250,32 @@ mod tests {
         let mut s = wb();
         let effects = update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('r'))));
         assert_eq!(effects, vec![Effect::FetchSchema]);
+    }
+
+    // --- schema sidebar (slice 13) ------------------------------------------
+
+    #[test]
+    fn ctrl_b_toggles_the_schema_sidebar_when_a_schema_is_loaded() {
+        let mut s = wb();
+        update(
+            &mut s,
+            Event::SchemaLoaded(Some(Schema {
+                labels: vec!["Person".to_string()],
+                ..Schema::default()
+            })),
+        );
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('b'))));
+        assert_eq!(s.drawer, Some(DrawerKind::Schema), "opened");
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('b'))));
+        assert_eq!(s.drawer, None, "toggled closed");
+    }
+
+    #[test]
+    fn the_sidebar_is_unavailable_without_a_schema() {
+        let mut s = wb();
+        update(&mut s, Event::SchemaLoaded(None)); // feature off
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('b'))));
+        assert_eq!(s.drawer, None, "drawer does not open when there is no schema");
     }
 
     #[test]
