@@ -1,0 +1,9 @@
+node_labelled_with_props	(:Person {active: true, age: 36, name: "Ada"})
+node_multi_label	(:A:B)
+node_bare	()
+relationship	[:KNOWS {since: 2020}]
+unbound_relationship	[:KNOWS]
+path_forward	(:A)-[:R1]->(:B)
+path_reverse	(:A)<-[:R1]-(:B)
+path_two_hops	(:A)-[:R1]->(:B)-[:R2]->(:C)
+path_single_node	(:A)

@@ -1,0 +1,10 @@
+# Local development shortcuts (no CI; local testing only).
+#
+# Common commands:
+#   cargo test --workspace        run all tests (the integration tests need a
+#                                 Docker daemon; testcontainers starts Memgraph)
+#   UPDATE_GOLDEN=1 cargo test    regenerate rendering golden files
+#   cargo lint                    clippy across the workspace (alias below)
+#   cargo fmt                     format
+[alias]
+lint = "clippy --workspace --all-targets"

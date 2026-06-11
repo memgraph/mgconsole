@@ -1,0 +1,1403 @@
+//! The ratatui draw edge: render the [`WorkbenchState`] into a frame.
+//!
+//! A thin, mechanical projection of the state — the stacked editor / results /
+//! status layout (issue 01). It reads state and never mutates it, the analogue
+//! of the REPL's rustyline `Helper`. Behaviour lives in the reducer; this is
+//! kept thin and covered by a `TestBackend` smoke render rather than by detail.
+
+use std::collections::BTreeMap;
+
+use mgconsole_core::render;
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap};
+use ratatui::Frame;
+use mgconsole_core::Value;
+
+use super::highlight;
+use super::highlight::to_ratatui;
+use crate::theme::{Palette, ThemeColor};
+use super::plan::Plan;
+use super::update;
+use super::schema::Schema;
+use super::state::{
+    CommandLine, Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, Modal, RunState,
+    SearchState, WorkbenchState,
+};
+use ratatui::text::Span;
+
+/// Braille spinner frames for the running-query indicator (slice 07).
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// Border colour for a focused pane vs. an unfocused one (issue 08): the theme's
+/// `border` slot when focused (default Cyan), the terminal default when not.
+fn border_style(palette: &Palette, focused: bool) -> Style {
+    if focused {
+        Style::default().fg(to_ratatui(palette.border))
+    } else {
+        Style::default()
+    }
+}
+
+/// The colour for overlay borders (issue 08): always the theme's `border` slot
+/// (overlays read as focused). `Default` resolves to the terminal default.
+fn overlay_border(palette: &Palette) -> Color {
+    to_ratatui(palette.border)
+}
+
+/// The style for a selected cell/row (issue 08): the theme's `selection` slot as a
+/// background when set, else reverse-video (today's appearance, and the one cue
+/// that needs no colour).
+fn selection_style(palette: &Palette) -> Style {
+    if palette.selection == ThemeColor::Default {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default().bg(to_ratatui(palette.selection))
+    }
+}
+
+/// Render the whole workbench: editor on top, results below, a one-line status
+/// bar at the bottom. Takes `&mut state` only to cache the results viewport
+/// height it just laid out, so the reducer can page correctly; no logical state
+/// is changed.
+pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
+    // When a side drawer is open it takes a fixed column on the right; the rest
+    // is the main editor/results/status stack.
+    let main_area = match state.drawer {
+        Some(kind) => {
+            let columns = Layout::horizontal([Constraint::Min(0), Constraint::Length(32)])
+                .split(frame.area());
+            match kind {
+                DrawerKind::Schema => draw_sidebar(frame, columns[1], state.schema.as_ref()),
+                DrawerKind::Params => draw_params(frame, columns[1], &state.params),
+                DrawerKind::Summary => {
+                    draw_summary(frame, columns[1], state.shown(), state.config.verbose);
+                }
+            }
+            columns[0]
+        }
+        None => frame.area(),
+    };
+
+    // A tab bar sits above the editor when more than one Buffer is open (issue 18);
+    // with a single Buffer there is nothing to switch between, so it is not drawn.
+    let show_tabs = state.buffer_count() > 1;
+    let tabbar_height = u16::from(show_tabs);
+    let areas = Layout::vertical([
+        Constraint::Length(tabbar_height),
+        Constraint::Percentage(state.config.editor_percent),
+        Constraint::Min(3),
+        Constraint::Length(1),
+    ])
+    .split(main_area);
+    let (tabbar_area, editor_area, results_area, status_area) =
+        (areas[0], areas[1], areas[2], areas[3]);
+    state.tabbar_area = if show_tabs { tabbar_area } else { Rect::default() };
+    if show_tabs {
+        draw_tabbar(frame, tabbar_area, state);
+    }
+
+    // Editor pane: a bordered block with the query editor rendered inside it.
+    // The lines are rendered with per-token syntax highlighting (slice 05), and
+    // the terminal cursor is placed at the editor cursor when the pane is focused.
+    let editor_focused = matches!(state.focus, Focus::Editor);
+    let editor_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style(&state.palette, editor_focused))
+        .title("Query");
+    let editor_inner = editor_block.inner(editor_area);
+    frame.render_widget(editor_block, editor_area);
+    // Cache the editor's inner rect for mouse hit-testing (issue 17).
+    state.editor_area = editor_inner;
+    let editor_cursor = draw_editor(frame, editor_inner, state, editor_focused);
+
+    // Results pane: a native table with a pinned header and a lazily-rendered
+    // visible window, or just a summary line for a result with no columns.
+    let results_focused = matches!(state.focus, Focus::Results);
+    let title = results_title(state);
+    let results_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style(&state.palette, results_focused))
+        .title(title);
+    let results_inner = results_block.inner(results_area);
+    frame.render_widget(results_block, results_area);
+    // Cache the data-row viewport (height minus the pinned header row) and the
+    // results rect for mouse hit-testing (issue 17).
+    state.viewport_rows = results_inner.height.saturating_sub(1) as usize;
+    state.results_area = results_inner;
+    // In-result search highlights within the result itself, so it is not an overlay
+    // box (unlike the other Modals) — it rides into draw_result.
+    let search = state.search();
+    if let Some(result) = state.shown() {
+        draw_result(frame, results_inner, result, results_focused, search, &state.palette);
+    }
+
+    // Status bar: a loud transaction segment (issue 05), then the transient message
+    // and keybind hints in the theme's status colour (issue 08).
+    draw_status(frame, status_area, state);
+
+    // The one open Modal, drawn last so it sits above the panes (at most one is open
+    // — the sum type makes "two overlays" unrepresentable). Each takes the theme's
+    // overlay border colour (issue 08). Search has no box (it highlighted above).
+    let border = overlay_border(&state.palette);
+    match &state.modal {
+        Some(Modal::Help { scroll }) => {
+            draw_help(frame, &update::keybindings_help(&state.keys), *scroll, border);
+        }
+        Some(Modal::Detail { value, scroll }) => draw_detail(frame, value, *scroll, border),
+        Some(Modal::Export(prompt)) => draw_export(frame, prompt, border),
+        Some(Modal::Completion(completion)) => {
+            let (cx, cy) = editor_cursor;
+            draw_completion(frame, completion, cx, cy, border);
+        }
+        // The Command line (ADR 0017) takes over the status row and owns the cursor —
+        // drawn last so it wins over the editor's cursor placement.
+        Some(Modal::CommandLine(command_line)) => {
+            draw_command_line(frame, status_area, command_line, &state.palette);
+        }
+        Some(Modal::Search(_)) | None => {}
+    }
+}
+
+/// Draw the modal Command line over the status row (ADR 0017): the typed
+/// `:`-content with the terminal cursor at its end, styled in the theme's status
+/// slot so it reads as the active input surface.
+fn draw_command_line(frame: &mut Frame, area: Rect, command_line: &CommandLine, palette: &Palette) {
+    frame.render_widget(Clear, area);
+    let style = Style::default().fg(to_ratatui(palette.status));
+    frame.render_widget(Paragraph::new(command_line.content.as_str()).style(style), area);
+    let cursor_x = area.x + (command_line.content.chars().count() as u16).min(area.width.saturating_sub(1));
+    frame.set_cursor_position((cursor_x, area.y));
+}
+
+/// Compose the results-pane block title: the history position and row/plan/error
+/// summary, then the originating query snippet (issue 05), then the Transaction
+/// episode tag (issue 04) when the shown entry has one. Autocommit entries carry no
+/// transaction tag.
+fn results_title(state: &WorkbenchState) -> String {
+    let title = match state.shown() {
+        Some(result) if result.error.is_some() => {
+            format!("Results [{}/{}] (error)", state.view + 1, state.history.len())
+        }
+        Some(result) if result.plan.is_some() => {
+            format!("Results [{}/{}] (plan)", state.view + 1, state.history.len())
+        }
+        Some(result) => format!(
+            "Results [{}/{}] ({} row{}{}{})",
+            state.view + 1,
+            state.history.len(),
+            result.rows.len(),
+            if result.rows.len() == 1 { "" } else { "s" },
+            if result.truncated { ", truncated" } else { "" },
+            if result.partial { ", partial" } else { "" }
+        ),
+        None => "Results".to_string(),
+    };
+    let title = match state.shown() {
+        Some(result) if !result.statement.trim().is_empty() => {
+            format!("{title} · {}", query_snippet(&result.statement, 40))
+        }
+        _ => title,
+    };
+    match state.shown().and_then(|result| result.tx_tag) {
+        Some(tag) => format!("{title} · {}", tag.label()),
+        None => title,
+    }
+}
+
+/// Draw the windowed Buffer tab bar (issue 07): each tab auto-titled from its
+/// content (the originating query of its shown result, else the first non-empty
+/// editor line, else its number), the active one reversed, the Buffer owning the
+/// in-flight query marked `•` (issue 03). When the tabs exceed the width the bar
+/// windows to keep the active tab visible, with `‹`/`›` overflow markers. The laid-
+/// out tabs are cached on the state so a click maps to the right Buffer under
+/// windowing (the reducer reads [`WorkbenchState::tab_hits`]).
+fn draw_tabbar(frame: &mut Frame, area: Rect, state: &mut WorkbenchState) {
+    let bar = state.layout_tabs(area);
+    let mut spans = Vec::new();
+    if bar.left_more {
+        spans.push(Span::raw("‹"));
+    }
+    for tab in &bar.tabs {
+        // The cell is the title padded to its width (one space each side).
+        let pad = (tab.width as usize).saturating_sub(tab.title.chars().count());
+        let left = pad / 2;
+        let right = pad - left;
+        let label = format!("{}{}{}", " ".repeat(left), tab.title, " ".repeat(right));
+        let mut style = Style::default();
+        if tab.index == state.active {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        spans.push(Span::styled(label, style));
+    }
+    if bar.right_more {
+        spans.push(Span::raw("›"));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    state.tab_hits = bar.tabs;
+}
+
+/// Draw the completion popup: a small list of candidates anchored below the
+/// cursor, the selected one highlighted, with a window that keeps the selection
+/// visible (slice 11).
+fn draw_completion(frame: &mut Frame, completion: &Completion, cursor_x: u16, cursor_y: u16, border: Color) {
+    const MAX_VISIBLE: usize = 8;
+    let visible = completion.candidates.len().min(MAX_VISIBLE);
+    let width = completion
+        .candidates
+        .iter()
+        .map(String::len)
+        .max()
+        .unwrap_or(8)
+        .clamp(8, 40) as u16
+        + 2;
+    let height = visible as u16 + 2;
+    let frame_area = frame.area();
+    let x = cursor_x.min(frame_area.width.saturating_sub(width));
+    let y = (cursor_y + 1).min(frame_area.height.saturating_sub(height));
+    let area = ratatui::layout::Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Window the list so the selected candidate stays visible.
+    let start = if completion.selected >= MAX_VISIBLE {
+        completion.selected + 1 - MAX_VISIBLE
+    } else {
+        0
+    };
+    let lines: Vec<Line> = completion
+        .candidates
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(i, candidate)| {
+            let style = if i == completion.selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            Line::styled(candidate.clone(), style)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Draw the schema sidebar (slice 13): the labels, relationship types, and
+/// property keys the database holds, each in its own section. Refresh is shared
+/// with completion (Ctrl-R); the drawer is only opened when a Schema exists.
+fn draw_sidebar(frame: &mut Frame, area: Rect, schema: Option<&Schema>) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Schema (Ctrl-R refresh · Ctrl-B close)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    if let Some(schema) = schema {
+        section(&mut lines, "Labels", &schema.labels);
+        section(&mut lines, "Relationship types", &schema.rel_types);
+        section(&mut lines, "Property keys", &schema.property_keys);
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+/// Draw the parameters drawer (slice 16): the current `:param` set, one
+/// `$name = value` per line, reusing the REPL's listing.
+fn draw_params(frame: &mut Frame, area: Rect, params: &BTreeMap<String, Value>) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Parameters (Ctrl-P close)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(crate::repl::format_params(params)).wrap(Wrap { trim: false }),
+        inner,
+    );
+}
+
+/// Draw the summary drawer (slice 18): the shown result's notifications, update
+/// statistics, and — when `--verbose-execution-info` is set — the per-query
+/// execution info. Reuses the Core's `Summary`/`Notification` types; distinct
+/// from the result data.
+fn draw_summary(frame: &mut Frame, area: Rect, result: Option<&CurrentResult>, verbose: bool) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Summary (Ctrl-N close)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    match result.and_then(|result| result.summary.as_ref()) {
+        Some(summary) => {
+            if !summary.notifications.is_empty() {
+                lines.push(bold_line("Notifications"));
+                for note in &summary.notifications {
+                    lines.push(Line::from(format!("  [{}] {}", note.severity, note.title)));
+                    if !note.description.is_empty() {
+                        lines.push(Line::from(format!("    {}", note.description)));
+                    }
+                }
+                lines.push(Line::from(""));
+            }
+            if !summary.stats.is_empty() {
+                lines.push(bold_line("Statistics"));
+                for (key, value) in &summary.stats {
+                    lines.push(Line::from(format!("  {key}: {}", render::tabular(value))));
+                }
+                lines.push(Line::from(""));
+            }
+            if verbose {
+                let info = summary.execution_info();
+                lines.push(bold_line("Execution info"));
+                push_timing(&mut lines, "cost estimate", info.cost_estimate);
+                push_timing(&mut lines, "parsing", info.parsing_time);
+                push_timing(&mut lines, "planning", info.planning_time);
+                push_timing(&mut lines, "execution", info.plan_execution_time);
+            }
+            if lines.is_empty() {
+                lines.push(Line::from("(no notifications or statistics)"));
+            }
+        }
+        None => lines.push(Line::from("(run a query to see its summary)")),
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+/// A bold heading line for a drawer section.
+fn bold_line(title: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        title.to_string(),
+        Style::default().add_modifier(Modifier::BOLD),
+    ))
+}
+
+/// Append an execution-info value line when the server reported it.
+fn push_timing(lines: &mut Vec<Line<'static>>, label: &str, value: Option<f64>) {
+    if let Some(value) = value {
+        lines.push(Line::from(format!("  {label}: {value}")));
+    }
+}
+
+/// Append a titled section of names to the sidebar lines.
+fn section(lines: &mut Vec<Line<'static>>, title: &str, items: &[String]) {
+    lines.push(Line::from(Span::styled(
+        title.to_string(),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    if items.is_empty() {
+        lines.push(Line::from("  (none)"));
+    } else {
+        for item in items {
+            lines.push(Line::from(format!("  {item}")));
+        }
+    }
+    lines.push(Line::from(""));
+}
+
+/// Draw the export prompt (slice 09): the chosen format and the destination path
+/// being typed, in a centred box.
+fn draw_export(frame: &mut Frame, prompt: &ExportPrompt, border: Color) {
+    let area = centered_rect(frame.area(), 60, 30);
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border))
+        .title("Export result (Tab: format · Enter: write · Esc: cancel)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let text = format!("Format: {}\nPath:   {}_", prompt.format.as_str(), prompt.path);
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }), inner);
+}
+
+/// Draw the cell-detail overlay: a centred box showing the full Value rendered by
+/// the Core's per-Value renderer, wrapped and scrollable so a node/path/map/list
+/// is readable in full (slice 08).
+fn draw_detail(frame: &mut Frame, value: &Value, scroll: u16, border: Color) {
+    let area = centered_rect(frame.area(), 70, 60);
+    frame.render_widget(Clear, area); // clear what's beneath the overlay
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border))
+        .title("Cell detail (↑/↓ scroll · Esc/Enter close)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let text = render::tabular(value);
+    let total = wrapped_line_count(&text, inner.width);
+    frame.render_widget(
+        Paragraph::new(text).wrap(Wrap { trim: false }).scroll((scroll, 0)),
+        inner,
+    );
+    // A scroll indicator when the Value is taller than the box (issue 11).
+    draw_overlay_scrollbar(frame, area, total, inner.height, scroll);
+}
+
+/// Estimate how many rows `text` wraps to at `width` columns (issue 11): the sum
+/// over logical lines of `ceil(chars / width)` (an empty line still takes one
+/// row). A character-wrap estimate — close enough to ratatui's word-wrap to drive
+/// a scroll indicator — measured in characters like the rest of the draw.
+fn wrapped_line_count(text: &str, width: u16) -> usize {
+    let width = width.max(1) as usize;
+    text.split('\n')
+        .map(|line| line.chars().count().max(1).div_ceil(width))
+        .sum()
+}
+
+/// Draw scroll indicators on a scrollable overlay's right border (issue 11): `▲`
+/// near the top when there is content above the view, `▼` near the bottom when
+/// there is more below — so it is clear when, and which way, to scroll. Nothing is
+/// drawn when the content (`total_lines` after wrapping) fits the `viewport`.
+/// `area` is the bordered overlay rect; the markers sit on its right border.
+fn draw_overlay_scrollbar(frame: &mut Frame, area: Rect, total_lines: usize, viewport: u16, scroll: u16) {
+    if total_lines <= viewport as usize || area.width < 2 || area.height < 4 {
+        return;
+    }
+    let right = area.x + area.width - 1;
+    let buffer = frame.buffer_mut();
+    if scroll > 0 {
+        // More content above: a ▲ just below the top-right corner.
+        if let Some(cell) = buffer.cell_mut((right, area.y + 1)) {
+            cell.set_symbol("▲");
+        }
+    }
+    if (scroll as usize) + (viewport as usize) < total_lines {
+        // More content below: a ▼ just above the bottom-right corner.
+        if let Some(cell) = buffer.cell_mut((right, area.y + area.height - 2)) {
+            cell.set_symbol("▼");
+        }
+    }
+}
+
+/// Draw the `:help` overlay: a centred, scrollable box listing every gesture with
+/// its current chord (so `[keys]` rebindings show through) and the commands.
+fn draw_help(frame: &mut Frame, text: &str, scroll: u16, border: Color) {
+    let area = centered_rect(frame.area(), 70, 80);
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border))
+        .title("Help — keys & commands (↑/↓ scroll · Esc/Enter/q close)");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let total = wrapped_line_count(text, inner.width);
+    frame.render_widget(
+        Paragraph::new(text.to_string()).wrap(Wrap { trim: false }).scroll((scroll, 0)),
+        inner,
+    );
+    // A scroll indicator when the help is taller than the box (issue 11).
+    draw_overlay_scrollbar(frame, area, total, inner.height, scroll);
+}
+
+/// Render a query plan (slice 14). An `EXPLAIN` plan is a navigable, collapsible
+/// operator tree; a `PROFILE` plan is the same tree in the first column of a table
+/// whose other columns are the per-operator hits/time metrics, aligned for reading
+/// (the tree *in* a table). The selected visible line is highlighted when focused.
+fn draw_plan(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool, palette: &Palette) {
+    if plan.is_profile() {
+        draw_plan_table(frame, area, plan, focused, palette);
+    } else {
+        draw_plan_tree(frame, area, plan, focused, palette);
+    }
+}
+
+/// The ▸/▾ marker and indentation that draw a line's place in the operator tree.
+fn plan_tree_cell(plan: &Plan, index: usize) -> String {
+    let node = &plan.lines[index];
+    let marker = if plan.has_children(index) {
+        if node.collapsed {
+            "▸ "
+        } else {
+            "▾ "
+        }
+    } else {
+        "  "
+    };
+    format!("{}{marker}{}", " ".repeat(node.depth), node.operator)
+}
+
+/// Draw an `EXPLAIN` plan as a bare collapsible tree (no metrics columns).
+fn draw_plan_tree(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool, palette: &Palette) {
+    let lines: Vec<Line> = plan
+        .visible()
+        .into_iter()
+        .map(|index| {
+            let style = if focused && index == plan.selected {
+                selection_style(palette)
+            } else {
+                Style::default()
+            };
+            Line::styled(plan_tree_cell(plan, index), style)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Draw a `PROFILE` plan as a table: the operator tree in the first column, then
+/// hits / relative-time / absolute-time in aligned (right-justified) columns.
+fn draw_plan_table(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool, palette: &Palette) {
+    let rows = plan.visible().into_iter().map(|index| {
+        let node = &plan.lines[index];
+        let metrics = node.annotation.clone().unwrap_or_default();
+        let style = if focused && index == plan.selected {
+            selection_style(palette)
+        } else {
+            Style::default()
+        };
+        Row::new(vec![
+            Cell::from(plan_tree_cell(plan, index)),
+            Cell::from(Line::from(metrics.hits).right_aligned()),
+            Cell::from(Line::from(metrics.relative).right_aligned()),
+            Cell::from(Line::from(metrics.absolute).right_aligned()),
+        ])
+        .style(style)
+    });
+    // Size the operator column to its content (clamped) rather than letting it
+    // grow greedily — so the metric columns sit right beside the tree instead of
+    // floating at the far edge. The unused width stays empty on the right.
+    let op_width = plan
+        .visible()
+        .into_iter()
+        .map(|index| plan_tree_cell(plan, index).chars().count())
+        .max()
+        .unwrap_or(8)
+        .clamp(8, 120) as u16;
+    let widths = [
+        Constraint::Length(op_width),
+        Constraint::Length(12),
+        Constraint::Length(11),
+        Constraint::Length(12),
+    ];
+    // The operator header reads left-aligned; the metric headers right-align to
+    // sit over their numbers.
+    let header = Row::new(vec![
+        Cell::from("OPERATOR"),
+        Cell::from(Line::from("HITS").right_aligned()),
+        Cell::from(Line::from("REL TIME").right_aligned()),
+        Cell::from(Line::from("ABS TIME").right_aligned()),
+    ])
+    .style(Style::default().add_modifier(Modifier::BOLD));
+    frame.render_widget(Table::new(rows, widths).header(header), area);
+}
+
+/// A rectangle centred in `area`, sized to `pct_x` × `pct_y` percent of it.
+fn centered_rect(area: Rect, pct_x: u16, pct_y: u16) -> Rect {
+    let rows = Layout::vertical([
+        Constraint::Percentage((100 - pct_y) / 2),
+        Constraint::Percentage(pct_y),
+        Constraint::Percentage((100 - pct_y) / 2),
+    ])
+    .split(area);
+    Layout::horizontal([
+        Constraint::Percentage((100 - pct_x) / 2),
+        Constraint::Percentage(pct_x),
+        Constraint::Percentage((100 - pct_x) / 2),
+    ])
+    .split(rows[1])[1]
+}
+
+/// Render the editor into `area`: each visible line highlighted by token
+/// category (slice 05), the visible window following the cursor so a long query
+/// stays editable. When focused, the terminal cursor is placed at the editor
+/// cursor. (tui-textarea has no per-token styling, so the workbench renders the
+/// lines itself and uses the widget only as the edit/cursor model.)
+fn draw_editor(frame: &mut Frame, area: Rect, state: &WorkbenchState, focused: bool) -> (u16, u16) {
+    let height = area.height.max(1) as usize;
+    let (cursor_row, cursor_col) = state.editor.cursor();
+    // Keep the cursor line visible (pin to the bottom when scrolling past it).
+    let scroll = if cursor_row >= height {
+        cursor_row + 1 - height
+    } else {
+        0
+    };
+    let lines = state.editor.lines();
+    let end = (scroll + height).min(lines.len());
+    let visible: Vec<Line> = lines[scroll.min(lines.len())..end]
+        .iter()
+        .map(|line| highlight::highlight_line(line, state.color, &state.palette))
+        .collect();
+    frame.render_widget(Paragraph::new(visible), area);
+    let x = area.x + (cursor_col as u16).min(area.width.saturating_sub(1));
+    let y = area.y + (cursor_row - scroll) as u16;
+    if focused {
+        frame.set_cursor_position((x, y));
+    }
+    (x, y)
+}
+
+/// Render a failed result (issue 05): the originating query in full, then the
+/// error in its place of Records, so navigating to a failure shows what ran and
+/// why it failed rather than a blank table.
+fn draw_error(frame: &mut Frame, area: Rect, statement: &str, error: &str) {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(Span::styled("Query", bold)),
+        Line::from(statement.to_string()),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Error",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )),
+    ];
+    for line in error.lines() {
+        lines.push(Line::from(line.to_string()));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+}
+
+/// Render a trimmed Result-history entry (issue 06): the originating query and a
+/// clear "rows no longer held" note in place of the table, plus a pointer to the
+/// summary drawer when a summary was kept. The entry stays navigable as a record
+/// of what ran even though its Records were dropped to bound memory.
+fn draw_trimmed(frame: &mut Frame, area: Rect, statement: &str, summary: Option<&mgconsole_core::Summary>) {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(Span::styled("Query", bold)),
+        Line::from(statement.to_string()),
+        Line::from(""),
+        Line::from(Span::styled(
+            "(rows no longer held — trimmed from history)",
+            Style::default().add_modifier(Modifier::DIM),
+        )),
+    ];
+    if let Some(summary) = summary {
+        if !summary.stats.is_empty() || !summary.notifications.is_empty() {
+            lines.push(Line::from("summary kept — see the drawer"));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+}
+
+/// A one-line, truncated snippet of a query for the results-pane header (issue
+/// 05): runs of whitespace (and newlines) collapsed to single spaces, then cut to
+/// `max` characters with a trailing `…`. Lets every history position show which
+/// query produced the displayed outcome.
+fn query_snippet(statement: &str, max: usize) -> String {
+    let collapsed = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= max {
+        collapsed
+    } else {
+        let mut snippet: String = collapsed.chars().take(max.saturating_sub(1)).collect();
+        snippet.push('…');
+        snippet
+    }
+}
+
+/// A readable minimum width for a result column, leaving room for a few
+/// characters and the `…` truncation marker even on the narrowest column.
+const MIN_COL_WIDTH: u16 = 5;
+
+/// Size each result column to the widest visible cell (header included), clamped
+/// to `[MIN_COL_WIDTH, ~½ the pane]`; the last column flexes to fill whatever
+/// width is left, so the table always spans `available` (the inner pane width).
+/// Inter-column spacing (one cell between columns, ratatui's default) is counted
+/// so the widths plus gaps add up to `available`. Reads only `visible_cells` (the
+/// drawn window), so a very large result stays responsive — no full scan.
+fn column_widths(header: &[String], visible_cells: &[Vec<String>], available: u16) -> Vec<u16> {
+    let n = header.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let max_col = (available / 2).max(MIN_COL_WIDTH);
+    let mut widths: Vec<u16> = (0..n)
+        .map(|col| {
+            let content = visible_cells.iter().fold(header[col].chars().count(), |m, row| {
+                m.max(row.get(col).map_or(0, |c| c.chars().count()))
+            });
+            (content as u16).clamp(MIN_COL_WIDTH, max_col)
+        })
+        .collect();
+    // The last column flexes to fill the remainder after the fixed columns and
+    // the one-cell gaps between them, never dropping below the minimum.
+    let spacing = (n - 1) as u16;
+    let fixed: u16 = widths[..n - 1].iter().sum();
+    widths[n - 1] = available
+        .saturating_sub(fixed.saturating_add(spacing))
+        .max(MIN_COL_WIDTH);
+    widths
+}
+
+/// Truncate `text` to `width` columns, marking a cut with a trailing `…` so a
+/// clipped Value reads as clipped (the full Value is reachable via cell-expand
+/// and yank). Measured in characters, matching the rest of the draw.
+fn truncate_cell(text: &str, width: u16) -> String {
+    let width = width as usize;
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut out: String = text.chars().take(width - 1).collect();
+    out.push('…');
+    out
+}
+
+/// Render a streamed result into `area`: a table with a pinned header and only
+/// the visible window of rows drawn (so a huge result is cheap), the selected
+/// cell highlighted. A result with no columns shows nothing here (its summary is
+/// in the status bar).
+fn draw_result(
+    frame: &mut Frame,
+    area: Rect,
+    result: &CurrentResult,
+    focused: bool,
+    search: Option<&SearchState>,
+    palette: &Palette,
+) {
+    // A failed submission renders its originating query and the error in place of
+    // a table (issue 05), so a failure is reviewable rather than a status that
+    // scrolled away. The full query is shown here (and via cell-expand).
+    if let Some(error) = &result.error {
+        draw_error(frame, area, &result.statement, error);
+        return;
+    }
+    // An EXPLAIN/PROFILE result renders as an operator tree, not a table (its plan
+    // survives trimming, so this comes before the trimmed check).
+    if let Some(plan) = &result.plan {
+        draw_plan(frame, area, plan, focused, palette);
+        return;
+    }
+    // A trimmed entry (issue 06) has had its Records dropped to bound memory; show
+    // its query and a "rows no longer held" note in place of the table.
+    if result.trimmed {
+        draw_trimmed(frame, area, &result.statement, result.summary.as_ref());
+        return;
+    }
+    if result.header.is_empty() {
+        return;
+    }
+    let viewport = area.height.saturating_sub(1) as usize;
+    // The lowercased search needle, and whether the view is filtered (issue 16).
+    let needle = search
+        .map(|s| s.query.to_lowercase())
+        .filter(|q| !q.is_empty());
+    let filtering = search.is_some_and(|s| s.filter_only);
+
+    // The absolute row indices to draw, windowed to the viewport. A filtered view
+    // shows only matching rows, windowed so the active match stays visible; the
+    // full view uses the result's own scroll offset.
+    let visible: Vec<usize> = if filtering {
+        let matches = search.map(|s| s.matches.as_slice()).unwrap_or_default();
+        let sel_pos = search
+            .and_then(|s| s.current)
+            .unwrap_or(0)
+            .min(matches.len().saturating_sub(1));
+        let start = if sel_pos >= viewport { sel_pos + 1 - viewport } else { 0 };
+        matches.iter().skip(start).take(viewport).copied().collect()
+    } else {
+        let start = result.scroll.min(result.rows.len());
+        let end = (start + viewport).min(result.rows.len());
+        (start..end).collect()
+    };
+
+    // Render the visible cells once: the same rendered text both sizes the
+    // columns (to content) and is drawn (truncated to its column), so a huge
+    // result is never fully scanned per frame.
+    let visible_cells: Vec<Vec<String>> = visible
+        .iter()
+        .map(|&absolute| {
+            result.rows[absolute]
+                .fields()
+                .iter()
+                .map(render::tabular)
+                .collect()
+        })
+        .collect();
+    let col_widths = column_widths(&result.header, &visible_cells, area.width);
+
+    let rows = visible.iter().zip(&visible_cells).map(|(&absolute, cells)| {
+        let row_cells = cells.iter().enumerate().map(|(col, text)| {
+            let width = col_widths.get(col).copied().unwrap_or(MIN_COL_WIDTH);
+            let mut style = Style::default();
+            // Bold any cell containing the search needle (issue 16); matched on the
+            // full text, so a match in a truncated tail still highlights the cell.
+            if let Some(needle) = &needle {
+                if text.to_lowercase().contains(needle) {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+            }
+            // Highlight the selected cell when the pane is focused (issue 08: the
+            // theme's selection slot, default reverse-video).
+            if focused && absolute == result.selected_row && col == result.selected_col {
+                style = style.patch(selection_style(palette));
+            }
+            Cell::from(truncate_cell(text, width)).style(style)
+        });
+        Row::new(row_cells)
+    });
+
+    let widths: Vec<Constraint> = col_widths.iter().map(|&w| Constraint::Length(w)).collect();
+    let header = Row::new(result.header.iter().enumerate().map(|(col, name)| {
+        let width = col_widths.get(col).copied().unwrap_or(MIN_COL_WIDTH);
+        Cell::from(truncate_cell(name, width)).style(Style::default().add_modifier(Modifier::BOLD))
+    }));
+    let table = Table::new(rows, widths).header(header);
+    frame.render_widget(table, area);
+}
+
+/// Draw the status bar (issue 05): a loud, themed transaction segment when a
+/// transaction is open or failed, followed by the rest of the status line in the
+/// theme's status colour. Autocommit shows no transaction segment.
+fn draw_status(frame: &mut Frame, area: Rect, state: &WorkbenchState) {
+    let mut spans = Vec::new();
+    if let Some((label, style)) = transaction_segment(state) {
+        spans.push(Span::styled(label, style));
+        spans.push(Span::raw("  │  "));
+    }
+    spans.push(Span::styled(
+        status_text(state),
+        Style::default().fg(to_ratatui(state.palette.status)),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The loud transaction status segment and its style (issue 05): `TX N OPEN` in the
+/// theme's `transaction` slot, `TX N FAILED` in `transaction_failed`, both drawn
+/// reverse-video + bold so the colour reads as a solid block that registers at a
+/// glance. `None` in autocommit. `N` is the Transaction episode number (issue 04).
+fn transaction_segment(state: &WorkbenchState) -> Option<(String, Style)> {
+    let loud = |color: ThemeColor| {
+        Style::default()
+            .fg(to_ratatui(color))
+            .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+    };
+    match state.tx {
+        mgconsole_core::TransactionState::Auto => None,
+        mgconsole_core::TransactionState::Open => Some((
+            format!("TX {} OPEN", state.tx_episode),
+            loud(state.palette.transaction),
+        )),
+        mgconsole_core::TransactionState::Failed => Some((
+            format!("TX {} FAILED", state.tx_episode),
+            loud(state.palette.transaction_failed),
+        )),
+    }
+}
+
+/// Compose the status line: the active profile (issue 03), then the current
+/// message (if any), then the keybind hints, including the universal newline key
+/// (issue 01 AC).
+fn status_text(state: &WorkbenchState) -> String {
+    use std::fmt::Write as _;
+    // The hint reflects the live `[keys]` and points at help (issue 10).
+    let hints = update::status_hint(&state.keys, state.config.newline_hint);
+    // While a query is in flight, prefix a spinner to the running message.
+    let message = if matches!(state.run, RunState::Running { .. }) {
+        let frame = SPINNER[state.spinner % SPINNER.len()];
+        format!("{frame} {}", state.status.message)
+    } else {
+        state.status.message.clone()
+    };
+    // Stable prefixes that survive transient messages: the endpoint/profile
+    // (issues 03/07) and the read-only guard (issue 04).
+    let mut prefix = String::new();
+    if !state.endpoint.is_empty() {
+        write!(prefix, "{}", state.endpoint).unwrap();
+        if let Some(db) = &state.database {
+            write!(prefix, "/{db}").unwrap();
+        }
+    }
+    if let Some(name) = &state.profile {
+        if !prefix.is_empty() {
+            prefix.push(' ');
+        }
+        write!(prefix, "({name})").unwrap();
+    }
+    if state.read_only {
+        if !prefix.is_empty() {
+            prefix.push(' ');
+        }
+        prefix.push_str("[read-only]");
+    }
+    // The transaction state is no longer a dim `[tx]` here (issue 05): it is drawn
+    // as a loud, themed `TX N OPEN` / `TX N FAILED` segment by [`draw_status`].
+    if state.watch.is_some() {
+        if !prefix.is_empty() {
+            prefix.push(' ');
+        }
+        prefix.push_str("[watch]");
+    }
+    [prefix, message, hints]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("  │  ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workbench::state::WorkbenchConfig;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    /// A thin golden smoke render: the shell draws its three regions and the
+    /// status hint names the newline key, with no terminal.
+    fn render(state: &mut WorkbenchState) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("test backend");
+        terminal
+            .draw(|frame| draw(frame, state))
+            .expect("draw succeeds");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect()
+    }
+
+    #[test]
+    fn renders_the_shell_layout_with_the_newline_hint() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Query"), "editor pane titled");
+        assert!(rendered.contains("Results"), "results pane titled");
+        assert!(rendered.contains("Alt+Enter"), "newline key surfaced in the hint");
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_endpoint_and_profile() {
+        let config = WorkbenchConfig {
+            profile: Some("prod".to_string()),
+            endpoint: "db:7688".to_string(),
+            ..WorkbenchConfig::default()
+        };
+        let mut state = WorkbenchState::new(config, true);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("db:7688"), "status bar names the endpoint");
+        assert!(rendered.contains("(prod)"), "status bar names the profile");
+    }
+
+    #[test]
+    fn the_status_bar_omits_the_profile_when_none_is_selected() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let rendered = render(&mut state);
+        assert!(!rendered.contains('('), "no stale profile marker: {rendered}");
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_read_only_marker() {
+        let config = WorkbenchConfig {
+            read_only: true,
+            ..WorkbenchConfig::default()
+        };
+        let mut state = WorkbenchState::new(config, true);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("[read-only]"), "status bar marks read-only");
+    }
+
+    #[test]
+    fn the_transaction_segment_colours_come_from_the_theme_slots() {
+        use crate::theme::builtin_palette;
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.tx_episode = 1;
+        state.tx = mgconsole_core::TransactionState::Open;
+        let (_, style) = transaction_segment(&state).expect("open segment");
+        assert_eq!(style.fg, Some(to_ratatui(state.palette.transaction)), "open uses the slot");
+        assert!(style.add_modifier.contains(Modifier::REVERSED), "high-contrast");
+        // Resolved over the active theme — the `light` built-in recolours it.
+        let light = builtin_palette("light").expect("light is built in");
+        state.palette = light;
+        state.tx = mgconsole_core::TransactionState::Failed;
+        let (_, style) = transaction_segment(&state).expect("failed segment");
+        assert_eq!(style.fg, Some(to_ratatui(light.transaction_failed)), "failed uses the light slot");
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_bold_transaction_segment_with_the_episode_number() {
+        // Issue 05: a loud `TX N OPEN` / `TX N FAILED` segment, autocommit shows none.
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        assert!(!render(&mut state).contains("TX "), "autocommit shows no segment");
+        state.tx_episode = 2;
+        state.tx = mgconsole_core::TransactionState::Open;
+        assert!(render(&mut state).contains("TX 2 OPEN"), "open tx is a bold segment");
+        state.tx = mgconsole_core::TransactionState::Failed;
+        assert!(render(&mut state).contains("TX 2 FAILED"), "failed tx is a bold segment");
+    }
+
+    #[test]
+    fn renders_the_modal_command_line_over_the_status_row() {
+        use crate::workbench::state::{CommandLine, Focus};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let mut cl = CommandLine::new(Focus::Editor);
+        cl.content = ":begin".to_string();
+        state.modal = Some(Modal::CommandLine(cl));
+        let rendered = render(&mut state);
+        assert!(rendered.contains(":begin"), "the command line content is drawn: {rendered}");
+    }
+
+    #[test]
+    fn the_results_header_shows_the_transaction_episode_tag() {
+        use crate::workbench::state::{Disposition, TransactionTag};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let mut result = CurrentResult::new("RETURN 1".to_string(), vec!["n".to_string()]);
+        result.tx_tag = Some(TransactionTag { episode: 2, ordinal: 3, disposition: Disposition::RolledBack });
+        state.history.push(result);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("tx 2"), "episode shown: {rendered}");
+        assert!(rendered.contains("stmt 3"), "ordinal shown");
+        assert!(rendered.contains("rolled back"), "disposition shown");
+    }
+
+    #[test]
+    fn an_autocommit_result_header_carries_no_transaction_tag() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.history.push(CurrentResult::new("RETURN 1".to_string(), vec!["n".to_string()]));
+        let rendered = render(&mut state);
+        assert!(!rendered.contains("tx 1") && !rendered.contains("stmt"), "no tag: {rendered}");
+    }
+
+    #[test]
+    fn renders_a_plan_as_an_operator_tree() {
+        use crate::workbench::plan::{Plan, PlanLine};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let mut result = CurrentResult::new("EXPLAIN ...".to_string(), vec!["QUERY PLAN".to_string()]);
+        result.plan = Some(Plan {
+            lines: vec![
+                PlanLine { depth: 0, operator: "Produce {n}".into(), collapsed: false, annotation: None },
+                PlanLine { depth: 2, operator: "ScanAll (n)".into(), collapsed: false, annotation: None },
+            ],
+            selected: 0,
+        });
+        state.history.push(result);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Produce {n}"), "operator drawn");
+        assert!(rendered.contains("ScanAll (n)"), "child operator drawn");
+        assert!(rendered.contains("plan"), "title marks plan mode");
+        assert!(rendered.contains('▾'), "an expandable node shows a marker");
+    }
+
+    #[test]
+    fn renders_a_profile_plan_as_a_tree_in_a_table() {
+        use crate::workbench::plan::{Plan, PlanLine, PlanMetrics};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let mut result = CurrentResult::new("PROFILE ...".to_string(), vec!["OPERATOR".to_string()]);
+        result.plan = Some(Plan {
+            lines: vec![PlanLine {
+                depth: 0,
+                operator: "Produce {n}".into(),
+                collapsed: false,
+                annotation: Some(PlanMetrics {
+                    hits: "202002".into(),
+                    relative: "54.36 %".into(),
+                    absolute: "9.49 ms".into(),
+                }),
+            }],
+            selected: 0,
+        });
+        state.history.push(result);
+        let rendered = render(&mut state);
+        // The operator (the tree) and the metric columns all appear, with headers.
+        assert!(rendered.contains("Produce {n}"), "operator drawn in the tree column");
+        assert!(rendered.contains("OPERATOR") && rendered.contains("HITS"), "table headers drawn");
+        assert!(rendered.contains("202002"), "hits column drawn");
+        assert!(rendered.contains("54.36 %"), "relative-time column drawn");
+        assert!(rendered.contains("9.49 ms"), "absolute-time column drawn");
+    }
+
+    #[test]
+    fn renders_the_summary_drawer_with_notifications_and_stats() {
+        use mgconsole_core::{Notification, Summary, Value};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let mut result = CurrentResult::new("CREATE ...".to_string(), vec![]);
+        result.summary = Some(Summary {
+            notifications: vec![Notification {
+                code: "Hint".into(),
+                title: "Add an index".into(),
+                description: String::new(),
+                severity: "INFORMATION".into(),
+            }],
+            stats: std::collections::BTreeMap::from([(
+                "nodes-created".to_string(),
+                Value::Integer(1),
+            )]),
+            ..Summary::default()
+        });
+        state.history.push(result);
+        state.drawer = Some(DrawerKind::Summary);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Notifications"), "section header");
+        assert!(rendered.contains("Add an index"), "notification title");
+        assert!(rendered.contains("nodes-created"), "update statistic");
+    }
+
+    #[test]
+    fn renders_the_schema_sidebar_when_open() {
+        use crate::workbench::schema::Schema;
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.schema = Some(Schema {
+            labels: vec!["Person".to_string()],
+            rel_types: vec!["WORKS_AT".to_string()],
+            property_keys: vec!["name".to_string()],
+        });
+        state.drawer = Some(DrawerKind::Schema);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Labels"), "section header drawn");
+        assert!(rendered.contains("Person"), "a label listed");
+        assert!(rendered.contains("WORKS_AT"), "a relationship type listed");
+    }
+
+    #[test]
+    fn renders_a_result_table_with_header_rows_and_a_live_count() {
+        use mgconsole_core::{Record, Value};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.history.push(CurrentResult {
+            header: vec!["name".to_string(), "age".to_string()],
+            rows: vec![
+                Record::new(vec![Value::String("Ada".into()), Value::Integer(36)]),
+                Record::new(vec![Value::String("Bob".into()), Value::Integer(40)]),
+            ],
+            ..CurrentResult::default()
+        });
+        let rendered = render(&mut state);
+        assert!(rendered.contains("name"), "header column drawn");
+        assert!(rendered.contains("Ada"), "a row cell drawn");
+        assert!(rendered.contains("2 rows"), "live row count in the title");
+    }
+
+    #[test]
+    fn the_help_overlay_lists_keys_and_commands() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.modal = Some(Modal::Help { scroll: 0 });
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Help"), "the overlay title is drawn");
+        // The top section is visible in the small test viewport.
+        assert!(rendered.contains("Editing"), "a section header is drawn");
+        assert!(rendered.contains("Run the query"), "a gesture is listed");
+    }
+
+    #[test]
+    fn the_tab_bar_is_drawn_only_with_more_than_one_buffer() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        // One buffer: no tab bar, and no cached tab-bar rect for the mouse.
+        let single = render(&mut state);
+        assert!(!single.contains(" 1 "), "no tab bar for a single buffer: {single:?}");
+        assert_eq!(state.tabbar_area.height, 0, "no tab-bar rect cached");
+        // Two buffers: the tab bar shows the numbered tabs.
+        state.new_buffer();
+        let multi = render(&mut state);
+        assert!(multi.contains('1') && multi.contains('2'), "tab numbers drawn: {multi:?}");
+        assert_eq!(state.tabbar_area.height, 1, "tab-bar rect cached for the mouse");
+    }
+
+    #[test]
+    fn a_failed_entry_renders_its_query_and_error_with_the_header_snippet() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.history.push(CurrentResult {
+            statement: "MATCH (n) RETRUN n".to_string(),
+            error: Some("Memgraph: syntax error near RETRUN".to_string()),
+            ..CurrentResult::default()
+        });
+        // A taller backend so the result pane has room for the query + error body.
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend");
+        terminal.draw(|frame| draw(frame, &mut state)).expect("draw succeeds");
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        // The pane header shows the originating query snippet and marks the error;
+        // the body shows the query and the error rather than a blank table.
+        assert!(rendered.contains("error"), "the header marks the failed entry: {rendered:?}");
+        assert!(rendered.contains("RETRUN"), "the originating query is shown");
+        assert!(rendered.contains("syntax error"), "the error is rendered in the result area");
+    }
+
+    /// Render into a `TestBackend` and return the resulting cell buffer, so a test
+    /// can inspect cell *styles* (fg/bg), not just the text.
+    fn render_to_buffer(state: &mut WorkbenchState) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("test backend");
+        terminal.draw(|frame| draw(frame, state)).expect("draw succeeds");
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn the_chrome_picks_up_theme_overrides() {
+        use crate::theme::ThemeColor;
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        // Override the chrome slots; the draw should consult them.
+        state.palette.border = ThemeColor::Magenta;
+        state.palette.status = ThemeColor::Green;
+        state.focus = Focus::Editor; // the editor pane border is then drawn focused
+        let buf = render_to_buffer(&mut state);
+        assert!(
+            buf.content().iter().any(|c| c.fg == Color::Magenta),
+            "a focused pane border uses the theme's border colour"
+        );
+        assert!(
+            buf.content().iter().any(|c| c.fg == Color::Green),
+            "the status bar uses the theme's status colour"
+        );
+    }
+
+    #[test]
+    fn an_overridden_selection_colours_the_selected_cell_background() {
+        use crate::theme::ThemeColor;
+        use mgconsole_core::{Record, Value};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.palette.selection = ThemeColor::Red;
+        state.focus = Focus::Results;
+        state.history.push(CurrentResult {
+            header: vec!["n".to_string()],
+            rows: vec![Record::new(vec![Value::String("Ada".into())])],
+            ..CurrentResult::default()
+        });
+        let buf = render_to_buffer(&mut state);
+        assert!(
+            buf.content().iter().any(|c| c.bg == Color::Red),
+            "the selected cell uses the theme's selection background"
+        );
+    }
+
+    #[test]
+    fn the_tab_bar_auto_titles_and_windows_with_an_overflow_marker() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        // Many buffers with distinct titles, so the bar must window in 80 cols.
+        for n in 0..12 {
+            state.new_buffer();
+            // Give each buffer a recognisable editor line for its title.
+            for c in format!("QUERY_{n:02}").chars() {
+                state.editor.edit(crate::workbench::event::Key::char(c));
+            }
+        }
+        let rendered = render(&mut state);
+        // The active (last) buffer's title shows, and an overflow marker appears.
+        assert!(rendered.contains("QUERY_11"), "the active tab's title is shown: {rendered:?}");
+        assert!(rendered.contains('‹'), "an overflow marker shows there are more tabs left");
+    }
+
+    #[test]
+    fn a_trimmed_entry_shows_the_rows_no_longer_held_note() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.history.push(CurrentResult {
+            statement: "MATCH (n) RETURN n".to_string(),
+            trimmed: true,
+            ..CurrentResult::default()
+        });
+        let rendered = render(&mut state);
+        assert!(rendered.contains("no longer held"), "the trim note is shown: {rendered:?}");
+        assert!(rendered.contains("MATCH"), "the originating query is still shown");
+    }
+
+    #[test]
+    fn wrapped_line_count_counts_wrapped_rows() {
+        assert_eq!(wrapped_line_count("", 10), 1, "an empty buffer is one row");
+        assert_eq!(wrapped_line_count("short", 10), 1);
+        assert_eq!(wrapped_line_count("0123456789abc", 10), 2, "wraps to two rows at width 10");
+        assert_eq!(wrapped_line_count("a\nb\nc", 10), 3, "three short logical lines");
+    }
+
+    #[test]
+    fn an_overflowing_help_overlay_shows_a_scroll_indicator() {
+        // The full help is taller than the small test viewport, so the overlay
+        // shows a "more below" indicator at scroll 0.
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.modal = Some(Modal::Help { scroll: 0 });
+        let rendered = render(&mut state);
+        assert!(rendered.contains('▼'), "more-below indicator at the top: {rendered:?}");
+        // Scrolled down a long way, a "more above" indicator appears.
+        state.modal = Some(Modal::Help { scroll: 40 });
+        let rendered = render(&mut state);
+        assert!(rendered.contains('▲'), "more-above indicator once scrolled: {rendered:?}");
+    }
+
+    #[test]
+    fn a_cell_detail_overlay_shows_an_indicator_only_when_it_overflows() {
+        use mgconsole_core::Value;
+        // A short Value fits: no indicator.
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.modal = Some(Modal::Detail { value: Value::String("short".into()), scroll: 0 });
+        let rendered = render(&mut state);
+        assert!(!rendered.contains('▲') && !rendered.contains('▼'), "no indicator when it fits: {rendered:?}");
+        // A long Value wraps past the box: a more-below indicator appears.
+        state.modal = Some(Modal::Detail { value: Value::String("x".repeat(400)), scroll: 0 });
+        let rendered = render(&mut state);
+        assert!(rendered.contains('▼'), "more-below indicator on an overflowing value: {rendered:?}");
+    }
+
+    #[test]
+    fn the_tab_bar_marks_a_buffer_with_a_running_query() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.new_buffer(); // two buffers, so the tab bar is drawn; active is buffer 2
+        // A query is running in buffer 1 (a background buffer).
+        state.running_buffer = Some(0);
+        let rendered = render(&mut state);
+        assert!(rendered.contains('•'), "the running background buffer is marked: {rendered:?}");
+    }
+
+    #[test]
+    fn columns_size_to_content_with_the_last_flexing_to_fill() {
+        // A wide column, a narrow column, and a last column. The wide one is
+        // clamped to ~half the pane; the narrow one stays narrow; the last takes
+        // whatever is left, so the widths span the available room.
+        let header = vec!["wide".to_string(), "n".to_string(), "tail".to_string()];
+        let cells = vec![vec![
+            "x".repeat(200), // far wider than the pane
+            "1".to_string(), // narrow
+            "z".to_string(),
+        ]];
+        let available = 80;
+        let widths = column_widths(&header, &cells, available);
+        assert_eq!(widths.len(), 3);
+        assert!(widths[0] > widths[1], "the wide column is wider than the narrow one");
+        assert!(widths[0] <= available / 2, "a non-last column is capped at ~half the pane");
+        assert_eq!(widths[1], MIN_COL_WIDTH, "the narrow column sits at the minimum");
+        // The widths plus the inter-column gaps span the available width (the last
+        // column flexes to fill the remainder).
+        let spacing = (header.len() - 1) as u16;
+        assert_eq!(widths.iter().sum::<u16>() + spacing, available, "widths fill the pane");
+    }
+
+    #[test]
+    fn a_cell_wider_than_its_column_is_truncated_with_an_ellipsis() {
+        use mgconsole_core::{Record, Value};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.history.push(CurrentResult {
+            header: vec!["blob".to_string(), "id".to_string()],
+            rows: vec![Record::new(vec![
+                // A long Value in a non-last column, so it is clamped and truncated.
+                Value::String("0123456789".repeat(20)),
+                Value::Integer(7),
+            ])],
+            ..CurrentResult::default()
+        });
+        let rendered = render(&mut state);
+        assert!(rendered.contains('…'), "an over-wide cell shows the truncation marker: {rendered:?}");
+    }
+
+    #[test]
+    fn a_filtered_search_view_draws_only_matching_rows() {
+        use crate::workbench::state::SearchState;
+        use mgconsole_core::{Record, Value};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.history.push(CurrentResult {
+            header: vec!["name".to_string()],
+            rows: vec![
+                Record::new(vec![Value::String("Ada".into())]),
+                Record::new(vec![Value::String("Bob".into())]),
+                Record::new(vec![Value::String("Ana".into())]),
+            ],
+            ..CurrentResult::default()
+        });
+        // A filtered search for "a": Ada and Ana match, Bob is hidden (issue 16).
+        state.modal = Some(Modal::Search(SearchState {
+            query: "a".to_string(),
+            filter_only: true,
+            matches: vec![0, 2],
+            current: Some(0),
+        }));
+        let rendered = render(&mut state);
+        assert!(rendered.contains("Ada"), "a matching row is drawn");
+        assert!(rendered.contains("Ana"), "the other matching row is drawn");
+        assert!(!rendered.contains("Bob"), "the non-matching row is filtered out");
+    }
+}

@@ -1,0 +1,9 @@
+-[ RECORD 1 ]-
+n: 1
+name: Ada
+active: true
+
+-[ RECORD 2 ]-
+n: 42
+name: Grace
+active: false

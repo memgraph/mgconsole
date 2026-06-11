@@ -1,0 +1,358 @@
+//! `EXPLAIN` / `PROFILE` plan rendering (slice 14): a query plan is the tree it
+//! is, not a flat table. A pure prefix predicate detects a plan query, and the
+//! returned operator column (indented `* Operator` strings) is parsed into a
+//! navigable, collapsible outline.
+//!
+//! Verified against Memgraph 3.10.1: `EXPLAIN` returns one `QUERY PLAN` column;
+//! `PROFILE` returns an `OPERATOR` column plus hits/time columns (annotations,
+//! attached in slice 15). Both encode the tree by the operator string's leading
+//! indentation, which this module parses identically.
+
+use mgconsole_core::{lex, Record, TokenKind, Value};
+
+/// Whether `query`'s leading lexer token is `EXPLAIN` or `PROFILE`
+/// (case-insensitive) — so its result is a plan to render as a tree, not a
+/// table. Pure: a `&str` predicate, no IO.
+pub fn is_plan_query(query: &str) -> bool {
+    lex(query)
+        .into_iter()
+        .find(|token| !matches!(token.kind, TokenKind::Whitespace))
+        .is_some_and(|token| {
+            let word = token.text(query).to_uppercase();
+            word == "EXPLAIN" || word == "PROFILE"
+        })
+}
+
+/// A `PROFILE` operator's per-operator execution metrics (slice 15), kept as the
+/// separate columns Memgraph returns so the workbench can lay them out as an
+/// aligned table beside the operator tree, rather than one inline string.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlanMetrics {
+    /// `ACTUAL HITS` — the row count the operator processed.
+    pub hits: String,
+    /// `RELATIVE TIME` — this operator's share of the total (e.g. `54.36 %`).
+    pub relative: String,
+    /// `ABSOLUTE TIME` — wall-clock time spent in the operator (e.g. `9.49 ms`).
+    pub absolute: String,
+}
+
+/// One operator line of a plan: its indentation depth, its text, whether its
+/// subtree is collapsed, and — for a `PROFILE` plan — its per-operator execution
+/// metrics (hits/time, slice 15). `EXPLAIN` has no metrics.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlanLine {
+    pub depth: usize,
+    pub operator: String,
+    pub collapsed: bool,
+    pub annotation: Option<PlanMetrics>,
+}
+
+/// A parsed query plan: the operator lines in order, with a selection cursor for
+/// keyboard navigation. The tree is encoded by `depth` (a line is a child of the
+/// nearest preceding line of smaller depth).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Plan {
+    pub lines: Vec<PlanLine>,
+    pub selected: usize,
+}
+
+impl Plan {
+    /// Parse the operator column (column 0) of a plan result into a tree, with the
+    /// per-operator annotation from a `PROFILE` result's extra columns (slice 15).
+    ///
+    /// Memgraph prints the spine flat (each `* Op` line is the child of the one
+    /// above) and draws each second input as an ASCII branch: a `|\` marker, then
+    /// the branch's operators prefixed with `| `. This reconstructs the real tree
+    /// depth from those markers — so both inputs of a `Union`/`Apply`/`Cartesian`
+    /// indent as siblings — and drops the marker rows. `next_depth[level]` is the
+    /// depth the next operator at each branch level takes; a `|\` at level *k*
+    /// starts that branch one below the last spine operator at level *k-1*.
+    pub fn parse(rows: &[Record]) -> Self {
+        let mut lines = Vec::new();
+        let mut next_depth: Vec<usize> = vec![0];
+        for row in rows {
+            let fields = row.fields();
+            let Some(Value::String(text)) = fields.first() else {
+                continue;
+            };
+            match classify(text) {
+                (level, ParsedLine::Marker) => {
+                    // A branch at `level` hangs off the last operator at `level-1`,
+                    // so its first operator sits one deeper than that parent.
+                    let parent_next = next_depth.get(level.saturating_sub(1)).copied().unwrap_or(0);
+                    set_depth(&mut next_depth, level, parent_next);
+                }
+                (level, ParsedLine::Operator(operator)) => {
+                    let depth = next_depth.get(level).copied().unwrap_or(0);
+                    set_depth(&mut next_depth, level, depth + 1);
+                    lines.push(PlanLine {
+                        depth,
+                        operator,
+                        collapsed: false,
+                        annotation: annotation(fields),
+                    });
+                }
+            }
+        }
+        Self { lines, selected: 0 }
+    }
+
+    /// Whether this is a `PROFILE` plan (any line carries execution metrics), so
+    /// it renders as a tree-plus-metrics table rather than a bare tree.
+    pub fn is_profile(&self) -> bool {
+        self.lines.iter().any(|line| line.annotation.is_some())
+    }
+
+    /// Whether line `index` has a subtree (a following line of greater depth).
+    pub fn has_children(&self, index: usize) -> bool {
+        matches!(
+            (self.lines.get(index), self.lines.get(index + 1)),
+            (Some(node), Some(next)) if next.depth > node.depth
+        )
+    }
+
+    /// The indices of the lines currently visible (descendants of a collapsed
+    /// node are hidden), top to bottom.
+    pub fn visible(&self) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut hidden_below: Option<usize> = None;
+        for (index, line) in self.lines.iter().enumerate() {
+            if let Some(depth) = hidden_below {
+                if line.depth > depth {
+                    continue;
+                }
+                hidden_below = None;
+            }
+            out.push(index);
+            if line.collapsed && self.has_children(index) {
+                hidden_below = Some(line.depth);
+            }
+        }
+        out
+    }
+
+    /// Move the selection by `delta` among the visible lines (clamped).
+    pub fn move_selection(&mut self, delta: isize) {
+        let visible = self.visible();
+        if visible.is_empty() {
+            return;
+        }
+        let pos = visible.iter().position(|&i| i == self.selected).unwrap_or(0);
+        let next = (pos as isize + delta).clamp(0, visible.len() as isize - 1) as usize;
+        self.selected = visible[next];
+    }
+
+    /// Collapse or expand the selected node's subtree (if it has one).
+    pub fn toggle(&mut self) {
+        if self.has_children(self.selected) {
+            self.lines[self.selected].collapsed = !self.lines[self.selected].collapsed;
+        }
+    }
+
+    /// Collapse the selected node's subtree.
+    pub fn collapse(&mut self) {
+        if self.has_children(self.selected) {
+            self.lines[self.selected].collapsed = true;
+        }
+    }
+
+    /// Expand the selected node's subtree.
+    pub fn expand(&mut self) {
+        if let Some(line) = self.lines.get_mut(self.selected) {
+            line.collapsed = false;
+        }
+    }
+}
+
+/// One classified plan-text line: an operator, or a `|\` branch marker (which
+/// carries no operator and is dropped after it has set the branch depth).
+enum ParsedLine {
+    Operator(String),
+    Marker,
+}
+
+/// Classify one operator-column line into its branch level (the number of leading
+/// `|` markers) and its kind. `* Op` is an operator (the `*` bullet stripped);
+/// `|\` is a branch marker. Spaces between/around the markers are ignored.
+fn classify(text: &str) -> (usize, ParsedLine) {
+    let mut rest = text;
+    let mut level = 0;
+    loop {
+        rest = rest.trim_start();
+        match rest.strip_prefix('|') {
+            Some(after) => {
+                level += 1;
+                rest = after;
+            }
+            None => break,
+        }
+    }
+    let rest = rest.trim_start();
+    if rest.starts_with('\\') {
+        (level, ParsedLine::Marker)
+    } else {
+        (level, ParsedLine::Operator(rest.trim_start_matches('*').trim().to_string()))
+    }
+}
+
+/// Set `depths[index]`, growing the vector with zeros as needed.
+fn set_depth(depths: &mut Vec<usize>, index: usize, value: usize) {
+    if index >= depths.len() {
+        depths.resize(index + 1, 0);
+    }
+    depths[index] = value;
+}
+
+/// The per-operator metrics from a `PROFILE` row's extra columns (`ACTUAL HITS`,
+/// `RELATIVE TIME`, `ABSOLUTE TIME`), kept as separate fields for tabular layout,
+/// or `None` for an `EXPLAIN` row (which has only the operator column). Verified
+/// against Memgraph 3.10.1.
+fn annotation(fields: &[Value]) -> Option<PlanMetrics> {
+    let Some(Value::Integer(hits)) = fields.get(1) else {
+        return None;
+    };
+    Some(PlanMetrics {
+        hits: hits.to_string(),
+        relative: string_cell(fields.get(2)),
+        absolute: string_cell(fields.get(3)),
+    })
+}
+
+/// A trimmed string cell, or empty when absent / not a string.
+fn string_cell(cell: Option<&Value>) -> String {
+    match cell {
+        Some(Value::String(text)) => text.trim().to_string(),
+        _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_explain_and_profile_case_insensitively() {
+        assert!(is_plan_query("EXPLAIN MATCH (n) RETURN n"));
+        assert!(is_plan_query("  profile MATCH (n) RETURN n"));
+        assert!(is_plan_query("Explain RETURN 1"));
+        assert!(!is_plan_query("MATCH (n) RETURN n"));
+        assert!(!is_plan_query("RETURN 'EXPLAIN'")); // a string, not the leading word
+        assert!(!is_plan_query(""));
+    }
+
+    fn plan_row(text: &str) -> Record {
+        Record::new(vec![Value::String(text.to_string())])
+    }
+
+    #[test]
+    fn parses_a_flat_spine_into_a_parent_child_chain() {
+        // Memgraph prints the spine flat; each operator is the child of the one
+        // above, so consecutive lines deepen by one.
+        let rows = vec![plan_row(" * Produce {n}"), plan_row(" * ScanAll (n)")];
+        let plan = Plan::parse(&rows);
+        assert_eq!(plan.lines.len(), 2);
+        assert_eq!(plan.lines[0].operator, "Produce {n}");
+        assert_eq!(plan.lines[0].depth, 0);
+        assert_eq!(plan.lines[1].operator, "ScanAll (n)");
+        assert_eq!(plan.lines[1].depth, 1, "the next operator is a child");
+        assert!(plan.has_children(0), "Produce has ScanAll as a child");
+        assert!(plan.lines[0].annotation.is_none(), "EXPLAIN has no annotation");
+    }
+
+    #[test]
+    fn reconstructs_branches_from_memgraph_pipe_markers() {
+        // A Union: the `|\` marker introduces the right input; both inputs of the
+        // Union must indent as siblings one below it (not as a flat list).
+        let rows = vec![
+            plan_row(" * Distinct"),
+            plan_row(" * Union {kind, c : kind, c}"),
+            plan_row(" |\\"),
+            plan_row(" | * Produce {kind, c}"),
+            plan_row(" | * Unwind"),
+            plan_row(" | * Once"),
+            plan_row(" * Produce {kind, c}"),
+            plan_row(" * Aggregate {COUNT-1} {n}"),
+            plan_row(" * ScanAll (n)"),
+            plan_row(" * Once"),
+        ];
+        let plan = Plan::parse(&rows);
+        // The `|\` marker row is dropped.
+        assert_eq!(plan.lines.len(), 9, "marker row dropped");
+        let depth = |op: &str| plan.lines.iter().find(|l| l.operator == op).unwrap().depth;
+        assert_eq!(depth("Distinct"), 0);
+        assert_eq!(depth("Union {kind, c : kind, c}"), 1);
+        // Both of the Union's inputs are at depth 2 — siblings under the Union.
+        let produces: Vec<usize> = plan
+            .lines
+            .iter()
+            .filter(|l| l.operator == "Produce {kind, c}")
+            .map(|l| l.depth)
+            .collect();
+        assert_eq!(produces, vec![2, 2], "both Union inputs indent as siblings");
+        // The branch deepens normally: Produce(2) → Unwind(3) → Once(4).
+        assert_eq!(depth("Unwind"), 3);
+        // The main spine continues: Produce(2) → Aggregate(3) → ScanAll(4).
+        assert_eq!(depth("Aggregate {COUNT-1} {n}"), 3);
+        assert_eq!(depth("ScanAll (n)"), 4);
+    }
+
+    #[test]
+    fn a_profile_row_carries_a_hits_and_time_annotation() {
+        // [OPERATOR, ACTUAL HITS, RELATIVE TIME, ABSOLUTE TIME] (PROFILE shape).
+        let row = Record::new(vec![
+            Value::String("* Produce {n}".to_string()),
+            Value::Integer(2),
+            Value::String(" 14.04 %".to_string()),
+            Value::String("  0.0037 ms".to_string()),
+        ]);
+        let plan = Plan::parse(&[row]);
+        assert!(plan.is_profile(), "a PROFILE plan carries metrics");
+        let metrics = plan.lines[0].annotation.as_ref().expect("metrics");
+        assert_eq!(metrics.hits, "2");
+        assert_eq!(metrics.relative, "14.04 %");
+        assert_eq!(metrics.absolute, "0.0037 ms");
+    }
+
+    #[test]
+    fn collapsing_a_node_hides_its_deeper_descendants() {
+        // depth 0 root with two deeper children, then a depth-0 sibling.
+        let plan = Plan {
+            lines: vec![
+                PlanLine { depth: 0, operator: "Root".into(), collapsed: false, annotation: None },
+                PlanLine { depth: 2, operator: "ChildA".into(), collapsed: false, annotation: None },
+                PlanLine { depth: 2, operator: "ChildB".into(), collapsed: false, annotation: None },
+                PlanLine { depth: 0, operator: "Sibling".into(), collapsed: false, annotation: None },
+            ],
+            selected: 0,
+        };
+        assert_eq!(plan.visible(), vec![0, 1, 2, 3], "all visible expanded");
+        let mut collapsed = plan.clone();
+        collapsed.toggle(); // collapse Root (selected 0, has children)
+        assert_eq!(collapsed.visible(), vec![0, 3], "children hidden, sibling stays");
+    }
+
+    #[test]
+    fn navigation_skips_hidden_lines() {
+        let mut plan = Plan {
+            lines: vec![
+                PlanLine { depth: 0, operator: "Root".into(), collapsed: true, annotation: None },
+                PlanLine { depth: 2, operator: "Child".into(), collapsed: false, annotation: None },
+                PlanLine { depth: 0, operator: "Sibling".into(), collapsed: false, annotation: None },
+            ],
+            selected: 0,
+        };
+        // Root is collapsed, so Down jumps over the hidden Child to Sibling.
+        plan.move_selection(1);
+        assert_eq!(plan.selected, 2);
+    }
+
+    #[test]
+    fn toggle_does_nothing_on_a_leaf() {
+        let mut plan = Plan {
+            lines: vec![PlanLine { depth: 0, operator: "Leaf".into(), collapsed: false, annotation: None }],
+            selected: 0,
+        };
+        plan.toggle();
+        assert!(!plan.lines[0].collapsed, "a leaf cannot collapse");
+    }
+}

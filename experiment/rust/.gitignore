@@ -1,0 +1,7 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Editor / OS
+*.swp
+.DS_Store
