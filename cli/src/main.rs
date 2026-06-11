@@ -530,18 +530,19 @@ fn load_config() -> config::Config {
     }
 }
 
-/// Load the tool-managed saved-queries file (issue 13): resolve its path from
-/// `MGCONSOLE_QUERIES_PATH`/home, then read it. A missing file is the normal case
-/// (an empty store); a malformed file is reported and treated as empty so the
-/// console still starts. With no writable location the store works in-memory and
-/// `:save` later reports it cannot persist.
+/// Load the saved-queries directory (issue 23, ADR 0020): resolve its path from
+/// `MGCONSOLE_QUERIES_PATH`/home, then read every `<name>.cypher` file. A missing
+/// directory is the normal first-run case (an empty store); a hard read failure is
+/// reported and treated as empty so the console still starts. With no writable
+/// location the store works in-memory and `:save` later reports it cannot persist.
+/// Lenient-parse warnings about skipped files are surfaced by `:saved`, not here.
 fn load_queries() -> queries::NamedQueries {
     let env = std::env::var(queries::QUERIES_ENV).ok();
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let Some(path) = queries::resolve_queries_path(env.as_deref(), home.as_deref()) else {
+    let Some(dir) = queries::resolve_queries_dir(env.as_deref(), home.as_deref()) else {
         return queries::NamedQueries::in_memory();
     };
-    match queries::NamedQueries::load(path) {
+    match queries::NamedQueries::load(dir) {
         Ok(store) => store,
         Err(message) => {
             eprintln!("warning: {message}; continuing with no saved queries");

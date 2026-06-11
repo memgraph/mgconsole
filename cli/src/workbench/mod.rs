@@ -204,11 +204,11 @@ pub async fn run(
                         session, tx, id, query, params, format, path,
                     )));
                 }
-                Effect::PersistQueries => {
-                    // Write the Named-query store after a `:save`/`:forget` (issue
-                    // 13). A failure is a status warning — the in-memory store keeps
-                    // the change for the session.
-                    if let Err(message) = state.queries.persist() {
+                Effect::PersistQuery(name) => {
+                    // Reconcile the one changed file after a `:save`/`:forget` (issue
+                    // 23, ADR 0020). A failure is a status warning — the in-memory
+                    // store keeps the change for the session.
+                    if let Err(message) = state.queries.sync_file(&name) {
                         state.status.message = format!("warning: {message}");
                     }
                 }

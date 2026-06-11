@@ -187,6 +187,13 @@ fn parse_save(args: &str) -> MetaCommand {
                 .to_string(),
         );
     }
+    // The name becomes a file name in the queries directory (ADR 0020), so reject
+    // a path-bearing name before it could escape the directory.
+    if !crate::queries::is_valid_name(name) {
+        return MetaCommand::Invalid(format!(
+            "invalid query name '{name}' — names may not contain path separators"
+        ));
+    }
     MetaCommand::Save {
         name: name.to_string(),
         query: (!query.is_empty()).then(|| query.to_string()),
@@ -754,9 +761,10 @@ fn dispatch_meta(
             }
             Err(message) => writeln!(err, "error: {message}")?,
         },
-        // Named queries (issue 13): a tool-managed store of reusable templates.
-        // `:save` keeps text only ($param placeholders survive); persistence
-        // errors are reported without losing the in-memory save or the session.
+        // Named queries (issue 23, ADR 0020): a directory of `<name>.cypher` files.
+        // `:save` keeps text only ($param placeholders survive) and writes one file;
+        // persistence errors are reported without losing the in-memory save or the
+        // session.
         MetaCommand::Save { name, query } => {
             let text = query.or_else(|| last_query.map(str::to_string));
             match text {
@@ -765,7 +773,7 @@ fn dispatch_meta(
                     // warning (the session keeps the save), not a lost command.
                     queries.set(name.clone(), text);
                     writeln!(out, "saved '{name}'")?;
-                    if let Err(e) = queries.persist() {
+                    if let Err(e) = queries.sync_file(&name) {
                         writeln!(err, "warning: {e}")?;
                     }
                 }
@@ -785,7 +793,7 @@ fn dispatch_meta(
         MetaCommand::Forget(name) => {
             if queries.remove(&name) {
                 writeln!(out, "forgot '{name}'")?;
-                if let Err(e) = queries.persist() {
+                if let Err(e) = queries.sync_file(&name) {
                     writeln!(err, "warning: {e}")?;
                 }
             } else {

@@ -413,9 +413,10 @@ pub struct WorkbenchState {
     pub last_query: Option<String>,
     /// A one-shot `:o` redirect armed for the next submitted query (issue 12).
     pub redirect: Option<(crate::OutputFormat, std::path::PathBuf)>,
-    /// The Named-query store (issue 13): saved templates recalled into the editor
-    /// by `:load`. Shared spine with the REPL; the pure reducer mutates it and the
-    /// edge persists via [`Effect::PersistQueries`](super::Effect::PersistQueries).
+    /// The Named-query store (issue 23, ADR 0020): a directory of `<name>.cypher`
+    /// files mirrored in memory, recalled into the editor by `:load`. Shared spine
+    /// with the REPL; the pure reducer mutates the mirror and the edge writes/deletes
+    /// the one changed file via [`Effect::PersistQuery`](super::Effect::PersistQuery).
     pub queries: NamedQueries,
     /// The active highlight palette (issue 14): the built-in theme named by the
     /// `theme` Setting with the config `[theme]` overrides applied. Recomputed by

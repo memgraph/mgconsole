@@ -156,10 +156,13 @@ the definition here wins until deliberately changed.
   Setting overrides), stored in the hand-edited config file so a connection can
   be named once and reused. The active profile is shown in the REPL prompt and
   the Workbench status bar.
-- **Named query** — a query saved under a name for later recall, kept in a
-  separate tool-managed file the console rewrites on save and delete (distinct
-  from the hand-edited config file, so rewriting never clobbers the user's
-  comments).
+- **Named query** — a query saved under a name for later recall, stored as one
+  plain `.cypher` file per name in a tool-owned directory (distinct from the
+  single hand-edited config file). The directory is the source of truth: the
+  files are greppable, git-versionable, and hand-editable in the user's own
+  editor, and the same directory doubles as a `:source` library — so a saved
+  query and a loadable script are one format, not two. _Contrast_: the config
+  file, a single hand-edited document holding Settings and Connection profiles.
 
 ## Import / export
 

@@ -1921,7 +1921,7 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 Some(text) => {
                     state.queries.set(name.clone(), text);
                     state.status.message = format!("saved '{name}'");
-                    return vec![Effect::PersistQueries];
+                    return vec![Effect::PersistQuery(name)];
                 }
                 None => {
                     state.status.message =
@@ -1950,7 +1950,7 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
         MetaCommand::Forget(name) => {
             if state.queries.remove(&name) {
                 state.status.message = format!("forgot '{name}'");
-                return vec![Effect::PersistQueries];
+                return vec![Effect::PersistQuery(name)];
             }
             state.status.message = format!("error: no saved query named '{name}'");
             Vec::new()
@@ -4451,7 +4451,7 @@ mod tests {
         let effects = submit_meta(&mut s, ":save recent MATCH (n) RETURN $limit");
         // The $param placeholder is kept verbatim — a template, not a frozen value.
         assert_eq!(s.queries.get("recent"), Some("MATCH (n) RETURN $limit"));
-        assert_eq!(effects, vec![Effect::PersistQueries]);
+        assert_eq!(effects, vec![Effect::PersistQuery("recent".to_string())]);
         assert!(s.status.message.contains("saved 'recent'"));
         assert_eq!(s.editor.buffer(), "", "a command is consumed");
     }
@@ -4462,7 +4462,7 @@ mod tests {
         submit_query(&mut s, "RETURN 1;");
         let effects = submit_meta(&mut s, ":save one");
         assert_eq!(s.queries.get("one"), Some("RETURN 1"));
-        assert_eq!(effects, vec![Effect::PersistQueries]);
+        assert_eq!(effects, vec![Effect::PersistQuery("one".to_string())]);
     }
 
     #[test]
@@ -4509,7 +4509,7 @@ mod tests {
         s.queries.set("a".to_string(), "RETURN 1".to_string());
         let effects = submit_meta(&mut s, ":forget a");
         assert!(s.queries.get("a").is_none());
-        assert_eq!(effects, vec![Effect::PersistQueries]);
+        assert_eq!(effects, vec![Effect::PersistQuery("a".to_string())]);
         assert!(s.status.message.contains("forgot 'a'"));
 
         let effects = submit_meta(&mut s, ":forget gone");
