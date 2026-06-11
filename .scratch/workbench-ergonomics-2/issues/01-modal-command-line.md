@@ -1,6 +1,6 @@
 # 01 — Modal command line; editor submit is Cypher-only
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

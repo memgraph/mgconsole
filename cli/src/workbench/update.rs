@@ -21,8 +21,8 @@ use super::event::{Event, Key, KeyCode, MouseEvent, MouseKind};
 use super::plan::{is_plan_query, Plan};
 use super::schema::{Schema, SchemaSource};
 use super::state::{
-    Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, SearchState, WatchState,
-    WorkbenchState,
+    CommandLine, Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, SearchState,
+    WatchState, WorkbenchState,
 };
 
 /// Apply one event to the state, returning the effects to perform.
@@ -409,6 +409,12 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     if state.completion.is_some() {
         return completion_key(state, key);
     }
+    // The modal Command line captures every key while open (ADR 0017), including
+    // Esc (which cancels it rather than quitting) and `?` (literal text in a
+    // command), so it never collides with the editor's keyspace.
+    if state.command_line.is_some() {
+        return command_line_key(state, key);
+    }
     // While `:watch` is active, any key stops it (issue 11) and is consumed; a
     // running watch re-run is cancelled so the Session is freed.
     if state.watch.is_some() {
@@ -636,6 +642,13 @@ fn handle_gesture(state: &mut WorkbenchState, gesture: Gesture) -> Vec<Effect> {
         }
         Gesture::Search => {
             open_search(state);
+            Vec::new()
+        }
+        // Open the modal Command line mid-composition (ADR 0017): the editor's
+        // half-written Cypher is left untouched, and focus returns to it on
+        // Esc/Enter. The prompt is seeded with `:` so a command is just typed.
+        Gesture::OpenCommandLine => {
+            open_command_line(state);
             Vec::new()
         }
         // Buffer (tab) navigation gestures (issue 18). Allowed while a query is
@@ -931,11 +944,95 @@ fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             recall_newer(state);
             Vec::new()
         }
+        // `:` on an empty/whitespace-only editor opens the modal Command line with
+        // `:` already present (ADR 0017), mirroring the REPL's "line starts with `:`"
+        // rule. Once any Cypher is present, `:` is literal text (labels, rel-types,
+        // map keys, enums), so it is never swallowed mid-query.
+        Key {
+            code: KeyCode::Char(':'),
+            ctrl: false,
+            alt: false,
+            ..
+        } if state.editor.buffer().trim().is_empty() => {
+            open_command_line(state);
+            Vec::new()
+        }
         // Everything else is ordinary editing, delegated to the editor widget.
         other => {
             state.editor.edit(other);
             Vec::new()
         }
+    }
+}
+
+/// Open the modal Command line (ADR 0017), seeded with `:` and remembering the
+/// current focus to restore when it closes. The editor buffer is never touched —
+/// the command line is a separate surface, so a half-written query is preserved.
+fn open_command_line(state: &mut WorkbenchState) {
+    state.command_line = Some(CommandLine {
+        content: ":".to_string(),
+        prior_focus: state.focus,
+    });
+}
+
+/// Keys while the modal Command line is open (ADR 0017): Enter runs the typed
+/// `:`-command, Esc cancels, Backspace/printable input edit the line. Closing it
+/// (either way) restores the focus the prompt was opened from — the command line
+/// is not part of the focus cycle.
+fn command_line_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Enter => run_command_line(state),
+        KeyCode::Esc => {
+            close_command_line(state);
+            Vec::new()
+        }
+        KeyCode::Backspace => {
+            if let Some(cl) = state.command_line.as_mut() {
+                cl.content.pop();
+            }
+            Vec::new()
+        }
+        KeyCode::Char(c) if !key.ctrl && !key.alt => {
+            if let Some(cl) = state.command_line.as_mut() {
+                cl.content.push(c);
+            }
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Close the Command line, restoring the focus it was opened from.
+fn close_command_line(state: &mut WorkbenchState) {
+    if let Some(cl) = state.command_line.take() {
+        state.focus = cl.prior_focus;
+    }
+}
+
+/// Run the typed Command line content (ADR 0017): route it through the Workbench's
+/// own command layer (`:close`) and then the shared `MetaCommand` vocabulary, the
+/// same dispatch a submitted line used before the editor became Cypher-only. A
+/// bare `:` (or empty line) is a silent cancel. Focus returns to where it was.
+fn run_command_line(state: &mut WorkbenchState) -> Vec<Effect> {
+    let Some(cl) = state.command_line.take() else {
+        return Vec::new();
+    };
+    state.focus = cl.prior_focus;
+    let line = cl.content.trim();
+    // A bare prompt (`:` with nothing after it) cancels, like an empty submit.
+    if line.is_empty() || line == ":" {
+        return Vec::new();
+    }
+    if let Some(command) = workbench_command(line) {
+        return handle_workbench_command(state, command);
+    }
+    // A non-`:` line cannot normally reach here (the prompt always carries `:`),
+    // but guard anyway so an edited-away colon reports rather than runs as Cypher.
+    if let Some(meta) = meta_command(line) {
+        handle_meta(state, meta)
+    } else {
+        state.status.message = format!("not a command: {line}");
+        Vec::new()
     }
 }
 
@@ -1285,7 +1382,9 @@ fn workbench_command(line: &str) -> Option<WorkbenchCommand> {
 fn handle_workbench_command(state: &mut WorkbenchState, command: WorkbenchCommand) -> Vec<Effect> {
     match command {
         WorkbenchCommand::Close => {
-            state.editor.clear();
+            // Closing swaps the neighbour's state into the live fields (or, for the
+            // last Buffer, leaves it in place), so the editor is never cleared here —
+            // a `:close` from the Command line must not wipe a Buffer's Cypher.
             if state.buffer_count() == 1 {
                 state.status.message = "the last buffer stays open".to_string();
                 return Vec::new();
@@ -1310,25 +1409,14 @@ fn handle_workbench_command(state: &mut WorkbenchState, command: WorkbenchComman
 }
 
 /// Handle a submit (plain Enter): split the buffer into statements and run the
-/// first, queuing the rest to run sequentially on the one Session. A `:quit`/
-/// `:exit` buffer leaves the workbench (reusing the REPL's meta parser), even
-/// while a query runs. Submitting while a query is in flight is refused with a
-/// "session busy" status (one-live-result, ADR 0005). The editor keeps its text
-/// so the query can be edited and re-run.
+/// first, queuing the rest to run sequentially on the one Session. The editor is
+/// Cypher-only (ADR 0017), so a `:`-line typed here is *not* a command — it is
+/// Cypher and will error; the typed `:`-vocabulary comes from the modal Command
+/// line (`Ctrl+G` / `:` on an empty editor). Submitting while a query is in flight
+/// is refused with a "session busy" status (one-live-result, ADR 0005). The editor
+/// keeps its text so the query can be edited and re-run.
 fn submit(state: &mut WorkbenchState) -> Vec<Effect> {
     let buffer = state.editor.buffer();
-    // A Workbench command (`:close`) is recognised by the Workbench's own command
-    // layer, ahead of the shared meta-command vocabulary (CONTEXT.md "Workbench
-    // command"): it drives a Workbench-only concept and has no meaning in the line
-    // REPL, so it never enters the shared `MetaCommand` parser.
-    if let Some(command) = workbench_command(buffer.trim()) {
-        return handle_workbench_command(state, command);
-    }
-    // A `:`-meta command is handled here (reusing the REPL's parser), not run as
-    // a query (slice 16 brings the `:param` family into the workbench).
-    if let Some(meta) = meta_command(buffer.trim()) {
-        return handle_meta(state, meta);
-    }
     if matches!(state.run, RunState::Running { .. }) {
         state.status.message = "session busy — cancel first".to_string();
         return Vec::new();
@@ -1428,10 +1516,11 @@ fn record_history(state: &mut WorkbenchState, submission: &str, effects: &mut Ve
     effects.push(Effect::AppendHistory(entry));
 }
 
-/// Handle a submitted `:`-meta command, reusing the REPL's `MetaCommand`. The
-/// `:param` family (slice 16) reuses the REPL's store and server-side evaluation;
-/// the editor is cleared since a command is consumed (unlike a query, which is
-/// kept for re-run).
+/// Handle a `:`-meta command run from the modal Command line (ADR 0017), reusing
+/// the REPL's `MetaCommand`. The `:param` family (slice 16) reuses the REPL's store
+/// and server-side evaluation. The editor is *not* touched — it holds the Buffer's
+/// Cypher, a surface separate from the command line — except by `:load`, whose
+/// whole purpose is to recall a template into it.
 // One arm per command in the shared vocabulary; the match grows with each new
 // `:`-command (issues 04–13). Splitting it would scatter the small per-arm state
 // edits for no clarity gain — it is the Workbench analogue of the REPL's
@@ -1446,7 +1535,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 state.status.message = "session busy — cancel first".to_string();
                 return Vec::new();
             }
-            state.editor.clear();
             vec![Effect::EvaluateParam {
                 name,
                 expr,
@@ -1455,13 +1543,11 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
         }
         MetaCommand::ListParams => {
             state.drawer = Some(DrawerKind::Params);
-            state.editor.clear();
             Vec::new()
         }
         MetaCommand::ClearParams => {
             state.params.clear();
             state.status.message = "parameters cleared".to_string();
-            state.editor.clear();
             Vec::new()
         }
         // `:set` shares the REPL's Settings spine (issue 01): list every setting,
@@ -1475,14 +1561,12 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 crate::repl::on_off(state.read_only),
                 crate::repl::on_off(state.mouse),
             );
-            state.editor.clear();
             Vec::new()
         }
         // `mouse` (issue 04) is a Workbench-only session toggle, not a precedence-
         // resolved Setting: `:set mouse off` releases mouse capture so native
         // selection works; `:set mouse on` restores the Workbench gestures.
         MetaCommand::SetSetting { name, value } if name == "mouse" => {
-            state.editor.clear();
             match crate::repl::parse_on_off(&value) {
                 Ok(on) => {
                     state.mouse = on;
@@ -1494,7 +1578,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             Vec::new()
         }
         MetaCommand::SetSetting { name, value } if name == "readonly" => {
-            state.editor.clear();
             match crate::repl::parse_on_off(&value) {
                 Ok(true) => {
                     state.read_only = true;
@@ -1529,7 +1612,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 // The session survives a bad name/value (ADR 0005); just report it.
                 Err(message) => state.status.message = format!("error: {message}"),
             }
-            state.editor.clear();
             Vec::new()
         }
         // Explicit transactions (issue 05): the reducer requests the effect; the
@@ -1540,7 +1622,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 state.status.message = "session busy — cancel first".to_string();
                 return Vec::new();
             }
-            state.editor.clear();
             vec![Effect::Transaction(match meta {
                 MetaCommand::Begin => TxOp::Begin,
                 MetaCommand::Commit => TxOp::Commit,
@@ -1554,7 +1635,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 state.status.message = "session busy — cancel first".to_string();
                 return Vec::new();
             }
-            state.editor.clear();
             if state.tx != mgconsole_core::TransactionState::Auto {
                 state.status.message = "note: the open transaction is aborted by :connect".to_string();
             }
@@ -1566,13 +1646,11 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 state.status.message = "session busy — cancel first".to_string();
                 return Vec::new();
             }
-            state.editor.clear();
             vec![Effect::UseDatabase(database)]
         }
         // `:o` arms the next submitted query to stream to a file (issue 12);
         // one-shot. An unknown format/extension is reported.
         MetaCommand::Redirect(args) => {
-            state.editor.clear();
             match crate::repl::parse_redirect(&args) {
                 Ok((format, path)) => {
                     state.status.message =
@@ -1592,7 +1670,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 state.status.message = "session busy — cancel first".to_string();
                 return Vec::new();
             }
-            state.editor.clear();
             vec![Effect::Source(PathBuf::from(path))]
         }
         // `:watch` re-runs a query on a timer (issue 11), refused while a
@@ -1608,7 +1685,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 state.status.message = "session busy — cancel first".to_string();
                 return Vec::new();
             }
-            state.editor.clear();
             match crate::repl::parse_watch(&args, state.last_query.as_deref()) {
                 Ok(spec) => {
                     let period = period_ticks(spec.interval);
@@ -1636,7 +1712,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 state.status.message = "session busy — cancel first".to_string();
                 return Vec::new();
             }
-            state.editor.clear();
             let mut statements = crate::repl::SYSINFO_QUERIES
                 .iter()
                 .map(|q| (*q).to_string());
@@ -1651,7 +1726,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
         // and request a persist effect; `:load` recalls into the editor (never
         // auto-runs); `:saved` summarises into the status bar.
         MetaCommand::Save { name, query } => {
-            state.editor.clear();
             match query.or_else(|| state.last_query.clone()) {
                 Some(text) => {
                     state.queries.set(name.clone(), text);
@@ -1667,7 +1741,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
         }
         MetaCommand::Saved => {
             state.status.message = state.queries.summary();
-            state.editor.clear();
             Vec::new()
         }
         // `:load` recalls the template into the editor for review/edit — it never
@@ -1684,7 +1757,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             Vec::new()
         }
         MetaCommand::Forget(name) => {
-            state.editor.clear();
             if state.queries.remove(&name) {
                 state.status.message = format!("forgot '{name}'");
                 return vec![Effect::PersistQueries];
@@ -1705,7 +1777,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
         MetaCommand::Help | MetaCommand::Docs => {
             state.help = true;
             state.help_scroll = 0;
-            state.editor.clear();
             Vec::new()
         }
     }
@@ -1748,6 +1819,10 @@ pub fn keybindings_help(keys: &KeyBindings) -> String {
         &[
             ("Enter".to_string(), "Run the query in the editor"),
             ("Alt+Enter / Ctrl+J".to_string(), "Insert a newline (also Shift/Ctrl+Enter)"),
+            (
+                format!(": / {}", chord(Gesture::OpenCommandLine)),
+                "Open the command line (run a :command)",
+            ),
             ("Tab".to_string(), "Complete the word, or switch pane focus"),
             ("Ctrl+Z / Ctrl+Y".to_string(), "Undo / redo (incl. format, :load, recall)"),
             ("Ctrl+Up / Ctrl+Down".to_string(), "Recall older / newer query (command history)"),
@@ -1790,7 +1865,7 @@ pub fn keybindings_help(keys: &KeyBindings) -> String {
         ],
     );
     out.push_str(
-        "Commands (type at the editor)\n  \
+        "Commands (type at the command line — : on an empty editor, or Ctrl+G)\n  \
          :param :params · :set · :begin :commit :rollback · :connect :use · :sysinfo\n  \
          :source :watch :o · :save :saved :load :forget · :close · :help :docs :quit\n\n\
          Tab chords and tool chords are rebindable in ~/.mgconsole/config.toml under [keys].",
@@ -1842,6 +1917,16 @@ mod tests {
 
     fn one_row() -> Record {
         Record::new(vec![Value::Integer(1)])
+    }
+
+    /// Run a `:`-command through the modal Command line (ADR 0017): open the
+    /// command line (`Ctrl+G` seeds the `:` prompt), type the rest, and press
+    /// Enter — the path the editor no longer takes. Returns the effects.
+    fn run_command(state: &mut WorkbenchState, command: &str) -> Vec<Effect> {
+        update(state, Event::Key(Key::ctrl(KeyCode::Char('g'))));
+        let rest = command.strip_prefix(':').unwrap_or(command);
+        type_str(state, rest);
+        update(state, Event::Key(Key::plain(KeyCode::Enter)))
     }
 
     /// Type a string into the editor, one character event at a time.
@@ -1968,8 +2053,7 @@ mod tests {
     #[test]
     fn a_quit_meta_command_leaves_the_workbench() {
         let mut s = wb();
-        type_str(&mut s, ":quit");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":quit");
         assert_eq!(effects, vec![Effect::Quit]);
     }
 
@@ -2009,6 +2093,103 @@ mod tests {
             update(&mut s, Event::Key(Key::plain(KeyCode::Esc))),
             vec![Effect::Quit]
         );
+    }
+
+    // --- modal command line (ADR 0017) ---------------------------------------
+
+    #[test]
+    fn colon_on_an_empty_editor_opens_the_command_line_with_a_colon_present() {
+        let mut s = wb();
+        update(&mut s, Event::Key(Key::char(':')));
+        let cl = s.command_line.as_ref().expect("the command line opened");
+        assert_eq!(cl.content, ":", "seeded with the colon prompt");
+        assert_eq!(cl.prior_focus, Focus::Editor);
+        assert_eq!(s.editor.buffer(), "", "the colon never reached the editor");
+    }
+
+    #[test]
+    fn colon_on_a_whitespace_only_editor_opens_the_command_line() {
+        let mut s = wb();
+        type_str(&mut s, "  ");
+        update(&mut s, Event::Key(Key::char(':')));
+        assert!(s.command_line.is_some(), "whitespace counts as empty");
+    }
+
+    #[test]
+    fn colon_after_cypher_is_literal_text_in_the_editor() {
+        let mut s = wb();
+        type_str(&mut s, "MATCH (n");
+        update(&mut s, Event::Key(Key::char(':')));
+        assert!(s.command_line.is_none(), "no command line — the colon is Cypher");
+        assert_eq!(s.editor.buffer(), "MATCH (n:", "the colon is inserted literally");
+    }
+
+    #[test]
+    fn ctrl_g_opens_the_command_line_without_touching_the_editor() {
+        let mut s = wb();
+        type_str(&mut s, "MATCH (n) RETURN n");
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('g'))));
+        let cl = s.command_line.as_ref().expect("the command line opened");
+        assert_eq!(cl.content, ":", "seeded with the colon prompt");
+        assert_eq!(s.editor.buffer(), "MATCH (n) RETURN n", "the half-written query is preserved");
+    }
+
+    #[test]
+    fn ctrl_g_opens_from_the_results_pane_and_esc_restores_that_focus() {
+        let mut s = wb();
+        s.focus = Focus::Results;
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('g'))));
+        assert_eq!(s.command_line.as_ref().unwrap().prior_focus, Focus::Results);
+        // Esc cancels and restores the prior focus.
+        update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
+        assert!(s.command_line.is_none(), "Esc closed the command line");
+        assert_eq!(s.focus, Focus::Results, "prior focus restored");
+        // Esc closed the command line, it did not quit the workbench.
+    }
+
+    #[test]
+    fn enter_in_the_command_line_runs_the_command_and_restores_focus() {
+        let mut s = wb();
+        s.focus = Focus::Results;
+        let effects = run_command(&mut s, ":begin");
+        assert_eq!(effects, vec![Effect::Transaction(TxOp::Begin)]);
+        assert!(s.command_line.is_none(), "the command line closed after running");
+        assert_eq!(s.focus, Focus::Results, "focus returns to where it was");
+    }
+
+    #[test]
+    fn a_bare_colon_in_the_command_line_cancels_silently() {
+        let mut s = wb();
+        update(&mut s, Event::Key(Key::char(':'))); // opens with ":"
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(effects.is_empty(), "a bare colon runs nothing");
+        assert!(s.command_line.is_none(), "and closes");
+    }
+
+    #[test]
+    fn a_colon_line_submitted_in_the_editor_is_cypher_not_a_meta_command() {
+        // The editor is Cypher-only (ADR 0017): a `:`-line pasted/typed and submitted
+        // runs as a query, not the meta parser. `:begin` here is Cypher.
+        let mut s = wb();
+        // Place a `:`-line in the editor directly (a paste), then submit it.
+        s.editor.set_text(":begin");
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        match effects.first() {
+            Some(Effect::RunQuery { query, .. }) => assert_eq!(query, ":begin"),
+            other => panic!("expected the :line to run as Cypher, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_command_line_is_not_part_of_the_focus_cycle() {
+        // Tab while the command line is open edits/ignores within it, never switching
+        // panes — the prompt is modal.
+        let mut s = wb();
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('g'))));
+        let focus_before = s.focus;
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        assert!(s.command_line.is_some(), "still open");
+        assert_eq!(s.focus, focus_before, "Tab did not switch panes");
     }
 
     // --- execution spine (slice 02): lifecycle driven by hand-fed events -----
@@ -2713,8 +2894,7 @@ mod tests {
     fn set_param_evaluates_server_side_with_current_params_in_scope() {
         let mut s = wb();
         s.params.insert("x".to_string(), Value::Integer(1));
-        type_str(&mut s, ":param y $x + 1");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":param y $x + 1");
         assert_eq!(
             effects,
             vec![Effect::EvaluateParam {
@@ -2764,12 +2944,10 @@ mod tests {
         let mut s = wb();
         s.params.insert("n".to_string(), Value::Integer(7));
         // `:params` opens the parameters drawer.
-        type_str(&mut s, ":params");
-        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        run_command(&mut s, ":params");
         assert_eq!(s.drawer, Some(DrawerKind::Params));
         // `:params clear` empties the store.
-        type_str(&mut s, ":params clear");
-        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        run_command(&mut s, ":params clear");
         assert!(s.params.is_empty());
     }
 
@@ -2788,8 +2966,7 @@ mod tests {
     fn set_display_changes_the_setting_and_clears_the_editor() {
         use mgconsole_core::DisplayMode;
         let mut s = wb();
-        type_str(&mut s, ":set display vertical");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":set display vertical");
         assert!(effects.is_empty(), "a setting change runs no query");
         assert_eq!(s.settings.display, DisplayMode::Vertical);
         assert_eq!(s.editor.buffer(), "", "the command is consumed");
@@ -2799,8 +2976,7 @@ mod tests {
     #[test]
     fn bare_set_lists_the_settings_in_the_status() {
         let mut s = wb();
-        type_str(&mut s, ":set");
-        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        run_command(&mut s, ":set");
         assert!(s.status.message.contains("display = auto"), "status: {}", s.status.message);
     }
 
@@ -2808,8 +2984,7 @@ mod tests {
     fn an_invalid_setting_is_reported_without_losing_the_session() {
         use mgconsole_core::DisplayMode;
         let mut s = wb();
-        type_str(&mut s, ":set display grid");
-        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        run_command(&mut s, ":set display grid");
         assert!(s.status.message.contains("error"), "status: {}", s.status.message);
         assert_eq!(s.settings.display, DisplayMode::Auto, "unchanged on error");
         // The session survives: a following query still runs.
@@ -2820,16 +2995,14 @@ mod tests {
     #[test]
     fn set_does_not_touch_the_param_store() {
         let mut s = wb();
-        type_str(&mut s, ":set display vertical");
-        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        run_command(&mut s, ":set display vertical");
         assert!(s.params.is_empty(), ":set must not populate the :param store");
     }
 
     #[test]
     fn set_readonly_on_marks_state_and_emits_the_effect() {
         let mut s = wb();
-        type_str(&mut s, ":set readonly on");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":set readonly on");
         assert!(s.read_only, "state marked read-only");
         assert_eq!(effects, vec![Effect::SetReadOnly(true)], "session told to apply it");
         assert_eq!(s.editor.buffer(), "", "command consumed");
@@ -2839,8 +3012,7 @@ mod tests {
     fn set_readonly_off_at_runtime_is_refused() {
         let mut s = wb();
         s.read_only = true;
-        type_str(&mut s, ":set readonly off");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":set readonly off");
         assert!(s.read_only, "still read-only — runtime off is refused");
         assert!(effects.is_empty(), "no effect on a refused change");
         assert!(s.status.message.contains("connect time"), "status: {}", s.status.message);
@@ -2849,8 +3021,7 @@ mod tests {
     #[test]
     fn bare_set_lists_readonly_in_the_status() {
         let mut s = wb();
-        type_str(&mut s, ":set");
-        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        run_command(&mut s, ":set");
         assert!(s.status.message.contains("readonly = off"), "status: {}", s.status.message);
     }
 
@@ -2859,8 +3030,7 @@ mod tests {
     #[test]
     fn begin_emits_a_transaction_effect_and_clears_the_editor() {
         let mut s = wb();
-        type_str(&mut s, ":begin");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":begin");
         assert_eq!(effects, vec![Effect::Transaction(TxOp::Begin)]);
         assert_eq!(s.editor.buffer(), "", "command consumed");
     }
@@ -2868,14 +3038,12 @@ mod tests {
     #[test]
     fn commit_and_rollback_emit_their_effects() {
         let mut s = wb();
-        type_str(&mut s, ":commit");
         assert_eq!(
-            update(&mut s, Event::Key(Key::plain(KeyCode::Enter))),
+            run_command(&mut s, ":commit"),
             vec![Effect::Transaction(TxOp::Commit)]
         );
-        type_str(&mut s, ":rollback");
         assert_eq!(
-            update(&mut s, Event::Key(Key::plain(KeyCode::Enter))),
+            run_command(&mut s, ":rollback"),
             vec![Effect::Transaction(TxOp::Rollback)]
         );
     }
@@ -2884,8 +3052,7 @@ mod tests {
     fn a_transaction_command_is_refused_while_a_query_runs() {
         let mut s = wb();
         submit_query(&mut s, "MATCH (n) RETURN n;"); // now Running
-        type_str(&mut s, ":begin");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":begin");
         assert!(effects.is_empty(), "no tx op while a query is in flight");
         assert!(s.status.message.contains("busy"), "status: {}", s.status.message);
     }
@@ -2896,8 +3063,7 @@ mod tests {
     fn connect_emits_a_connect_effect_and_warns_about_an_open_transaction() {
         let mut s = wb();
         s.tx = mgconsole_core::TransactionState::Open;
-        type_str(&mut s, ":connect prod");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":connect prod");
         assert_eq!(effects, vec![Effect::Connect("prod".to_string())]);
         assert!(s.status.message.contains("aborted by :connect"), "warned: {}", s.status.message);
         assert_eq!(s.editor.buffer(), "");
@@ -2936,8 +3102,7 @@ mod tests {
     #[test]
     fn source_reads_the_file_then_runs_a_stop_on_error_batch() {
         let mut s = wb();
-        type_str(&mut s, ":source setup.cypher");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":source setup.cypher");
         assert_eq!(effects, vec![Effect::Source(PathBuf::from("setup.cypher"))]);
 
         // The contents arrive and run as a batch with stop-on-error armed.
@@ -2981,8 +3146,7 @@ mod tests {
     fn redirect_arms_then_the_next_query_runs_to_file() {
         use crate::OutputFormat;
         let mut s = wb();
-        type_str(&mut s, ":o csv /tmp/wb_o.csv");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":o csv /tmp/wb_o.csv");
         assert!(effects.is_empty(), "arming runs nothing");
         assert!(s.redirect.is_some(), "redirect armed");
 
@@ -3023,8 +3187,7 @@ mod tests {
 
         // `:watch 1s` starts a fresh run immediately.
         s.editor.clear();
-        type_str(&mut s, ":watch 1s");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":watch 1s");
         assert!(matches!(effects.first(), Some(Effect::RunQuery { query, .. }) if query == "RETURN 1"));
         assert!(s.watch.is_some());
         let id = match s.run { RunState::Running { id } => id, RunState::Idle => panic!("running") };
@@ -3050,8 +3213,7 @@ mod tests {
         let id = submit_query(&mut s, "RETURN 1;");
         complete(&mut s, id, 1);
         s.editor.clear();
-        type_str(&mut s, ":watch 1s");
-        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        run_command(&mut s, ":watch 1s");
         let id = match s.run { RunState::Running { id } => id, RunState::Idle => panic!("running") };
         complete(&mut s, id, 1);
         assert!(s.watch.is_some());
@@ -3066,8 +3228,7 @@ mod tests {
         let mut s = wb();
         s.tx = mgconsole_core::TransactionState::Open;
         s.last_query = Some("RETURN 1".to_string());
-        type_str(&mut s, ":watch");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":watch");
         assert!(effects.is_empty());
         assert!(s.watch.is_none());
         assert!(s.status.message.contains("refused while a transaction is open"));
@@ -3076,8 +3237,7 @@ mod tests {
     #[test]
     fn sysinfo_runs_the_status_queries_as_a_batch() {
         let mut s = wb();
-        type_str(&mut s, ":sysinfo");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":sysinfo");
         // The first status query starts; the rest queue (issue 09).
         match effects.first() {
             Some(Effect::RunQuery { query, .. }) => {
@@ -3092,8 +3252,7 @@ mod tests {
     #[test]
     fn use_emits_a_use_database_effect() {
         let mut s = wb();
-        type_str(&mut s, ":use analytics");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":use analytics");
         assert_eq!(effects, vec![Effect::UseDatabase("analytics".to_string())]);
         assert_eq!(s.editor.buffer(), "");
     }
@@ -3114,8 +3273,7 @@ mod tests {
     fn connect_is_refused_while_a_query_runs() {
         let mut s = wb();
         submit_query(&mut s, "MATCH (n) RETURN n;");
-        type_str(&mut s, ":connect prod");
-        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        let effects = run_command(&mut s, ":connect prod");
         assert!(effects.is_empty());
         assert!(s.status.message.contains("busy"));
     }
@@ -3803,12 +3961,11 @@ mod tests {
 
     // --- Named queries (issue 13): the same verbs as the REPL, reducer seam ----
 
-    /// Submit a `:`-meta command by typing it and pressing Enter, returning the
-    /// effects. Clears the editor first (a prior submitted query keeps its text).
+    /// Run a `:`-meta command through the modal Command line (ADR 0017). The editor
+    /// is Cypher-only now, so a command is issued from the command line, not by
+    /// submitting it in the editor.
     fn submit_meta(state: &mut WorkbenchState, command: &str) -> Vec<Effect> {
-        state.editor.clear();
-        type_str(state, command);
-        update(state, Event::Key(Key::plain(KeyCode::Enter)))
+        run_command(state, command)
     }
 
     #[test]
@@ -3910,10 +4067,10 @@ mod tests {
 
         let (keys, _) = crate::theme::resolve_keys(&BTreeMap::from([(
             "new-buffer".to_string(),
-            "ctrl+g".to_string(),
+            "ctrl+x".to_string(),
         )]));
         let rebound = keybindings_help(&keys);
-        assert!(rebound.contains("ctrl+g"), "the rebound chord is shown: {rebound}");
+        assert!(rebound.contains("ctrl+x"), "the rebound chord is shown: {rebound}");
         assert!(!rebound.contains("ctrl+t"), "the old default chord is gone");
     }
 
@@ -3995,12 +4152,12 @@ mod tests {
     fn the_status_hint_points_at_help_and_reflects_a_rebinding() {
         use crate::theme::resolve_keys;
         let overrides = std::collections::BTreeMap::from([
-            ("format-buffer".to_string(), "ctrl+g".to_string()),
+            ("format-buffer".to_string(), "ctrl+x".to_string()),
         ]);
         let (keys, _warnings) = resolve_keys(&overrides);
         let hint = status_hint(&keys, "Alt+Enter");
         assert!(hint.contains("? help"), "the hint points at help: {hint}");
-        assert!(hint.contains("ctrl+g"), "the hint reflects the rebound format chord: {hint}");
+        assert!(hint.contains("ctrl+x"), "the hint reflects the rebound format chord: {hint}");
     }
 
     #[test]
@@ -4088,17 +4245,17 @@ mod tests {
 
     #[test]
     fn a_rebound_chord_drives_the_gesture_and_the_old_chord_does_not() {
-        // Rebind toggle-params to Ctrl-G; the default Ctrl-P no longer toggles it.
+        // Rebind toggle-params to Ctrl-X; the default Ctrl-P no longer toggles it.
         let mut config = WorkbenchConfig::default();
         let (keys, warnings) = crate::theme::resolve_keys(&BTreeMap::from([(
             "toggle-params".to_string(),
-            "ctrl+g".to_string(),
+            "ctrl+x".to_string(),
         )]));
         assert!(warnings.is_empty());
         config.keys = keys;
         let mut s = WorkbenchState::new(config, true);
 
-        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('g'))));
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('x'))));
         assert_eq!(s.drawer, Some(DrawerKind::Params), "the rebound chord works");
 
         // The old default chord is now unbound: Ctrl-P is ordinary input, not a toggle.

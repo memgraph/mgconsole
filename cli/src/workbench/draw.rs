@@ -22,7 +22,7 @@ use super::plan::Plan;
 use super::update;
 use super::schema::Schema;
 use super::state::{
-    Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, SearchState,
+    CommandLine, Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, SearchState,
     WorkbenchState,
 };
 use ratatui::text::Span;
@@ -181,6 +181,23 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
         let (cx, cy) = editor_cursor;
         draw_completion(frame, completion, cx, cy, border);
     }
+
+    // The modal Command line (ADR 0017) takes over the status row while open, and
+    // owns the cursor — drawn last so it wins over the editor's cursor placement.
+    if let Some(command_line) = state.command_line.as_ref() {
+        draw_command_line(frame, status_area, command_line, &state.palette);
+    }
+}
+
+/// Draw the modal Command line over the status row (ADR 0017): the typed
+/// `:`-content with the terminal cursor at its end, styled in the theme's status
+/// slot so it reads as the active input surface.
+fn draw_command_line(frame: &mut Frame, area: Rect, command_line: &CommandLine, palette: &Palette) {
+    frame.render_widget(Clear, area);
+    let style = Style::default().fg(to_ratatui(palette.status));
+    frame.render_widget(Paragraph::new(command_line.content.as_str()).style(style), area);
+    let cursor_x = area.x + (command_line.content.chars().count() as u16).min(area.width.saturating_sub(1));
+    frame.set_cursor_position((cursor_x, area.y));
 }
 
 /// Draw the windowed Buffer tab bar (issue 07): each tab auto-titled from its
@@ -947,6 +964,18 @@ mod tests {
         assert!(render(&mut state).contains("[tx]"), "open tx marked");
         state.tx = mgconsole_core::TransactionState::Failed;
         assert!(render(&mut state).contains("[tx failed]"), "failed tx marked");
+    }
+
+    #[test]
+    fn renders_the_modal_command_line_over_the_status_row() {
+        use crate::workbench::state::{CommandLine, Focus};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.command_line = Some(CommandLine {
+            content: ":begin".to_string(),
+            prior_focus: Focus::Editor,
+        });
+        let rendered = render(&mut state);
+        assert!(rendered.contains(":begin"), "the command line content is drawn: {rendered}");
     }
 
     #[test]

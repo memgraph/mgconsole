@@ -419,6 +419,9 @@ pub enum Gesture {
     NewBuffer,
     NextBuffer,
     PrevBuffer,
+    /// Open the modal Command line (ADR 0017): `Ctrl+G` ("go to command") anywhere,
+    /// so a `:`-command can be issued mid-composition without disturbing the editor.
+    OpenCommandLine,
 }
 
 /// Every gesture, in a stable order — for defaults and for listing. Closing a
@@ -433,6 +436,7 @@ pub const GESTURES: &[Gesture] = &[
     Gesture::NewBuffer,
     Gesture::NextBuffer,
     Gesture::PrevBuffer,
+    Gesture::OpenCommandLine,
 ];
 
 impl Gesture {
@@ -448,6 +452,7 @@ impl Gesture {
             Gesture::NewBuffer => "new-buffer",
             Gesture::NextBuffer => "next-buffer",
             Gesture::PrevBuffer => "prev-buffer",
+            Gesture::OpenCommandLine => "open-command-line",
         }
     }
 
@@ -474,6 +479,10 @@ impl Gesture {
             // single-Ctrl/Alt+letter keyspace.
             Gesture::NextBuffer => Chord::ctrl_key(ChordKey::PageDown),
             Gesture::PrevBuffer => Chord::ctrl_key(ChordKey::PageUp),
+            // Ctrl+G ("go to command") is reliably delivered on every terminal,
+            // unlike Ctrl+; (ADR 0017 rejected the latter for the same reason
+            // ADR 0016 rejected Ctrl+Shift+Z).
+            Gesture::OpenCommandLine => Chord::ctrl('g'),
         }
     }
 }
@@ -693,6 +702,9 @@ mod tests {
         // The reverse lookup matches.
         assert_eq!(keys.gesture_for(Chord::ctrl('b')), Some(Gesture::ToggleSchema));
         assert_eq!(keys.gesture_for(Chord::ctrl('x')), None);
+        // The modal Command line opener defaults to Ctrl+G (ADR 0017).
+        assert_eq!(keys.chord(Gesture::OpenCommandLine), Chord::ctrl('g'));
+        assert_eq!(keys.gesture_for(Chord::ctrl('g')), Some(Gesture::OpenCommandLine));
     }
 
     #[test]
@@ -723,11 +735,11 @@ mod tests {
 
     #[test]
     fn keys_rebinds_a_gesture() {
-        let overrides = BTreeMap::from([("toggle-schema".to_string(), "ctrl+g".to_string())]);
+        let overrides = BTreeMap::from([("toggle-schema".to_string(), "ctrl+x".to_string())]);
         let (keys, warnings) = resolve_keys(&overrides);
         assert!(warnings.is_empty());
-        assert_eq!(keys.chord(Gesture::ToggleSchema), Chord::ctrl('g'));
-        assert_eq!(keys.gesture_for(Chord::ctrl('g')), Some(Gesture::ToggleSchema));
+        assert_eq!(keys.chord(Gesture::ToggleSchema), Chord::ctrl('x'));
+        assert_eq!(keys.gesture_for(Chord::ctrl('x')), Some(Gesture::ToggleSchema));
         // The old chord is now unbound.
         assert_eq!(keys.gesture_for(Chord::ctrl('b')), None);
     }

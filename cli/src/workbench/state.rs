@@ -50,6 +50,26 @@ pub struct SearchState {
     pub current: Option<usize>,
 }
 
+/// The modal Command line (ADR 0017): a one-line prompt for the typed
+/// `:`-vocabulary (Meta-commands and Workbench commands). It opens on `:` while
+/// the Buffer editor is empty/whitespace-only, or on `Ctrl+G` anywhere, runs its
+/// content on Enter, and dismisses on Esc — returning focus to [`prior_focus`].
+/// It is *not* part of the focus cycle, so the editor stays Cypher-only.
+///
+/// [`content`] always carries the leading `:` (seeded when the prompt opens), so
+/// it parses through the same [`meta_command`](crate::repl::meta_command) path the
+/// REPL prompt uses.
+///
+/// [`content`]: Self::content
+/// [`prior_focus`]: Self::prior_focus
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandLine {
+    /// The line being typed, including its leading `:`.
+    pub content: String,
+    /// The pane focus to restore when the command line closes.
+    pub prior_focus: Focus,
+}
+
 /// The export prompt's state (slice 09): the chosen format and the destination
 /// path being typed.
 #[derive(Debug, Clone)]
@@ -138,6 +158,9 @@ pub struct WorkbenchState {
     pub detail: Option<Value>,
     /// Vertical scroll of the detail overlay, for a Value taller than the box.
     pub detail_scroll: u16,
+    /// When `Some`, the modal Command line is open (ADR 0017): a one-line prompt
+    /// for the typed `:`-vocabulary, opened by `:` on an empty editor or `Ctrl+G`.
+    pub command_line: Option<CommandLine>,
     /// When `Some`, the export prompt is open (slice 09): pick a format and type
     /// a destination path for the on-screen result.
     pub export: Option<ExportPrompt>,
@@ -281,6 +304,7 @@ impl WorkbenchState {
             spinner: 0,
             detail: None,
             detail_scroll: 0,
+            command_line: None,
             export: None,
             search: None,
             help: false,
