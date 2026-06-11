@@ -332,6 +332,7 @@ fn run_interactive(
                 options.clone(),
                 resolved_output,
                 colorize,
+                supports_tui,
                 history.clone(),
                 out,
                 err,
@@ -366,6 +367,7 @@ fn run_repl(
     options: ConnectOptions,
     output_format: OutputFormat,
     colorize: bool,
+    supports_tui: bool,
     history: Option<HistoryFile>,
     out: &mut io::Stdout,
     err: &mut io::Stderr,
@@ -397,6 +399,10 @@ fn run_repl(
     };
     let repl_config = ReplConfig {
         row_cap: DEFAULT_ROW_CAP,
+        // The `:workbench` up-switch is gated on terminal capability (ADR 0019),
+        // independent of the `--plain` startup flag — so `--plain` on a capable
+        // terminal can still upgrade with `:workbench`.
+        supports_tui,
     };
     let mut source = RustylineSource::new(history, colorize, prompt)?;
     // Stream discipline (ADR 0014): result data → stdout (`out`); all chrome —

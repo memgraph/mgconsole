@@ -1,6 +1,6 @@
 # Up-switch: `:workbench` from the REPL, capability-gated
 
-Status: ready-for-agent
+Status: done
 
 ## What to build
 

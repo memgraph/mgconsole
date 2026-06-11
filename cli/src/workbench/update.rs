@@ -1729,6 +1729,12 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             }
             vec![Effect::SwitchTo(crate::frontend::Frontend::Repl)]
         }
+        // `:workbench` is the up-switch target (ADR 0019); typed in the Workbench it
+        // is a gentle, idempotent no-op — the mirror of `:repl` in the REPL.
+        MetaCommand::Workbench => {
+            state.status.message = "already in the workbench".to_string();
+            Vec::new()
+        }
         MetaCommand::SetParam { name, expr } => {
             // Evaluation runs a query; refuse while one is in flight (ADR 0005).
             if matches!(state.run, RunState::Running { .. }) {
@@ -2069,7 +2075,7 @@ pub fn keybindings_help(keys: &KeyBindings) -> String {
     out.push_str(
         "Commands (type at the command line — : on an empty editor, or Ctrl+G)\n  \
          :param :params · :set · :begin :commit :rollback · :connect :use · :sysinfo\n  \
-         :source :watch :o · :save :saved :load :forget · :repl · :close · :help :docs :quit\n\n\
+         :source :watch :o · :save :saved :load :forget · :repl :workbench · :close · :help :docs :quit\n\n\
          Tab chords and tool chords are rebindable in ~/.mgconsole/config.toml under [keys].",
     );
     out
@@ -4465,6 +4471,21 @@ mod tests {
         assert_eq!(
             effects,
             vec![Effect::SwitchTo(crate::frontend::Frontend::Repl)]
+        );
+    }
+
+    #[test]
+    fn workbench_command_in_the_workbench_is_a_gentle_no_op() {
+        // `:workbench` is the up-switch target; typed in the Workbench it is an
+        // idempotent no-op (ADR 0019), the mirror of `:repl` in the REPL — no switch
+        // effect, just a reassuring status message.
+        let mut s = wb();
+        let effects = submit_meta(&mut s, ":workbench");
+        assert!(effects.is_empty(), "no switch effect: {effects:?}");
+        assert!(
+            s.status.message.contains("already in the workbench"),
+            "status: {}",
+            s.status.message
         );
     }
 

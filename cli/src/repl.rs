@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use mgconsole_core::{render, tabular, DisplayMode, Error, QueryAssembler, TransactionState, Value};
 
-use crate::frontend::Outcome;
+use crate::frontend::{Frontend, Outcome};
 use crate::queries::NamedQueries;
 use crate::settings::Settings;
 use crate::OutputFormat;
@@ -100,6 +100,13 @@ pub enum MetaCommand {
     /// (ADR 0019). A cross-frontend Meta-command: in the Workbench it drops to the
     /// REPL; in the REPL it is a gentle no-op. The universal floor — always available.
     Repl,
+    /// `:workbench` (or `:tui`) — switch to (or stay in) the full-screen Workbench
+    /// over the same live Session (ADR 0019). The up-switch counterpart to `:repl`:
+    /// in the REPL it raises the Workbench when the terminal can host it (refused
+    /// otherwise); in the Workbench it is a gentle no-op. Recognised only in a build
+    /// with the `tui` feature — without it there is no Workbench to switch to, so
+    /// `:workbench` reads as an unknown command.
+    Workbench,
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -161,6 +168,11 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
             }
         }
         "repl" => MetaCommand::Repl,
+        // `:workbench`/`:tui` only name a real target in a `tui`-feature build; in a
+        // lean REPL-only binary there is no Workbench, so the word falls through to
+        // `Unknown` like any other unrecognised command (ADR 0019).
+        #[cfg(feature = "tui")]
+        "workbench" | "tui" => MetaCommand::Workbench,
         "save" => parse_save(args),
         "saved" => MetaCommand::Saved,
         "load" => {
@@ -480,6 +492,11 @@ pub trait QueryRunner {
 pub struct ReplConfig {
     /// The tabular row cap, so an overflow warning can name it.
     pub row_cap: usize,
+    /// Whether this terminal can host the full-screen Workbench (a capable tty plus
+    /// the `tui` feature, ADR 0010). Gates the `:workbench` up-switch (ADR 0019):
+    /// it is independent of the `--plain` startup flag, so launching `--plain` on a
+    /// capable terminal and upgrading with `:workbench` is supported.
+    pub supports_tui: bool,
 }
 
 /// The REPL's execute loop: read input, assemble it into complete queries, run
@@ -591,6 +608,10 @@ pub const WATCH_REFUSED_IN_TX: &str = ":watch is refused while a transaction is 
 /// A `:connect` swap aborts any open transaction (ADR 0011) — warned before the
 /// transaction is silently lost (issue 07).
 pub const TX_ABORTED_BY_CONNECT: &str = "the open transaction is aborted by :connect";
+/// `:workbench` is refused on a terminal that cannot host the full-screen UI (a
+/// non-tty, or `TERM=dumb`) — `:repl` stays the universal floor (ADR 0019).
+pub const WORKBENCH_NEEDS_CAPABLE_TERMINAL: &str =
+    "the workbench needs a capable terminal; staying in the REPL";
 
 /// Run one query and print its rendered table, summary, and any overflow warning
 /// — the shared body of the loop's per-query handling, `:sysinfo`, and `:source`.
@@ -633,6 +654,9 @@ fn execute_query(
 enum MetaFlow {
     /// `:quit` — leave the REPL.
     Quit,
+    /// `:workbench` — leave the REPL for the named Frontend over the same Session
+    /// (ADR 0019). The loop turns this into an [`Outcome::SwitchTo`].
+    Switch(Frontend),
     /// The command was handled (output already written); re-prompt.
     Handled,
     /// `:load` recalled a Named query: pre-fill the next prompt with this text for
@@ -656,13 +680,26 @@ fn dispatch_meta(
     last_query: Option<&str>,
     pending_redirect: &mut Option<(OutputFormat, PathBuf)>,
     row_cap: usize,
+    supports_tui: bool,
     data: &mut dyn Write,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> io::Result<MetaFlow> {
     match cmd {
         MetaCommand::Quit => return Ok(MetaFlow::Quit),
-        MetaCommand::Help => writeln!(out, "{}", help_text())?,
+        MetaCommand::Help => {
+            writeln!(out, "{}", help_text())?;
+            // The cross-Frontend switch commands (ADR 0019). `:repl` is the
+            // universal floor; `:workbench` exists only in a `tui`-feature build.
+            #[cfg(feature = "tui")]
+            {
+                writeln!(out, "\t:repl                  Stay in the line REPL")?;
+                writeln!(
+                    out,
+                    "\t:workbench             Switch to the full-screen workbench (capable terminals)"
+                )?;
+            }
+        }
         MetaCommand::Docs => writeln!(out, "{}", docs_text())?,
         // Evaluate the expression server-side with the existing params in scope,
         // then store the result. A bad expression is reported (the Session
@@ -739,7 +776,8 @@ fn dispatch_meta(
         MetaCommand::Source(path) => match std::fs::read_to_string(&path) {
             Ok(content) => {
                 source_content(
-                    &content, runner, settings, params, queries, row_cap, data, out, err,
+                    &content, runner, settings, params, queries, row_cap, supports_tui, data,
+                    out, err,
                 )?;
             }
             Err(e) => writeln!(err, "error: cannot read source file '{path}': {e}")?,
@@ -808,6 +846,16 @@ fn dispatch_meta(
         // `:repl` is the universal floor (ADR 0019): typed in the REPL it is a
         // gentle, idempotent no-op rather than a switch to itself.
         MetaCommand::Repl => writeln!(out, "already in the REPL")?,
+        // `:workbench` raises the full-screen Workbench over the same live Session
+        // (ADR 0019), gated on terminal *capability* — not the `--plain` startup
+        // flag, which was a preference. On an incapable terminal it is refused with
+        // a clear message and the REPL carries on (the universal floor).
+        MetaCommand::Workbench => {
+            if supports_tui {
+                return Ok(MetaFlow::Switch(Frontend::Workbench));
+            }
+            writeln!(err, "error: {WORKBENCH_NEEDS_CAPABLE_TERMINAL}")?;
+        }
         MetaCommand::Invalid(message) => writeln!(err, "error: {message}")?,
         MetaCommand::Unknown(cmd) => writeln!(err, "error: unknown command '{cmd}'")?,
     }
@@ -826,6 +874,7 @@ fn source_content(
     params: &mut BTreeMap<String, Value>,
     queries: &mut NamedQueries,
     row_cap: usize,
+    supports_tui: bool,
     data: &mut dyn Write,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -839,6 +888,9 @@ fn source_content(
                 if matches!(cmd, MetaCommand::Quit) {
                     return Ok(());
                 }
+                // A `:workbench`/`:repl` switch command in a sourced batch is a
+                // no-op: a `:source` runs to completion in the Frontend it began in
+                // (the returned [`MetaFlow`] is dropped — no mid-batch switch).
                 dispatch_meta(
                     cmd,
                     runner,
@@ -848,6 +900,7 @@ fn source_content(
                     None,
                     &mut pending_redirect,
                     row_cap,
+                    supports_tui,
                     data,
                     out,
                     err,
@@ -938,11 +991,13 @@ pub fn run_loop(
                     last_query.as_deref(),
                     &mut pending_redirect,
                     config.row_cap,
+                    config.supports_tui,
                     data,
                     out,
                     err,
                 )? {
                     MetaFlow::Quit => return Ok(Outcome::Quit),
+                    MetaFlow::Switch(target) => return Ok(Outcome::SwitchTo(target)),
                     MetaFlow::Handled => continue,
                     // Re-prompt with the recalled text pre-filled; never auto-run.
                     MetaFlow::Recall(text) => {
@@ -1043,6 +1098,27 @@ mod tests {
         let (_source, _runner, out, err) = drive(vec![Line::Text(":repl".into())], vec![]);
         assert!(out.contains("already in the REPL"), "no-op message: {out:?}");
         assert!(err.is_empty(), "no error: {err:?}");
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn workbench_and_tui_parse_as_the_up_switch() {
+        // `:workbench` is the up-switch counterpart to `:repl` (ADR 0019); `:tui` is
+        // an alias. Recognised here so the REPL can switch (or refuse) rather than
+        // run the word as a query.
+        assert_eq!(meta_command(":workbench"), Some(MetaCommand::Workbench));
+        assert_eq!(meta_command(":tui"), Some(MetaCommand::Workbench));
+    }
+
+    #[cfg(not(feature = "tui"))]
+    #[test]
+    fn workbench_is_not_a_command_without_the_tui_feature() {
+        // In a lean REPL-only binary there is no Workbench to switch to, so
+        // `:workbench` reads as an unknown command (ADR 0019).
+        assert_eq!(
+            meta_command(":workbench"),
+            Some(MetaCommand::Unknown(":workbench".to_string()))
+        );
     }
 
     #[test]
@@ -1621,7 +1697,7 @@ mod tests {
             &mut data,
             &mut chrome,
             &mut err,
-            &ReplConfig { row_cap: 1000 },
+            &ReplConfig { row_cap: 1000, supports_tui: false },
         )
         .expect("loop runs to EOF");
         let out = String::from_utf8(data).unwrap() + &String::from_utf8(chrome).unwrap();
@@ -1632,6 +1708,64 @@ mod tests {
             out,
             String::from_utf8(err).unwrap(),
         )
+    }
+
+    /// Drive the loop with an explicit `supports_tui` capability and hand back the
+    /// [`Outcome`] alongside the combined output, for the up-switch tests (issue 02).
+    #[cfg(feature = "tui")]
+    fn drive_switch(lines: Vec<Line>, supports_tui: bool) -> (Outcome, String, String) {
+        let mut source = ScriptedSource::of(lines);
+        let mut runner = ScriptedRunner::returning(vec![]);
+        let mut queries = NamedQueries::in_memory();
+        let mut data = Vec::new();
+        let mut chrome = Vec::new();
+        let mut err = Vec::new();
+        let mut params = BTreeMap::new();
+        let mut settings = Settings::default();
+        let outcome = run_loop(
+            &mut source,
+            &mut runner,
+            &mut queries,
+            &mut params,
+            &mut settings,
+            &mut data,
+            &mut chrome,
+            &mut err,
+            &ReplConfig { row_cap: 1000, supports_tui },
+        )
+        .expect("loop runs");
+        let out = String::from_utf8(data).unwrap() + &String::from_utf8(chrome).unwrap();
+        (outcome, out, String::from_utf8(err).unwrap())
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn workbench_on_a_capable_terminal_switches_up() {
+        // On a capable terminal `:workbench` hands off to the Workbench Frontend over
+        // the same Session (ADR 0019) — the loop returns the switch outcome.
+        let (outcome, _out, err) = drive_switch(vec![Line::Text(":workbench".into())], true);
+        assert_eq!(outcome, Outcome::SwitchTo(Frontend::Workbench));
+        assert!(err.is_empty(), "no error on a capable terminal: {err:?}");
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn workbench_on_an_incapable_terminal_is_refused_and_the_repl_survives() {
+        // On an incapable terminal `:workbench` is refused with a clear message and
+        // the REPL carries on (the universal floor) — no switch, runs on to EOF.
+        let (outcome, _out, err) = drive_switch(
+            vec![Line::Text(":workbench".into()), Line::Text(":quit".into())],
+            false,
+        );
+        assert_eq!(outcome, Outcome::Quit, "no switch on an incapable terminal");
+        assert!(err.contains("capable terminal"), "clear refusal: {err}");
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn help_lists_the_workbench_switch_command() {
+        let (_src, _runner, out, _err) = drive(vec![Line::Text(":help".into())], vec![]);
+        assert!(out.contains(":workbench"), "help lists the up-switch: {out}");
     }
 
     #[test]
@@ -1655,7 +1789,7 @@ mod tests {
             &mut data,
             &mut chrome,
             &mut err,
-            &ReplConfig { row_cap: 1000 },
+            &ReplConfig { row_cap: 1000, supports_tui: false },
         )
         .expect("loop runs");
         let data = String::from_utf8(data).unwrap();
