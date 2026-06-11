@@ -124,6 +124,11 @@ pub struct Palette {
     pub border: ThemeColor,
     pub selection: ThemeColor,
     pub status: ThemeColor,
+    // The bolder transaction status segment (issue 05): `transaction` colours the
+    // high-contrast `TX N OPEN` segment, `transaction_failed` the `TX N FAILED`
+    // one. Both are drawn reverse-video, so the colour reads as a solid block.
+    pub transaction: ThemeColor,
+    pub transaction_failed: ThemeColor,
 }
 
 impl Palette {
@@ -154,6 +159,8 @@ impl Palette {
             "border" => self.border = color,
             "selection" => self.selection = color,
             "status" => self.status = color,
+            "transaction" => self.transaction = color,
+            "transaction_failed" | "transaction-failed" => self.transaction_failed = color,
             // `plain` is always the terminal default; accept and ignore an explicit
             // override to it so a config that names it is not an error.
             "plain" if color == ThemeColor::Default => {}
@@ -185,6 +192,9 @@ pub fn builtin_palette(name: &str) -> Option<Palette> {
             border: ThemeColor::Cyan,
             selection: ThemeColor::Default,
             status: ThemeColor::Default,
+            // Amber open segment, red failed (reverse-video → a solid block).
+            transaction: ThemeColor::Yellow,
+            transaction_failed: ThemeColor::Red,
         }),
         "mono" => Some(Palette {
             keyword: ThemeColor::Default,
@@ -198,6 +208,9 @@ pub fn builtin_palette(name: &str) -> Option<Palette> {
             border: ThemeColor::Default,
             selection: ThemeColor::Default,
             status: ThemeColor::Default,
+            // Monochrome: the reverse-video block plus the OPEN/FAILED word carry it.
+            transaction: ThemeColor::Default,
+            transaction_failed: ThemeColor::Default,
         }),
         // Tuned for a light background: the darker base ANSI colours read on white
         // where the bright defaults wash out; comment grey stays legible.
@@ -211,6 +224,10 @@ pub fn builtin_palette(name: &str) -> Option<Palette> {
             border: ThemeColor::Blue,
             selection: ThemeColor::Default,
             status: ThemeColor::Blue,
+            // On white, a Yellow block washes out — a darker Blue block reads (the
+            // reverse-video text becomes white on blue); red stays for failed.
+            transaction: ThemeColor::Blue,
+            transaction_failed: ThemeColor::Red,
         }),
         _ => None,
     }
@@ -703,6 +720,25 @@ mod tests {
         assert_eq!(palette.border, ThemeColor::Magenta);
         assert_eq!(palette.selection, ThemeColor::Blue);
         assert_eq!(palette.status, ThemeColor::Green);
+    }
+
+    #[test]
+    fn the_transaction_slots_resolve_and_are_overridable() {
+        // Defaults (issue 05): amber open, red failed; light recolours open to blue.
+        let default = builtin_palette("default").unwrap();
+        assert_eq!(default.transaction, ThemeColor::Yellow);
+        assert_eq!(default.transaction_failed, ThemeColor::Red);
+        let light = builtin_palette("light").unwrap();
+        assert_eq!(light.transaction, ThemeColor::Blue, "light open reads on white");
+        // Both slots are overridable through [theme].
+        let overrides = BTreeMap::from([
+            ("transaction".to_string(), "magenta".to_string()),
+            ("transaction-failed".to_string(), "lightred".to_string()),
+        ]);
+        let (palette, warnings) = resolve_palette("default", &overrides);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(palette.transaction, ThemeColor::Magenta);
+        assert_eq!(palette.transaction_failed, ThemeColor::LightRed);
     }
 
     #[test]

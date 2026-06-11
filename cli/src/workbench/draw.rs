@@ -131,12 +131,9 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
         draw_result(frame, results_inner, result, results_focused, search, &state.palette);
     }
 
-    // Status bar: the transient message, then the keybind hints, in the theme's
-    // status colour (issue 08; `Default` → the terminal default).
-    frame.render_widget(
-        Paragraph::new(status_text(state)).style(Style::default().fg(to_ratatui(state.palette.status))),
-        status_area,
-    );
+    // Status bar: a loud transaction segment (issue 05), then the transient message
+    // and keybind hints in the theme's status colour (issue 08).
+    draw_status(frame, status_area, state);
 
     // Overlays, drawn last so they sit above the panes (at most one is open). Each
     // takes the theme's overlay border colour (issue 08).
@@ -844,6 +841,45 @@ fn draw_result(
     frame.render_widget(table, area);
 }
 
+/// Draw the status bar (issue 05): a loud, themed transaction segment when a
+/// transaction is open or failed, followed by the rest of the status line in the
+/// theme's status colour. Autocommit shows no transaction segment.
+fn draw_status(frame: &mut Frame, area: Rect, state: &WorkbenchState) {
+    let mut spans = Vec::new();
+    if let Some((label, style)) = transaction_segment(state) {
+        spans.push(Span::styled(label, style));
+        spans.push(Span::raw("  │  "));
+    }
+    spans.push(Span::styled(
+        status_text(state),
+        Style::default().fg(to_ratatui(state.palette.status)),
+    ));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The loud transaction status segment and its style (issue 05): `TX N OPEN` in the
+/// theme's `transaction` slot, `TX N FAILED` in `transaction_failed`, both drawn
+/// reverse-video + bold so the colour reads as a solid block that registers at a
+/// glance. `None` in autocommit. `N` is the Transaction episode number (issue 04).
+fn transaction_segment(state: &WorkbenchState) -> Option<(String, Style)> {
+    let loud = |color: ThemeColor| {
+        Style::default()
+            .fg(to_ratatui(color))
+            .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+    };
+    match state.tx {
+        mgconsole_core::TransactionState::Auto => None,
+        mgconsole_core::TransactionState::Open => Some((
+            format!("TX {} OPEN", state.tx_episode),
+            loud(state.palette.transaction),
+        )),
+        mgconsole_core::TransactionState::Failed => Some((
+            format!("TX {} FAILED", state.tx_episode),
+            loud(state.palette.transaction_failed),
+        )),
+    }
+}
+
 /// Compose the status line: the active profile (issue 03), then the current
 /// message (if any), then the keybind hints, including the universal newline key
 /// (issue 01 AC).
@@ -879,17 +915,8 @@ fn status_text(state: &WorkbenchState) -> String {
         }
         prefix.push_str("[read-only]");
     }
-    let tx_marker = match state.tx {
-        mgconsole_core::TransactionState::Auto => "",
-        mgconsole_core::TransactionState::Open => "[tx]",
-        mgconsole_core::TransactionState::Failed => "[tx failed]",
-    };
-    if !tx_marker.is_empty() {
-        if !prefix.is_empty() {
-            prefix.push(' ');
-        }
-        prefix.push_str(tx_marker);
-    }
+    // The transaction state is no longer a dim `[tx]` here (issue 05): it is drawn
+    // as a loud, themed `TX N OPEN` / `TX N FAILED` segment by [`draw_status`].
     if state.watch.is_some() {
         if !prefix.is_empty() {
             prefix.push(' ');
@@ -967,12 +994,32 @@ mod tests {
     }
 
     #[test]
-    fn the_status_bar_shows_the_transaction_marker() {
+    fn the_transaction_segment_colours_come_from_the_theme_slots() {
+        use crate::theme::builtin_palette;
         let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.tx_episode = 1;
         state.tx = mgconsole_core::TransactionState::Open;
-        assert!(render(&mut state).contains("[tx]"), "open tx marked");
+        let (_, style) = transaction_segment(&state).expect("open segment");
+        assert_eq!(style.fg, Some(to_ratatui(state.palette.transaction)), "open uses the slot");
+        assert!(style.add_modifier.contains(Modifier::REVERSED), "high-contrast");
+        // Resolved over the active theme — the `light` built-in recolours it.
+        let light = builtin_palette("light").expect("light is built in");
+        state.palette = light;
         state.tx = mgconsole_core::TransactionState::Failed;
-        assert!(render(&mut state).contains("[tx failed]"), "failed tx marked");
+        let (_, style) = transaction_segment(&state).expect("failed segment");
+        assert_eq!(style.fg, Some(to_ratatui(light.transaction_failed)), "failed uses the light slot");
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_bold_transaction_segment_with_the_episode_number() {
+        // Issue 05: a loud `TX N OPEN` / `TX N FAILED` segment, autocommit shows none.
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        assert!(!render(&mut state).contains("TX "), "autocommit shows no segment");
+        state.tx_episode = 2;
+        state.tx = mgconsole_core::TransactionState::Open;
+        assert!(render(&mut state).contains("TX 2 OPEN"), "open tx is a bold segment");
+        state.tx = mgconsole_core::TransactionState::Failed;
+        assert!(render(&mut state).contains("TX 2 FAILED"), "failed tx is a bold segment");
     }
 
     #[test]

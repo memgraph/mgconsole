@@ -1,6 +1,6 @@
 # 05 — Bolder transaction status indicator
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
