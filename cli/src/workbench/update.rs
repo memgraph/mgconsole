@@ -428,6 +428,20 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     if key.ctrl && key.code == KeyCode::Char('c') {
         return interrupt(state);
     }
+    // Editor undo/redo (issue 09), when the editor is focused: Ctrl+Z reverts the
+    // last edit — including a whole-buffer replace from auto-format / `:load` /
+    // history recall — and Ctrl+Y redoes. Scoped to editor focus so Ctrl+Y still
+    // reaches the summary-drawer gesture from the results pane.
+    if matches!(state.focus, Focus::Editor) && key.ctrl {
+        if key.code == KeyCode::Char('z') {
+            state.editor.undo();
+            return Vec::new();
+        }
+        if key.code == KeyCode::Char('y') {
+            state.editor.redo();
+            return Vec::new();
+        }
+    }
     // The rebindable gestures (issue 14): a key press is matched against the
     // resolved `[keys]` bindings (defaults reproduce today's chords). The buffer
     // gestures are bound here too but acted on in issue 18.
@@ -1671,6 +1685,7 @@ pub fn keybindings_help(keys: &KeyBindings) -> String {
             ("Enter".to_string(), "Run the query in the editor"),
             ("Alt+Enter / Ctrl+J".to_string(), "Insert a newline (also Shift/Ctrl+Enter)"),
             ("Tab".to_string(), "Complete the word, or switch pane focus"),
+            ("Ctrl+Z / Ctrl+Y".to_string(), "Undo / redo (incl. format, :load, recall)"),
             ("Ctrl+Up / Ctrl+Down".to_string(), "Recall older / newer query (command history)"),
             ("Ctrl+C".to_string(), "Cancel a running query, or clear the editor"),
             ("Esc / Ctrl+D".to_string(), "Quit the workbench"),
@@ -3142,6 +3157,9 @@ mod tests {
     #[test]
     fn ctrl_y_toggles_the_summary_drawer() {
         let mut s = wb();
+        // In the editor pane Ctrl+Y is redo (issue 09), so the summary-drawer
+        // gesture is reached from the results pane.
+        s.focus = Focus::Results;
         update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('y'))));
         assert_eq!(s.drawer, Some(DrawerKind::Summary));
         update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('y'))));
@@ -3837,6 +3855,46 @@ mod tests {
         let mut s = wb();
         submit_meta(&mut s, ":set");
         assert!(s.status.message.contains("theme = default"), "{}", s.status.message);
+    }
+
+    // --- Undoable buffer replacement (issue 09) -------------------------------
+
+    fn undo(state: &mut WorkbenchState) {
+        update(state, Event::Key(Key::ctrl(KeyCode::Char('z'))));
+    }
+    fn redo(state: &mut WorkbenchState) {
+        update(state, Event::Key(Key::ctrl(KeyCode::Char('y'))));
+    }
+
+    #[test]
+    fn auto_format_is_undoable_and_redoable() {
+        let mut s = wb();
+        type_str(&mut s, "match (n) return n");
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('l')))); // auto-format
+        assert_eq!(s.editor.buffer(), "MATCH (n)\nRETURN n", "formatted");
+        undo(&mut s);
+        assert_eq!(s.editor.buffer(), "match (n) return n", "undo restores the pre-format text");
+        redo(&mut s);
+        assert_eq!(s.editor.buffer(), "MATCH (n)\nRETURN n", "redo re-applies the format");
+    }
+
+    #[test]
+    fn history_recall_over_unsaved_text_is_undoable() {
+        let mut s = wb();
+        type_str(&mut s, "draft I am editing");
+        // Recall replaces the buffer (slice 17); it must not lose the draft.
+        s.editor.set_text("MATCH (n) RETURN n");
+        assert_eq!(s.editor.buffer(), "MATCH (n) RETURN n");
+        undo(&mut s);
+        assert_eq!(s.editor.buffer(), "draft I am editing", "undo restores the unsaved draft");
+    }
+
+    #[test]
+    fn ordinary_typed_edits_remain_undoable() {
+        let mut s = wb();
+        type_str(&mut s, "abc");
+        undo(&mut s);
+        assert_ne!(s.editor.buffer(), "abc", "an undo steps back a typed edit");
     }
 
     // --- Auto-format gesture (issue 15) ---------------------------------------

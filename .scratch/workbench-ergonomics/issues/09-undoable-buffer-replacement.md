@@ -1,6 +1,6 @@
 # 09 — Undoable buffer replacement + `Ctrl+Z`/`Ctrl+Y`
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

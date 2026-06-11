@@ -742,6 +742,16 @@ impl Default for WorkbenchConfig {
 /// (Enter, the newline key, quit) it handles itself.
 pub struct EditorState {
     textarea: TextArea<'static>,
+    /// Snapshot undo stack (issue 09): the buffer text *before* each logical edit,
+    /// oldest→newest. One entry per logical operation — a keystroke, a newline, a
+    /// completion, or a whole-buffer replace (auto-format / `:load` / recall) — so a
+    /// single `undo` restores the previous buffer regardless of how many internal
+    /// edits the operation made. A full-buffer snapshot is cheap for query text and
+    /// sidesteps tui-textarea's per-internal-edit history (a replace there is two
+    /// steps; a select-then-type, two more).
+    undo_stack: Vec<String>,
+    /// The buffers undone *from*, for redo; cleared whenever a new edit is recorded.
+    redo_stack: Vec<String>,
 }
 
 impl EditorState {
@@ -749,6 +759,17 @@ impl EditorState {
     pub fn new() -> Self {
         Self {
             textarea: TextArea::default(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+        }
+    }
+
+    /// Record `before` as an undo checkpoint for a logical edit just applied, and
+    /// drop the redo history (a new edit forks it). A no-op when nothing changed.
+    fn checkpoint(&mut self, before: String) {
+        if before != self.buffer() {
+            self.undo_stack.push(before);
+            self.redo_stack.clear();
         }
     }
 
@@ -757,13 +778,17 @@ impl EditorState {
     /// key are *not* routed here — the reducer owns those gestures.
     pub fn edit(&mut self, key: Key) {
         if let Some(input) = to_input(key) {
+            let before = self.buffer();
             self.textarea.input(input);
+            self.checkpoint(before);
         }
     }
 
     /// Insert a newline at the cursor (the universal newline gesture).
     pub fn insert_newline(&mut self) {
+        let before = self.buffer();
         self.textarea.insert_newline();
+        self.checkpoint(before);
     }
 
     /// The whole buffer as one string, physical lines joined by `\n`.
@@ -771,14 +796,47 @@ impl EditorState {
         self.textarea.lines().join("\n")
     }
 
-    /// Discard the buffer back to empty (Ctrl-C abandons typing when idle).
+    /// Discard the buffer back to empty (Ctrl-C abandons typing when idle). This
+    /// resets undo — abandoning is itself the "undo" of the typed buffer.
     pub fn clear(&mut self) {
         self.textarea = TextArea::default();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 
-    /// Replace the buffer with `text` (used by history recall, slice 17).
+    /// Replace the whole buffer with `text` as one undoable operation (issue 09).
+    /// Used by auto-format, `:load`, and history recall; the previous behaviour
+    /// rebuilt the widget, discarding undo so a format could not be reverted and
+    /// recalling over unsaved text lost it irrecoverably. Now a single `undo`
+    /// (Ctrl+Z) restores the previous buffer.
     pub fn set_text(&mut self, text: &str) {
-        self.textarea = TextArea::new(text.split('\n').map(String::from).collect());
+        let before = self.buffer();
+        self.textarea.select_all();
+        self.textarea.insert_str(text);
+        self.checkpoint(before);
+    }
+
+    /// Undo the last logical edit (Ctrl+Z): restore the previous buffer snapshot in
+    /// one step. Returns whether anything was undone.
+    pub fn undo(&mut self) -> bool {
+        if let Some(previous) = self.undo_stack.pop() {
+            self.redo_stack.push(self.buffer());
+            self.textarea = TextArea::new(previous.split('\n').map(String::from).collect());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Redo the last undone edit (Ctrl+Y). Returns whether anything was redone.
+    pub fn redo(&mut self) -> bool {
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack.push(self.buffer());
+            self.textarea = TextArea::new(next.split('\n').map(String::from).collect());
+            true
+        } else {
+            false
+        }
     }
 
     /// The physical lines, for the draw edge to render with per-token
@@ -807,10 +865,12 @@ impl EditorState {
     /// Replace the `prefix_len`-character word before the cursor with `candidate`
     /// (completion insertion): delete the prefix, then insert the candidate.
     pub fn insert_completion(&mut self, prefix_len: usize, candidate: &str) {
+        let before = self.buffer();
         for _ in 0..prefix_len {
             self.textarea.delete_char();
         }
         self.textarea.insert_str(candidate);
+        self.checkpoint(before);
     }
 }
 
