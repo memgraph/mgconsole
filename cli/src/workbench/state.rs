@@ -68,6 +68,40 @@ pub struct CommandLine {
     pub content: String,
     /// The pane focus to restore when the command line closes.
     pub prior_focus: Focus,
+    /// The open inline completion menu (issue 02): the matching `:command` names,
+    /// the selected one, and the content prefix they complete onto. `None` when no
+    /// `Tab` menu is active; cleared by any edit or recall.
+    pub completion: Option<CommandCompletion>,
+    /// The recall position into the session command history (issue 02), or `None`
+    /// while editing the live line. Distinct from the editor's Cypher query recall.
+    pub recall_index: Option<usize>,
+    /// The live line saved when recall began, restored on stepping past the newest.
+    pub recall_saved: Option<String>,
+}
+
+impl CommandLine {
+    /// A freshly-opened Command line: the `:` prompt seeded, remembering the focus
+    /// to restore, with no completion menu or recall in progress.
+    pub fn new(prior_focus: Focus) -> Self {
+        Self {
+            content: ":".to_string(),
+            prior_focus,
+            completion: None,
+            recall_index: None,
+            recall_saved: None,
+        }
+    }
+}
+
+/// The inline `Tab`-completion menu for the modal Command line (issue 02): the
+/// matching `:command` names, which one is shown, and the content prefix the
+/// candidate is appended to (everything before the completed word, e.g. `:`). A
+/// repeated `Tab` cycles `selected`; an edit drops the whole menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandCompletion {
+    pub candidates: Vec<String>,
+    pub selected: usize,
+    pub base: String,
 }
 
 /// The export prompt's state (slice 09): the chosen format and the destination
@@ -228,6 +262,13 @@ pub struct WorkbenchState {
     /// Persisted command history, oldest→newest, for recall (slice 17). Loaded on
     /// start and appended on each submit.
     pub history_entries: Vec<String>,
+    /// The session command history (issue 02): past `:`-commands run from the modal
+    /// Command line, oldest→newest, for `Up`/`Down` recall there. In-memory and
+    /// session-scoped — kept distinct from the Cypher [`history_entries`] that
+    /// `Ctrl+Up/Down` recalls into the editor.
+    ///
+    /// [`history_entries`]: Self::history_entries
+    pub command_history: Vec<String>,
     /// The recall position into [`history_entries`](Self::history_entries), or
     /// `None` when editing the live buffer.
     pub recall_index: Option<usize>,
@@ -326,6 +367,7 @@ impl WorkbenchState {
             running_started: false,
             running_buffer: None,
             history_entries: Vec::new(),
+            command_history: Vec::new(),
             recall_index: None,
             recall_saved: None,
             status: StatusLine::default(),

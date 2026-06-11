@@ -46,6 +46,29 @@ impl CompletionSource for StaticVocabulary {
     }
 }
 
+/// The Workbench's typed `:`-command names (without the leading colon), for the
+/// modal Command line's completion (ADR 0017 / issue 02). Listed in the order they
+/// are offered; matched case-insensitively like the rest of the vocabulary.
+pub const COMMAND_NAMES: &[&str] = &[
+    "begin", "commit", "rollback", "connect", "use", "param", "params", "set", "source", "watch",
+    "save", "saved", "load", "forget", "sysinfo", "close", "help", "docs", "quit", "exit", "o",
+];
+
+/// A completion source over the typed `:`-command names (issue 02). Unlike the
+/// Cypher vocabulary, the canonical form is lowercase, so it matches the upper-
+/// cased prefix against each name's upper-case form and yields the lowercase name.
+pub struct CommandVocabulary;
+
+impl CompletionSource for CommandVocabulary {
+    fn extend_matches(&self, prefix_upper: &str, out: &mut Vec<String>) {
+        for &name in COMMAND_NAMES {
+            if name.to_uppercase().starts_with(prefix_upper) {
+                out.push(name.to_string());
+            }
+        }
+    }
+}
+
 /// Aggregates one or more [`CompletionSource`]s into the REPL's completer. New
 /// sources (e.g. live schema) are added with [`Completer::add_source`] without
 /// touching callers.
@@ -58,6 +81,14 @@ impl Completer {
     pub fn with_static_vocabulary() -> Self {
         Self {
             sources: vec![Box::new(StaticVocabulary)],
+        }
+    }
+
+    /// A completer over the typed `:`-command names (issue 02), for the modal
+    /// Command line — the same engine, a different vocabulary.
+    pub fn with_command_vocabulary() -> Self {
+        Self {
+            sources: vec![Box::new(CommandVocabulary)],
         }
     }
 
@@ -257,6 +288,17 @@ mod tests {
         let mut c = Completer::with_static_vocabulary();
         c.add_source(Box::new(Labels));
         assert!(c.candidates("Per").contains(&"Person".to_string()));
+    }
+
+    #[test]
+    fn the_command_vocabulary_completes_command_names_case_insensitively() {
+        let c = Completer::with_command_vocabulary();
+        assert!(c.candidates("beg").contains(&"begin".to_string()));
+        assert!(c.candidates("BEG").contains(&"begin".to_string()), "case-insensitive");
+        // `:s…` is ambiguous across several commands.
+        let s = c.candidates("s");
+        assert!(s.contains(&"set".to_string()) && s.contains(&"source".to_string()));
+        assert!(c.candidates("zzq").is_empty(), "an unknown prefix offers nothing");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # 02 — Command-line completion + recall
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

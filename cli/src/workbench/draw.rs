@@ -970,10 +970,9 @@ mod tests {
     fn renders_the_modal_command_line_over_the_status_row() {
         use crate::workbench::state::{CommandLine, Focus};
         let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
-        state.command_line = Some(CommandLine {
-            content: ":begin".to_string(),
-            prior_focus: Focus::Editor,
-        });
+        let mut cl = CommandLine::new(Focus::Editor);
+        cl.content = ":begin".to_string();
+        state.command_line = Some(cl);
         let rendered = render(&mut state);
         assert!(rendered.contains(":begin"), "the command line content is drawn: {rendered}");
     }

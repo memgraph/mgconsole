@@ -13,7 +13,7 @@ use std::time::Duration;
 use mgconsole_core::{Error, QueryAssembler, Record, Summary, Value};
 
 use crate::repl::{format_summary, meta_command, MetaCommand};
-use crate::syntax::Completer;
+use crate::syntax::{word_start, Completer};
 use crate::theme::{Chord, ChordKey, Gesture, KeyBindings};
 
 use super::effect::{Effect, TxOp};
@@ -21,8 +21,8 @@ use super::event::{Event, Key, KeyCode, MouseEvent, MouseKind};
 use super::plan::{is_plan_query, Plan};
 use super::schema::{Schema, SchemaSource};
 use super::state::{
-    CommandLine, Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, SearchState,
-    WatchState, WorkbenchState,
+    CommandCompletion, CommandLine, Completion, CurrentResult, DrawerKind, ExportPrompt, Focus,
+    RunState, SearchState, WatchState, WorkbenchState,
 };
 
 /// Apply one event to the state, returning the effects to perform.
@@ -969,16 +969,14 @@ fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// current focus to restore when it closes. The editor buffer is never touched —
 /// the command line is a separate surface, so a half-written query is preserved.
 fn open_command_line(state: &mut WorkbenchState) {
-    state.command_line = Some(CommandLine {
-        content: ":".to_string(),
-        prior_focus: state.focus,
-    });
+    state.command_line = Some(CommandLine::new(state.focus));
 }
 
-/// Keys while the modal Command line is open (ADR 0017): Enter runs the typed
-/// `:`-command, Esc cancels, Backspace/printable input edit the line. Closing it
-/// (either way) restores the focus the prompt was opened from — the command line
-/// is not part of the focus cycle.
+/// Keys while the modal Command line is open (ADR 0017 / issue 02): Enter runs the
+/// typed `:`-command, Esc cancels, Tab completes a `:command` name, Up/Down recall
+/// past commands, Backspace/printable input edit the line. Closing it (either way)
+/// restores the focus the prompt was opened from — the command line is not part of
+/// the focus cycle, so Tab here never switches panes.
 fn command_line_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     match key.code {
         KeyCode::Enter => run_command_line(state),
@@ -986,19 +984,105 @@ fn command_line_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             close_command_line(state);
             Vec::new()
         }
+        // Tab completes the `:command` name under the cursor from the existing
+        // completion engine (issue 02); with no candidates it is a no-op.
+        KeyCode::Tab => {
+            complete_command_line(state);
+            Vec::new()
+        }
+        // Up/Down walk the session command history — a stack distinct from the
+        // Cypher query history that Ctrl+Up/Down recalls into the editor (issue 02).
+        KeyCode::Up => {
+            recall_command(state, true);
+            Vec::new()
+        }
+        KeyCode::Down => {
+            recall_command(state, false);
+            Vec::new()
+        }
         KeyCode::Backspace => {
             if let Some(cl) = state.command_line.as_mut() {
                 cl.content.pop();
+                cl.completion = None;
             }
             Vec::new()
         }
         KeyCode::Char(c) if !key.ctrl && !key.alt => {
             if let Some(cl) = state.command_line.as_mut() {
                 cl.content.push(c);
+                cl.completion = None;
             }
             Vec::new()
         }
         _ => Vec::new(),
+    }
+}
+
+/// Complete the `:command` name under the cursor in the Command line (issue 02). A
+/// repeated Tab cycles the open menu; a fresh Tab computes candidates for the word
+/// and applies the first, replacing the typed prefix. With no candidates it is a
+/// no-op (and never switches focus — the command line is modal).
+fn complete_command_line(state: &mut WorkbenchState) {
+    let Some(cl) = state.command_line.as_mut() else {
+        return;
+    };
+    // A repeated Tab cycles the already-open menu rather than re-deriving it (which
+    // would collapse to the single just-inserted candidate).
+    if let Some(menu) = cl.completion.as_mut() {
+        menu.selected = (menu.selected + 1) % menu.candidates.len();
+        cl.content = format!("{}{}", menu.base, menu.candidates[menu.selected]);
+        return;
+    }
+    let start = word_start(&cl.content, cl.content.len());
+    let word = cl.content[start..].to_string();
+    let candidates = Completer::with_command_vocabulary().candidates(&word);
+    if candidates.is_empty() {
+        return;
+    }
+    let base = cl.content[..start].to_string();
+    cl.content = format!("{base}{}", candidates[0]);
+    cl.completion = Some(CommandCompletion {
+        candidates,
+        selected: 0,
+        base,
+    });
+}
+
+/// Recall an older (`older`) or newer past command into the Command line (issue
+/// 02), over the session command history. On the first older step the in-progress
+/// line is saved; stepping past the newest restores it. A no-op when there is
+/// nothing to recall in that direction.
+fn recall_command(state: &mut WorkbenchState, older: bool) {
+    let history = &state.command_history;
+    let len = history.len();
+    let Some(cl) = state.command_line.as_mut() else {
+        return;
+    };
+    cl.completion = None;
+    if older {
+        if len == 0 {
+            return;
+        }
+        let index = match cl.recall_index {
+            None => {
+                cl.recall_saved = Some(cl.content.clone());
+                len - 1
+            }
+            Some(i) => i.saturating_sub(1),
+        };
+        cl.recall_index = Some(index);
+        cl.content.clone_from(&history[index]);
+    } else {
+        let Some(index) = cl.recall_index else {
+            return;
+        };
+        if index + 1 < len {
+            cl.recall_index = Some(index + 1);
+            cl.content.clone_from(&history[index + 1]);
+        } else {
+            cl.recall_index = None;
+            cl.content = cl.recall_saved.take().unwrap_or_else(|| ":".to_string());
+        }
     }
 }
 
@@ -1022,6 +1106,11 @@ fn run_command_line(state: &mut WorkbenchState) -> Vec<Effect> {
     // A bare prompt (`:` with nothing after it) cancels, like an empty submit.
     if line.is_empty() || line == ":" {
         return Vec::new();
+    }
+    // Record into the session command history for recall (issue 02), skipping a
+    // consecutive duplicate.
+    if state.command_history.last().map(String::as_str) != Some(line) {
+        state.command_history.push(line.to_string());
     }
     if let Some(command) = workbench_command(line) {
         return handle_workbench_command(state, command);
@@ -2190,6 +2279,95 @@ mod tests {
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
         assert!(s.command_line.is_some(), "still open");
         assert_eq!(s.focus, focus_before, "Tab did not switch panes");
+    }
+
+    // --- command-line completion + recall (issue 02) --------------------------
+
+    /// Open the command line and type `rest` after the seeded `:` (no Enter).
+    fn open_and_type(state: &mut WorkbenchState, rest: &str) {
+        update(state, Event::Key(Key::ctrl(KeyCode::Char('g'))));
+        type_str(state, rest);
+    }
+
+    #[test]
+    fn tab_completes_a_command_name_in_the_command_line() {
+        let mut s = wb();
+        open_and_type(&mut s, "beg");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        assert_eq!(s.command_line.as_ref().unwrap().content, ":begin");
+    }
+
+    #[test]
+    fn tab_with_no_command_candidates_is_a_no_op_and_keeps_focus() {
+        let mut s = wb();
+        open_and_type(&mut s, "zzzq");
+        let focus_before = s.focus;
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        // The content is unchanged and the command line is still open (no focus swap).
+        assert_eq!(s.command_line.as_ref().unwrap().content, ":zzzq");
+        assert_eq!(s.focus, focus_before);
+    }
+
+    #[test]
+    fn repeated_tab_cycles_through_matching_commands() {
+        let mut s = wb();
+        // `:s` matches several commands (set, source, save, saved, sysinfo, …).
+        open_and_type(&mut s, "s");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        let first = s.command_line.as_ref().unwrap().content.clone();
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        let second = s.command_line.as_ref().unwrap().content.clone();
+        assert_ne!(first, second, "a repeated Tab advances to the next candidate");
+        assert!(first.starts_with(":s") && second.starts_with(":s"));
+    }
+
+    #[test]
+    fn an_edit_after_completion_resets_the_menu() {
+        let mut s = wb();
+        open_and_type(&mut s, "se");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab))); // → :set (or first :se… match)
+        assert!(s.command_line.as_ref().unwrap().completion.is_some());
+        update(&mut s, Event::Key(Key::char('x')));
+        assert!(s.command_line.as_ref().unwrap().completion.is_none(), "an edit drops the menu");
+    }
+
+    #[test]
+    fn up_recalls_a_past_command_and_down_restores_the_edited_line() {
+        let mut s = wb();
+        run_command(&mut s, ":begin");
+        // Open a fresh command line, type something, then recall.
+        open_and_type(&mut s, "roll");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
+        assert_eq!(s.command_line.as_ref().unwrap().content, ":begin", "older command recalled");
+        // Down past the newest restores the in-progress line.
+        update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
+        assert_eq!(s.command_line.as_ref().unwrap().content, ":roll", "the edited line is restored");
+    }
+
+    #[test]
+    fn command_recall_walks_multiple_entries() {
+        let mut s = wb();
+        run_command(&mut s, ":begin");
+        run_command(&mut s, ":commit");
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('g'))));
+        update(&mut s, Event::Key(Key::plain(KeyCode::Up))); // newest → :commit
+        assert_eq!(s.command_line.as_ref().unwrap().content, ":commit");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Up))); // older → :begin
+        assert_eq!(s.command_line.as_ref().unwrap().content, ":begin");
+    }
+
+    #[test]
+    fn the_command_history_is_distinct_from_the_query_history() {
+        let mut s = wb();
+        submit_query(&mut s, "RETURN 1;"); // a Cypher submission → query history
+        run_command(&mut s, ":begin"); // a command → command history
+        assert_eq!(s.command_history, vec![":begin".to_string()]);
+        assert!(
+            s.history_entries.iter().all(|e| !e.starts_with(':')),
+            "the query history holds no :-commands: {:?}",
+            s.history_entries
+        );
+        assert!(s.history_entries.contains(&"RETURN 1;".to_string()));
     }
 
     // --- execution spine (slice 02): lifecycle driven by hand-fed events -----
