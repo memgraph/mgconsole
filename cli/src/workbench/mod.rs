@@ -8,6 +8,7 @@
 //! runs as a spawned task that streams Records back as events while the UI stays
 //! responsive (ADR 0010). One shared Session, one query in flight (ADR 0005).
 
+pub mod clipboard;
 pub mod draw;
 pub mod effect;
 pub mod event;
@@ -270,13 +271,14 @@ pub async fn run(
                     });
                 }
                 Effect::CopyToClipboard(text) => {
-                    // Write the OSC 52 sequence straight to the terminal (issue 04
-                    // / ADR 0015): the terminal sets the system clipboard from it.
-                    // Best-effort — a terminal that does not honour OSC 52 simply
-                    // ignores it (the status line already confirmed the yank).
-                    let mut out = stdout();
-                    let _ = write!(out, "{}", effect::osc52(&text));
-                    let _ = out.flush();
+                    // Prefer a local clipboard helper, fall back to OSC 52 (ADR
+                    // 0018): a local box that does not honour OSC 52 still gets a
+                    // real clipboard once a helper is installed, while SSH-without-
+                    // helper keeps working. Report the path taken so a silent no-op
+                    // becomes a visible, explained outcome.
+                    let path = clipboard::copy(&text);
+                    state.status.message =
+                        format!("{} {}", state.status.message, path.status_suffix());
                 }
                 Effect::SetMouseCapture(on) => {
                     // Release or re-acquire mouse capture (issue 04): off restores

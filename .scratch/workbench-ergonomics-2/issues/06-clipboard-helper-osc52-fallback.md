@@ -1,6 +1,6 @@
 # 06 — Clipboard helper process + OSC 52 fallback
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
