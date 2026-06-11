@@ -564,6 +564,22 @@ fn parse_interval(token: &str) -> Option<Duration> {
 /// without stopping the rest.
 pub const SYSINFO_QUERIES: &[&str] = &["SHOW VERSION", "SHOW STORAGE INFO"];
 
+// Canonical operator-facing messages for the cross-Frontend Meta-command rules,
+// so the REPL and the Workbench word them identically (the read-only message had
+// already drifted between the two). Each Frontend adds its own `error: `/`note: `
+// prefix as it reports — the const is the message, not the channel.
+//
+/// `:set readonly off` is refused at runtime — read-only only turns *off* at
+/// connect time (ADR 0011, issue 04).
+pub const READONLY_OFF_AT_RUNTIME: &str =
+    "read-only can only be turned off at connect time (--read-only / a profile), not at runtime";
+/// `:watch` is refused while an explicit transaction is open (a repeating timer
+/// holding a transaction is a footgun; issue 11).
+pub const WATCH_REFUSED_IN_TX: &str = ":watch is refused while a transaction is open";
+/// A `:connect` swap aborts any open transaction (ADR 0011) — warned before the
+/// transaction is silently lost (issue 07).
+pub const TX_ABORTED_BY_CONNECT: &str = "the open transaction is aborted by :connect";
+
 /// Run one query and print its rendered table, summary, and any overflow warning
 /// — the shared body of the loop's per-query handling, `:sysinfo`, and `:source`.
 /// Returns whether the query succeeded (so `:source` can stop on the first
@@ -661,11 +677,7 @@ fn dispatch_meta(
                 runner.set_read_only(true);
                 writeln!(out, "readonly = on")?;
             }
-            Ok(false) => writeln!(
-                err,
-                "error: read-only can only be turned off at connect time \
-                 (--read-only / a profile), not at runtime"
-            )?,
+            Ok(false) => writeln!(err, "error: {READONLY_OFF_AT_RUNTIME}")?,
             Err(message) => writeln!(err, "error: {message}")?,
         },
         MetaCommand::SetSetting { name, value } => match settings.set(&name, &value) {
@@ -690,7 +702,7 @@ fn dispatch_meta(
         // aborted by the swap — warn before it is silently lost (ADR 0011).
         MetaCommand::Connect(target) => {
             if runner.transaction_state() != TransactionState::Auto {
-                writeln!(err, "note: the open transaction is aborted by :connect")?;
+                writeln!(err, "note: {TX_ABORTED_BY_CONNECT}")?;
             }
             match runner.connect(&target) {
                 Ok(label) => writeln!(out, "connected to {label}")?,
@@ -731,7 +743,7 @@ fn dispatch_meta(
                     Err(message) => writeln!(err, "error: {message}")?,
                 }
             } else {
-                writeln!(err, "error: :watch is refused while a transaction is open")?;
+                writeln!(err, "error: {WATCH_REFUSED_IN_TX}")?;
             }
         }
         // `:o` arms the next query to redirect to a file (issue 12); one-shot.

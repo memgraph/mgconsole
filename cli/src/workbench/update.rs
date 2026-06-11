@@ -1777,8 +1777,7 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 }
                 Ok(false) => {
                     state.status.message =
-                        "error: read-only can only be turned off at connect time, not at runtime"
-                            .to_string();
+                        format!("error: {}", crate::repl::READONLY_OFF_AT_RUNTIME);
                 }
                 Err(message) => state.status.message = format!("error: {message}"),
             }
@@ -1831,7 +1830,7 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 return Vec::new();
             }
             if state.tx != mgconsole_core::TransactionState::Auto {
-                state.status.message = "note: the open transaction is aborted by :connect".to_string();
+                state.status.message = format!("note: {}", crate::repl::TX_ABORTED_BY_CONNECT);
             }
             vec![Effect::Connect(target)]
         }
@@ -1872,8 +1871,7 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
         // drives the rest, each replacing the previous snapshot. Any key stops it.
         MetaCommand::Watch(args) => {
             if state.tx != mgconsole_core::TransactionState::Auto {
-                state.status.message =
-                    "error: :watch is refused while a transaction is open".to_string();
+                state.status.message = format!("error: {}", crate::repl::WATCH_REFUSED_IN_TX);
                 return Vec::new();
             }
             if matches!(state.run, RunState::Running { .. }) {
