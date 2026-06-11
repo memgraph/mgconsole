@@ -1,6 +1,6 @@
 # Carry the active query editor text across the switch
 
-Status: ready-for-agent
+Status: done
 
 ## What to build
 

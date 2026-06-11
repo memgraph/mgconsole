@@ -4475,6 +4475,41 @@ mod tests {
     }
 
     #[test]
+    fn a_carried_up_draft_seeds_the_one_fresh_buffer() {
+        // On a REPL→Workbench up-switch, the carried editor text seeds the one fresh
+        // Buffer's editor; a multi-line draft survives intact (issue 03).
+        let config = WorkbenchConfig {
+            initial_editor: "MATCH (n)\nRETURN n".to_string(),
+            ..WorkbenchConfig::default()
+        };
+        let s = WorkbenchState::new(config, true);
+        assert_eq!(s.editor.buffer(), "MATCH (n)\nRETURN n");
+    }
+
+    #[test]
+    fn an_empty_carry_yields_a_blank_buffer() {
+        // A fresh launch (no carry) starts with an empty editor — no spurious content.
+        let s = WorkbenchState::new(WorkbenchConfig::default(), true);
+        assert_eq!(s.editor.buffer(), "");
+    }
+
+    #[test]
+    fn a_carried_up_draft_is_runnable_like_any_other_buffer() {
+        // The seeded text is an ordinary editable Buffer, not a frozen seed: pressing
+        // Enter runs it like any typed query (issue 03).
+        let config = WorkbenchConfig {
+            initial_editor: "RETURN 1;".to_string(),
+            ..WorkbenchConfig::default()
+        };
+        let mut s = WorkbenchState::new(config, true);
+        let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        assert!(
+            matches!(effects.first(), Some(Effect::RunQuery { query, .. }) if query == "RETURN 1"),
+            "the carried draft runs: {effects:?}"
+        );
+    }
+
+    #[test]
     fn workbench_command_in_the_workbench_is_a_gentle_no_op() {
         // `:workbench` is the up-switch target; typed in the Workbench it is an
         // idempotent no-op (ADR 0019), the mirror of `:repl` in the REPL — no switch

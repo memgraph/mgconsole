@@ -62,6 +62,9 @@ pub struct WorkbenchExit {
     pub outcome: Outcome,
     pub params: BTreeMap<String, Value>,
     pub settings: Settings,
+    /// The active Buffer's editor text at exit (issue 03), carried down to seed the
+    /// REPL's input line on a `:repl` switch so a half-drafted query is not lost.
+    pub carry: String,
 }
 
 /// Run the workbench until it quits or hands off to the other Frontend (ADR 0019),
@@ -328,11 +331,13 @@ pub async fn run(
         let _ = task.await;
     }
     // Hand the bundle slice the Workbench owned back to the dispatch loop so the
-    // next Frontend inherits the params and Settings unchanged (ADR 0019).
+    // next Frontend inherits the params and Settings unchanged (ADR 0019), plus the
+    // active Buffer's editor text to carry down onto the REPL's input line (issue 03).
     Ok(WorkbenchExit {
         outcome,
         params: std::mem::take(&mut state.params),
         settings: state.settings.clone(),
+        carry: state.editor.buffer(),
     })
 }
 

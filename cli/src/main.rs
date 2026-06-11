@@ -216,7 +216,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 // profile/config/options) for the whole interactive session and lends a clone to
 // each Frontend it (re-)enters across a switch (ADR 0019), so it takes them by
 // value by design.
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines
+)]
 fn run_interactive(
     cli: &Cli,
     session: Session,
@@ -265,6 +269,10 @@ fn run_interactive(
     let mut params: BTreeMap<String, Value> = BTreeMap::new();
     let mut settings = settings;
     let mut queries = load_queries();
+    // The active query editor text handed across a Frontend switch (issue 03): the
+    // Workbench's active Buffer draft going down, the REPL's input line coming up.
+    // Empty on first entry; the destination Frontend seeds its editor from it.
+    let mut carry = String::new();
 
     // The Workbench palette/keys are resolved once (issue 14): they do not change
     // across switches, and resolving per re-entry would reprint the same warnings.
@@ -300,6 +308,9 @@ fn run_interactive(
                         palette,
                         keys: keys.clone(),
                         theme_overrides: config.theme.clone(),
+                        // Seed the one fresh Buffer with the editor text carried up
+                        // from the REPL (issue 03); empty on a fresh launch.
+                        initial_editor: std::mem::take(&mut carry),
                         connect: workbench::state::ConnectContext {
                             config: config.clone(),
                             options: options.clone(),
@@ -312,31 +323,40 @@ fn run_interactive(
                         colorize,
                         history.clone(),
                     ))?;
-                    // Reclaim the carried bundle slice for the next Frontend.
+                    // Reclaim the carried bundle slice for the next Frontend, plus the
+                    // active Buffer's editor text to carry down (issue 03).
                     settings = exit.settings;
                     params = exit.params;
+                    carry = exit.carry;
                     exit.outcome
                 }
                 #[cfg(not(feature = "tui"))]
                 unreachable!("the resolver cannot pick the workbench without the tui feature");
             }
-            Frontend::Repl => run_repl(
-                runtime,
-                &session,
-                table_options.clone(),
-                &mut params,
-                &mut settings,
-                &mut queries,
-                profile.clone(),
-                config.clone(),
-                options.clone(),
-                resolved_output,
-                colorize,
-                supports_tui,
-                history.clone(),
-                out,
-                err,
-            )?,
+            Frontend::Repl => {
+                let (outcome, up) = run_repl(
+                    runtime,
+                    &session,
+                    table_options.clone(),
+                    &mut params,
+                    &mut settings,
+                    &mut queries,
+                    profile.clone(),
+                    config.clone(),
+                    options.clone(),
+                    resolved_output,
+                    colorize,
+                    supports_tui,
+                    &carry,
+                    history.clone(),
+                    out,
+                    err,
+                )?;
+                // Carry the REPL's current input line up to the next Frontend (issue
+                // 03); usually empty (the switch command consumed its own line).
+                carry = up;
+                outcome
+            }
             Frontend::Piped => {
                 unreachable!("the piped path is handled by the non-terminal branch")
             }
@@ -368,10 +388,11 @@ fn run_repl(
     output_format: OutputFormat,
     colorize: bool,
     supports_tui: bool,
+    initial: &str,
     history: Option<HistoryFile>,
     out: &mut io::Stdout,
     err: &mut io::Stderr,
-) -> Result<Outcome, Box<dyn std::error::Error>> {
+) -> Result<(Outcome, String), Box<dyn std::error::Error>> {
     let (read_only, tx, endpoint) = {
         let guard = runtime.block_on(session.lock());
         (
@@ -409,18 +430,21 @@ fn run_repl(
     // summaries, echoes, confirmations — → stderr, where it stays visible on the
     // terminal even when stdout is redirected to a file.
     let mut chrome = io::stderr();
-    let outcome = repl::run_loop(
+    // The active query editor text carried down from the Workbench (issue 03) seeds
+    // the first prompt; the current input line is carried back up on a switch.
+    let (outcome, carry) = repl::run_loop(
         &mut source,
         &mut runner,
         queries,
         params,
         settings,
+        Some(initial),
         out,
         &mut chrome,
         err,
         &repl_config,
     )?;
-    Ok(outcome)
+    Ok((outcome, carry))
 }
 
 /// Whether the current terminal can host the full-screen workbench: stdout is a

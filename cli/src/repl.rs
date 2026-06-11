@@ -943,8 +943,12 @@ fn source_content(
 ///
 /// The `:param` store and Settings are lent in by `&mut` from the dispatch-loop
 /// Session bundle (not owned here), so a `:repl`/`:workbench` switch carries them
-/// across intact. Returns [`Outcome::Quit`] on `:quit`/EOF, or
-/// [`Outcome::SwitchTo`] when a switch Meta-command is submitted.
+/// across intact. `initial` is the active query editor text carried *down* from the
+/// Workbench (issue 03): it seeds the first prompt's input line so a half-drafted
+/// query arrives ready to edit or run; empty on a fresh launch. Returns the
+/// [`Outcome`] ([`Quit`](Outcome::Quit) on `:quit`/EOF, [`SwitchTo`](Outcome::SwitchTo)
+/// on a switch Meta-command) paired with the current input line to carry *up* to the
+/// next Frontend (usually empty — the switch command consumed its own line).
 #[allow(clippy::too_many_arguments)]
 pub fn run_loop(
     source: &mut dyn LineSource,
@@ -952,18 +956,20 @@ pub fn run_loop(
     queries: &mut NamedQueries,
     params: &mut BTreeMap<String, Value>,
     settings: &mut Settings,
+    initial: Option<&str>,
     data: &mut dyn Write,
     out: &mut dyn Write,
     err: &mut dyn Write,
     config: &ReplConfig,
-) -> io::Result<Outcome> {
+) -> io::Result<(Outcome, String)> {
     let mut assembler = QueryAssembler::new();
     // The most recently run query, so `:watch` with no query reuses it (issue 11).
     let mut last_query: Option<String> = None;
     // A one-shot `:o` redirect armed for the next query (issue 12).
     let mut pending_redirect: Option<(OutputFormat, PathBuf)> = None;
-    // Text recalled by `:load` to pre-fill the next prompt (issue 13).
-    let mut pending_initial: Option<String> = None;
+    // Text to pre-fill the next prompt: the editor draft carried down from the
+    // Workbench on the first read (issue 03), then any `:load` recall (issue 13).
+    let mut pending_initial: Option<String> = initial.filter(|s| !s.is_empty()).map(str::to_string);
     loop {
         let continued = assembler.has_pending();
         let initial = pending_initial.take();
@@ -996,8 +1002,13 @@ pub fn run_loop(
                     out,
                     err,
                 )? {
-                    MetaFlow::Quit => return Ok(Outcome::Quit),
-                    MetaFlow::Switch(target) => return Ok(Outcome::SwitchTo(target)),
+                    MetaFlow::Quit => return Ok((Outcome::Quit, String::new())),
+                    // Carry the current input line *up* to the next Frontend (issue
+                    // 03): the switch command consumed its own line, so any in-progress
+                    // draft is the partly-assembled buffer — usually empty.
+                    MetaFlow::Switch(target) => {
+                        return Ok((Outcome::SwitchTo(target), assembler.pending().to_string()))
+                    }
                     MetaFlow::Handled => continue,
                     // Re-prompt with the recalled text pre-filled; never auto-run.
                     MetaFlow::Recall(text) => {
@@ -1029,7 +1040,7 @@ pub fn run_loop(
         }
     }
     // EOF (Ctrl-D / closed input): end the session, like `:quit`.
-    Ok(Outcome::Quit)
+    Ok((Outcome::Quit, String::new()))
 }
 
 #[cfg(test)]
@@ -1694,6 +1705,7 @@ mod tests {
             &mut queries,
             &mut params,
             &mut settings,
+            None,
             &mut data,
             &mut chrome,
             &mut err,
@@ -1722,12 +1734,13 @@ mod tests {
         let mut err = Vec::new();
         let mut params = BTreeMap::new();
         let mut settings = Settings::default();
-        let outcome = run_loop(
+        let (outcome, _carry) = run_loop(
             &mut source,
             &mut runner,
             &mut queries,
             &mut params,
             &mut settings,
+            None,
             &mut data,
             &mut chrome,
             &mut err,
@@ -1768,6 +1781,71 @@ mod tests {
         assert!(out.contains(":workbench"), "help lists the up-switch: {out}");
     }
 
+    /// Drive the loop with a carried-down `initial` draft and an explicit
+    /// `supports_tui`, handing back the source (for its offered initials), the
+    /// [`Outcome`], and the carried-up line — for the editor-text-carry tests (issue 03).
+    fn drive_seeded(
+        lines: Vec<Line>,
+        initial: Option<&str>,
+        supports_tui: bool,
+    ) -> (ScriptedSource, Outcome, String) {
+        let mut source = ScriptedSource::of(lines);
+        let mut runner = ScriptedRunner::returning(vec![]);
+        let mut queries = NamedQueries::in_memory();
+        let mut data = Vec::new();
+        let mut chrome = Vec::new();
+        let mut err = Vec::new();
+        let mut params = BTreeMap::new();
+        let mut settings = Settings::default();
+        let (outcome, carry) = run_loop(
+            &mut source,
+            &mut runner,
+            &mut queries,
+            &mut params,
+            &mut settings,
+            initial,
+            &mut data,
+            &mut chrome,
+            &mut err,
+            &ReplConfig { row_cap: 1000, supports_tui },
+        )
+        .expect("loop runs");
+        (source, outcome, carry)
+    }
+
+    #[test]
+    fn a_draft_carried_down_seeds_the_first_repl_prompt() {
+        // The active Buffer's editor text follows a Workbench→REPL switch onto the
+        // input line, ready to edit or run; a multi-line draft survives intact (issue 03).
+        let (source, _outcome, _carry) =
+            drive_seeded(vec![Line::Text(":quit".into())], Some("MATCH (n)\nRETURN n"), false);
+        assert_eq!(
+            source.initials.first(),
+            Some(&Some("MATCH (n)\nRETURN n".to_string())),
+            "first prompt seeded with the carried draft: {:?}",
+            source.initials
+        );
+    }
+
+    #[test]
+    fn an_empty_carry_leaves_the_first_prompt_clean() {
+        // No carried draft (a fresh launch) → no spurious initial content (issue 03).
+        let (source, _outcome, _carry) =
+            drive_seeded(vec![Line::Text(":quit".into())], Some(""), false);
+        assert_eq!(source.initials.first(), Some(&None), "no seed: {:?}", source.initials);
+    }
+
+    #[cfg(feature = "tui")]
+    #[test]
+    fn the_repl_carries_its_current_line_up_on_a_workbench_switch() {
+        // The up-carry is included for symmetry but is empty in practice: `:workbench`
+        // consumes its own line, so there is no draft left to carry (issue 03).
+        let (_source, outcome, carry) =
+            drive_seeded(vec![Line::Text(":workbench".into())], None, true);
+        assert_eq!(outcome, Outcome::SwitchTo(Frontend::Workbench));
+        assert_eq!(carry, "", "the switch command consumed its own line");
+    }
+
     #[test]
     fn result_data_goes_to_the_data_sink_and_chrome_to_the_chrome_sink() {
         // Stream discipline (ADR 0014, issue 19): the result rows land in the data
@@ -1786,6 +1864,7 @@ mod tests {
             &mut queries,
             &mut params,
             &mut settings,
+            None,
             &mut data,
             &mut chrome,
             &mut err,

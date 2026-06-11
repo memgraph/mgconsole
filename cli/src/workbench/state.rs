@@ -433,7 +433,13 @@ impl WorkbenchState {
     /// A fresh workbench: an empty editor with focus, ready for input.
     pub fn new(config: WorkbenchConfig, color: bool) -> Self {
         Self {
-            editor: EditorState::new(),
+            // Seed the active Buffer's editor with any query text carried in from a
+            // Frontend switch (issue 03); empty on a fresh launch yields a blank editor.
+            editor: if config.initial_editor.is_empty() {
+                EditorState::new()
+            } else {
+                EditorState::with_text(&config.initial_editor)
+            },
             focus: Focus::Editor,
             run: RunState::Idle,
             pending: VecDeque::new(),
@@ -928,6 +934,10 @@ pub struct WorkbenchConfig {
     /// fresh launch, or the params carried across a Frontend switch. Seeds the
     /// state's live params, which `:param` then mutates.
     pub params: BTreeMap<String, Value>,
+    /// The active query editor text carried in from a Frontend switch (issue 03):
+    /// the REPL's input line on an up-switch, seeding the one fresh Buffer's editor.
+    /// Empty on a fresh launch (a blank editor).
+    pub initial_editor: String,
     /// The active connection profile's name (issue 03), shown in the status bar so
     /// the user always knows which connection they are on. `None` = no profile.
     pub profile: Option<String>,
@@ -977,6 +987,7 @@ impl Default for WorkbenchConfig {
             verbose: false,
             settings: Settings::default(),
             params: BTreeMap::new(),
+            initial_editor: String::new(),
             profile: None,
             read_only: false,
             endpoint: String::new(),
@@ -1014,6 +1025,18 @@ impl EditorState {
     pub fn new() -> Self {
         Self {
             textarea: TextArea::default(),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+        }
+    }
+
+    /// An editor pre-seeded with `text` as its baseline (issue 03): the active
+    /// query editor text carried in from a Frontend switch. The text is the starting
+    /// buffer, not an undoable edit, so the undo stack begins empty — there is no
+    /// prior buffer to revert to.
+    pub fn with_text(text: &str) -> Self {
+        Self {
+            textarea: TextArea::new(text.split('\n').map(String::from).collect()),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
