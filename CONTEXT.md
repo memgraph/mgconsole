@@ -38,6 +38,14 @@ the definition here wins until deliberately changed.
   its Records stream into that Buffer even while another is shown, so switching
   Buffers to read another line of inquiry is always allowed — only a second
   submit is refused. Buffers are ephemeral and not persisted across runs.
+- **Command line** — the Workbench's modal input surface for typed
+  `:`-commands (Meta-commands and Workbench commands): a one-line prompt that
+  opens on `:` while the Buffer editor is empty, or on demand anywhere, runs on
+  Enter, and dismisses on Esc, returning focus to where it was. It is how the
+  Workbench presents the typed `:`-vocabulary, keeping the Buffer editor for
+  Cypher alone — the Workbench counterpart to the REPL prompt, where the same
+  vocabulary is typed inline. Because the editor holds only Cypher, its `Tab`
+  means completion alone (ADR 0017). _Contrast_: the Buffer editor (Cypher only).
 
 ## Query text
 
@@ -66,6 +74,15 @@ the definition here wins until deliberately changed.
   until `:commit` or `:rollback`. The distinction governs reconnect: the console
   silently re-establishes a dropped connection in autocommit, but never silently
   resurrects an open transaction (ADR 0011).
+- **Transaction episode** — one lifetime of an open Transaction, from `:begin`
+  to the `:commit` or `:rollback` that ends it. Session-scoped — all Buffers
+  share the one open Transaction — so its statements may be submitted from
+  several Buffers; each is numbered by the episode and by its ordinal within it,
+  and carries the episode's final _disposition_ (open, committed, or rolled
+  back). The unit a Result history entry is tagged against, so a query run inside
+  a transaction is reviewable as what it was — the Nth statement of an episode
+  that was ultimately committed or undone — rather than a bare success whose rows
+  may since have been rolled away.
 - **Read-only mode** — a session-wide safety guard that sets every Transaction's
   Bolt access mode to READ, so the server itself rejects writes. Memgraph
   enforces it, not the console — the Clause scanner is never asked to police it.

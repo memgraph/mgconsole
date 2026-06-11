@@ -4,7 +4,8 @@ Date: 2026-06-11
 
 ## Status
 
-Accepted
+Accepted — refined by ADR 0018 (yank prefers a local clipboard helper process,
+with OSC 52 as the fallback; the no-FFI principle below is unchanged)
 
 ## Context
 
