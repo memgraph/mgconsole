@@ -1,6 +1,6 @@
 # 11 — Overlay scroll indicators (help + cell-detail)
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

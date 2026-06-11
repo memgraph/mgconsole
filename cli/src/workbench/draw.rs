@@ -405,12 +405,50 @@ fn draw_detail(frame: &mut Frame, value: &Value, scroll: u16, border: Color) {
         .title("Cell detail (↑/↓ scroll · Esc/Enter close)");
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let text = render::tabular(value);
+    let total = wrapped_line_count(&text, inner.width);
     frame.render_widget(
-        Paragraph::new(render::tabular(value))
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
+        Paragraph::new(text).wrap(Wrap { trim: false }).scroll((scroll, 0)),
         inner,
     );
+    // A scroll indicator when the Value is taller than the box (issue 11).
+    draw_overlay_scrollbar(frame, area, total, inner.height, scroll);
+}
+
+/// Estimate how many rows `text` wraps to at `width` columns (issue 11): the sum
+/// over logical lines of `ceil(chars / width)` (an empty line still takes one
+/// row). A character-wrap estimate — close enough to ratatui's word-wrap to drive
+/// a scroll indicator — measured in characters like the rest of the draw.
+fn wrapped_line_count(text: &str, width: u16) -> usize {
+    let width = width.max(1) as usize;
+    text.split('\n')
+        .map(|line| line.chars().count().max(1).div_ceil(width))
+        .sum()
+}
+
+/// Draw scroll indicators on a scrollable overlay's right border (issue 11): `▲`
+/// near the top when there is content above the view, `▼` near the bottom when
+/// there is more below — so it is clear when, and which way, to scroll. Nothing is
+/// drawn when the content (`total_lines` after wrapping) fits the `viewport`.
+/// `area` is the bordered overlay rect; the markers sit on its right border.
+fn draw_overlay_scrollbar(frame: &mut Frame, area: Rect, total_lines: usize, viewport: u16, scroll: u16) {
+    if total_lines <= viewport as usize || area.width < 2 || area.height < 4 {
+        return;
+    }
+    let right = area.x + area.width - 1;
+    let buffer = frame.buffer_mut();
+    if scroll > 0 {
+        // More content above: a ▲ just below the top-right corner.
+        if let Some(cell) = buffer.cell_mut((right, area.y + 1)) {
+            cell.set_symbol("▲");
+        }
+    }
+    if (scroll as usize) + (viewport as usize) < total_lines {
+        // More content below: a ▼ just above the bottom-right corner.
+        if let Some(cell) = buffer.cell_mut((right, area.y + area.height - 2)) {
+            cell.set_symbol("▼");
+        }
+    }
 }
 
 /// Draw the `:help` overlay: a centred, scrollable box listing every gesture with
@@ -424,12 +462,13 @@ fn draw_help(frame: &mut Frame, text: &str, scroll: u16, border: Color) {
         .title("Help — keys & commands (↑/↓ scroll · Esc/Enter/q close)");
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let total = wrapped_line_count(text, inner.width);
     frame.render_widget(
-        Paragraph::new(text.to_string())
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
+        Paragraph::new(text.to_string()).wrap(Wrap { trim: false }).scroll((scroll, 0)),
         inner,
     );
+    // A scroll indicator when the help is taller than the box (issue 11).
+    draw_overlay_scrollbar(frame, area, total, inner.height, scroll);
 }
 
 /// Render a query plan (slice 14). An `EXPLAIN` plan is a navigable, collapsible
@@ -1142,6 +1181,42 @@ mod tests {
         let rendered = render(&mut state);
         assert!(rendered.contains("no longer held"), "the trim note is shown: {rendered:?}");
         assert!(rendered.contains("MATCH"), "the originating query is still shown");
+    }
+
+    #[test]
+    fn wrapped_line_count_counts_wrapped_rows() {
+        assert_eq!(wrapped_line_count("", 10), 1, "an empty buffer is one row");
+        assert_eq!(wrapped_line_count("short", 10), 1);
+        assert_eq!(wrapped_line_count("0123456789abc", 10), 2, "wraps to two rows at width 10");
+        assert_eq!(wrapped_line_count("a\nb\nc", 10), 3, "three short logical lines");
+    }
+
+    #[test]
+    fn an_overflowing_help_overlay_shows_a_scroll_indicator() {
+        // The full help is taller than the small test viewport, so the overlay
+        // shows a "more below" indicator at scroll 0.
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.help = true;
+        let rendered = render(&mut state);
+        assert!(rendered.contains('▼'), "more-below indicator at the top: {rendered:?}");
+        // Scrolled down a long way, a "more above" indicator appears.
+        state.help_scroll = 40;
+        let rendered = render(&mut state);
+        assert!(rendered.contains('▲'), "more-above indicator once scrolled: {rendered:?}");
+    }
+
+    #[test]
+    fn a_cell_detail_overlay_shows_an_indicator_only_when_it_overflows() {
+        use mgconsole_core::Value;
+        // A short Value fits: no indicator.
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.detail = Some(Value::String("short".into()));
+        let rendered = render(&mut state);
+        assert!(!rendered.contains('▲') && !rendered.contains('▼'), "no indicator when it fits: {rendered:?}");
+        // A long Value wraps past the box: a more-below indicator appears.
+        state.detail = Some(Value::String("x".repeat(400)));
+        let rendered = render(&mut state);
+        assert!(rendered.contains('▼'), "more-below indicator on an overflowing value: {rendered:?}");
     }
 
     #[test]
