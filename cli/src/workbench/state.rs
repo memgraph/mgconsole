@@ -213,6 +213,58 @@ pub struct TabBar {
     pub right_more: bool,
 }
 
+/// The one input-capturing overlay that is open, if any. At most one is ever open,
+/// so the six overlays are one sum type rather than six mutually-exclusive
+/// `Option` fields: "two overlays open" is then unrepresentable, and the key
+/// dispatch, the mouse-ignore, and the draw all consult the single
+/// [`modal`](WorkbenchState::modal) field instead of six checks that can drift
+/// apart. The scroll offsets fold into the variants that have them.
+///
+/// `drawer` (a side panel) and `watch` (a "press any key to stop" mode) are *not*
+/// modals — they coexist with the panes — so they stay separate.
+#[derive(Debug)]
+pub enum Modal {
+    /// The `:help` keybinding/command overlay, scrolled by `scroll`.
+    Help { scroll: u16 },
+    /// The cell-detail overlay showing one Value in full (slice 08), scrolled.
+    Detail { value: Value, scroll: u16 },
+    /// The export prompt (slice 09): pick a format, type a destination path.
+    Export(ExportPrompt),
+    /// In-result search over the shown result (issue 16).
+    Search(SearchState),
+    /// The completion popup for the word under the editor cursor (slice 11).
+    Completion(Completion),
+    /// The modal Command line for the typed `:`-vocabulary (ADR 0017).
+    CommandLine(CommandLine),
+}
+
+/// The lightweight tag of a [`Modal`] (which overlay), for `Copy` dispatch without
+/// borrowing the payload — the reducer matches this to route a key to the right
+/// handler, then re-borrows the payload inside that handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModalKind {
+    Help,
+    Detail,
+    Export,
+    Search,
+    Completion,
+    CommandLine,
+}
+
+impl Modal {
+    /// Which overlay this is, without borrowing its payload.
+    pub fn kind(&self) -> ModalKind {
+        match self {
+            Modal::Help { .. } => ModalKind::Help,
+            Modal::Detail { .. } => ModalKind::Detail,
+            Modal::Export(_) => ModalKind::Export,
+            Modal::Search(_) => ModalKind::Search,
+            Modal::Completion(_) => ModalKind::Completion,
+            Modal::CommandLine(_) => ModalKind::CommandLine,
+        }
+    }
+}
+
 /// The complete workbench state for the current slice.
 // A flat aggregate of mostly-independent UI flags (focus markers, open overlays,
 // colour); grouping the bools to satisfy the lint would obscure that 1:1 mapping.
@@ -237,24 +289,13 @@ pub struct WorkbenchState {
     /// A spinner frame counter, advanced by ticks while a query is in flight, so
     /// the draw can show a running indicator (slice 07).
     pub spinner: usize,
-    /// When `Some`, the cell-detail overlay is open showing this Value in full
-    /// (slice 08); `None` is the table view.
-    pub detail: Option<Value>,
-    /// Vertical scroll of the detail overlay, for a Value taller than the box.
-    pub detail_scroll: u16,
-    /// When `Some`, the modal Command line is open (ADR 0017): a one-line prompt
-    /// for the typed `:`-vocabulary, opened by `:` on an empty editor or `Ctrl+G`.
-    pub command_line: Option<CommandLine>,
-    /// When `Some`, the export prompt is open (slice 09): pick a format and type
-    /// a destination path for the on-screen result.
-    pub export: Option<ExportPrompt>,
-    /// When `Some`, in-result search is open over the shown result (issue 16).
-    pub search: Option<SearchState>,
-    /// Whether the `:help` keybinding overlay is open, and how far it is scrolled.
-    pub help: bool,
-    pub help_scroll: u16,
-    /// When `Some`, the completion popup is open (slice 11).
-    pub completion: Option<Completion>,
+    /// The one open input-capturing overlay, if any (the [`Modal`]): cell-detail,
+    /// export prompt, in-result search, completion popup, modal Command line, or the
+    /// `:help` overlay. At most one is open at a time, so they are one sum type
+    /// rather than six independent fields — the key cascade, the mouse-ignore, and
+    /// the draw all read this one field, and "two overlays open" is unrepresentable.
+    /// The side `drawer` and the `:watch` mode are *not* modals (they coexist).
+    pub modal: Option<Modal>,
     /// The completion candidate source(s): the static keyword/function vocabulary
     /// (slice 11), joined by a live schema source when the Schema is loaded
     /// (slice 12).
@@ -398,14 +439,7 @@ impl WorkbenchState {
             history: Vec::new(),
             view: 0,
             spinner: 0,
-            detail: None,
-            detail_scroll: 0,
-            command_line: None,
-            export: None,
-            search: None,
-            help: false,
-            help_scroll: 0,
-            completion: None,
+            modal: None,
             completer: Completer::with_static_vocabulary(),
             schema: None,
             drawer: None,
@@ -444,6 +478,56 @@ impl WorkbenchState {
             keys: config.keys.clone(),
             config,
         }
+    }
+
+    /// Which [`Modal`] is open, if any — the `Copy` tag the key dispatch matches on
+    /// before re-borrowing the payload inside the chosen handler.
+    pub fn modal_kind(&self) -> Option<ModalKind> {
+        self.modal.as_ref().map(Modal::kind)
+    }
+
+    /// The open in-result search state (issue 16), if search is the open Modal —
+    /// a read/write view into the one [`modal`](Self::modal) field, never a second
+    /// place that could disagree with it.
+    pub fn search(&self) -> Option<&SearchState> {
+        if let Some(Modal::Search(s)) = &self.modal { Some(s) } else { None }
+    }
+    pub fn search_mut(&mut self) -> Option<&mut SearchState> {
+        if let Some(Modal::Search(s)) = &mut self.modal { Some(s) } else { None }
+    }
+    /// The open completion popup (slice 11), if it is the open Modal.
+    pub fn completion(&self) -> Option<&Completion> {
+        if let Some(Modal::Completion(c)) = &self.modal { Some(c) } else { None }
+    }
+    pub fn completion_mut(&mut self) -> Option<&mut Completion> {
+        if let Some(Modal::Completion(c)) = &mut self.modal { Some(c) } else { None }
+    }
+    /// The open Command line (ADR 0017), if it is the open Modal.
+    pub fn command_line(&self) -> Option<&CommandLine> {
+        if let Some(Modal::CommandLine(c)) = &self.modal { Some(c) } else { None }
+    }
+    pub fn command_line_mut(&mut self) -> Option<&mut CommandLine> {
+        if let Some(Modal::CommandLine(c)) = &mut self.modal { Some(c) } else { None }
+    }
+    /// The cell-detail overlay's Value, if detail is the open Modal (slice 08).
+    pub fn detail(&self) -> Option<&Value> {
+        if let Some(Modal::Detail { value, .. }) = &self.modal { Some(value) } else { None }
+    }
+    /// The cell-detail overlay's scroll offset, if detail is the open Modal.
+    pub fn detail_scroll(&self) -> Option<u16> {
+        if let Some(Modal::Detail { scroll, .. }) = &self.modal { Some(*scroll) } else { None }
+    }
+    /// The `:help` overlay's scroll offset, if help is the open Modal.
+    pub fn help_scroll(&self) -> Option<u16> {
+        if let Some(Modal::Help { scroll }) = &self.modal { Some(*scroll) } else { None }
+    }
+    /// The export prompt, if it is the open Modal (slice 09).
+    pub fn export(&self) -> Option<&ExportPrompt> {
+        if let Some(Modal::Export(e)) = &self.modal { Some(e) } else { None }
+    }
+    /// Whether the `:help` overlay is the open Modal.
+    pub fn help_open(&self) -> bool {
+        matches!(self.modal, Some(Modal::Help { .. }))
     }
 
     /// The result currently shown (selected by [`view`](Self::view)), if any.

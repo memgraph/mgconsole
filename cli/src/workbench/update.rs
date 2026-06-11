@@ -22,7 +22,8 @@ use super::plan::{is_plan_query, Plan};
 use super::schema::{Schema, SchemaSource};
 use super::state::{
     CommandCompletion, CommandLine, Completion, CurrentResult, Disposition, DrawerKind,
-    ExportPrompt, Focus, RunState, SearchState, TransactionTag, WatchState, WorkbenchState,
+    ExportPrompt, Focus, Modal, ModalKind, RunState, SearchState, TransactionTag, WatchState,
+    WorkbenchState,
 };
 
 /// Apply one event to the state, returning the effects to perform.
@@ -489,33 +490,20 @@ fn interrupt(state: &mut WorkbenchState) -> Vec<Effect> {
 }
 
 fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
-    // Overlays capture keys while open — including Esc, so it dismisses the
-    // overlay rather than quitting the workbench.
-    if state.help {
-        return help_key(state, key);
-    }
-    if state.detail.is_some() {
-        return detail_key(state, key);
-    }
-    if state.export.is_some() {
-        return export_key(state, key);
-    }
-    // In-result search captures keys while open (issue 16): typing edits the query,
-    // arrows step matches, Tab toggles the filter, Esc clears and closes.
-    if state.search.is_some() {
-        return search_key(state, key);
-    }
-    // The completion popup captures its navigation keys (Esc included, so it
-    // dismisses rather than quitting); any other key closes it and is handled as
-    // ordinary input.
-    if state.completion.is_some() {
-        return completion_key(state, key);
-    }
-    // The modal Command line captures every key while open (ADR 0017), including
-    // Esc (which cancels it rather than quitting) and `?` (literal text in a
-    // command), so it never collides with the editor's keyspace.
-    if state.command_line.is_some() {
-        return command_line_key(state, key);
+    // The one open Modal captures keys while open — including Esc, so it dismisses
+    // the overlay rather than quitting (ADR 0017). One `match` on the open overlay,
+    // not six `is_some()` checks: search edits its query and steps matches; the
+    // completion popup cycles candidates; the Command line runs the typed
+    // `:`-vocabulary; the `?` help overlay scrolls.
+    if let Some(kind) = state.modal_kind() {
+        return match kind {
+            ModalKind::Help => help_key(state, key),
+            ModalKind::Detail => detail_key(state, key),
+            ModalKind::Export => export_key(state, key),
+            ModalKind::Search => search_key(state, key),
+            ModalKind::Completion => completion_key(state, key),
+            ModalKind::CommandLine => command_line_key(state, key),
+        };
     }
     // While `:watch` is active, any key stops it (issue 11) and is consumed; a
     // running watch re-run is cancelled so the Session is freed.
@@ -554,8 +542,7 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     if key.code == KeyCode::Char('?') && !key.ctrl && !key.alt {
         let editor_empty = state.editor.buffer().is_empty();
         if matches!(state.focus, Focus::Results) || editor_empty {
-            state.help = true;
-            state.help_scroll = 0;
+            state.modal = Some(Modal::Help { scroll: 0 });
             return Vec::new();
         }
     }
@@ -575,15 +562,15 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 
 /// Handle a mouse event (issue 17) by translating it into the existing reducer
 /// paths — focus, selection, cell-expand, and scroll — so there is no parallel
-/// mouse state. Hit-testing uses the pane rectangles the draw cached. While a
-/// modal overlay (cell-detail, export, completion) is open, the mouse is ignored
-/// so it never fights the keyboard-driven overlay.
+/// mouse state. Hit-testing uses the pane rectangles the draw cached. While any
+/// [`Modal`] is open the mouse is ignored, so it never fights the keyboard-driven
+/// overlay or opens a second one on top of it.
 fn update_mouse(state: &mut WorkbenchState, mouse: MouseEvent) -> Vec<Effect> {
-    if state.help
-        || state.detail.is_some()
-        || state.export.is_some()
-        || state.completion.is_some()
-    {
+    // While any Modal is open the mouse is ignored, so it never opens a second
+    // overlay on top of a keyboard-driven one (the one field covers all six —
+    // previously this list omitted search/command-line, so a click while searching
+    // could open the cell-detail overlay over it).
+    if state.modal.is_some() {
         return Vec::new();
     }
     let (col, row) = (mouse.column, mouse.row);
@@ -649,7 +636,7 @@ fn in_rect(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
 /// or below the loaded rows only focuses the pane (handled by the caller). Skipped
 /// while the filtered search view is active, where the visible rows are a subset.
 fn click_result_cell(state: &mut WorkbenchState, col: u16, row: u16) {
-    if state.search.as_ref().is_some_and(|s| s.filter_only) {
+    if state.search().is_some_and(|s| s.filter_only) {
         return;
     }
     let area = state.results_area;
@@ -813,7 +800,7 @@ fn open_search(state: &mut WorkbenchState) {
         return;
     }
     let partial = result.partial || result.truncated;
-    state.search = Some(SearchState::default());
+    state.modal = Some(Modal::Search(SearchState::default()));
     state.status.message = if partial {
         "search (loaded rows only): type to match, ↑/↓ next/prev, Tab filter, Esc clear"
             .to_string()
@@ -829,18 +816,18 @@ fn search_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
         Key { code: KeyCode::Esc, .. } => {
             // Clearing search restores the full view (the filter lives in the
             // search state, so dropping it un-filters).
-            state.search = None;
+            state.modal = None;
             state.status.message = "search cleared".to_string();
         }
         Key { code: KeyCode::Backspace, .. } => {
-            if let Some(search) = state.search.as_mut() {
+            if let Some(search) = state.search_mut() {
                 search.query.pop();
             }
             recompute_search(state);
         }
         // Tab toggles the filtered view (only matching rows) on/off.
         Key { code: KeyCode::Tab, .. } => {
-            if let Some(search) = state.search.as_mut() {
+            if let Some(search) = state.search_mut() {
                 search.filter_only = !search.filter_only;
             }
             update_search_status(state);
@@ -850,7 +837,7 @@ fn search_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
         Key { code: KeyCode::Up, .. } => search_step(state, -1),
         // Ordinary printable input extends the query and re-matches live.
         Key { code: KeyCode::Char(c), ctrl: false, alt: false, .. } => {
-            if let Some(search) = state.search.as_mut() {
+            if let Some(search) = state.search_mut() {
                 search.query.push(c);
             }
             recompute_search(state);
@@ -872,9 +859,7 @@ fn row_matches(record: &Record, needle: &str) -> bool {
 /// Recompute the match set after the query changed, reset the active match to the
 /// first, and move the selection onto it.
 fn recompute_search(state: &mut WorkbenchState) {
-    let needle = state
-        .search
-        .as_ref()
+    let needle = state.search()
         .map(|s| s.query.to_lowercase())
         .unwrap_or_default();
     let matches: Vec<usize> = if needle.is_empty() {
@@ -890,7 +875,7 @@ fn recompute_search(state: &mut WorkbenchState) {
     } else {
         Vec::new()
     };
-    if let Some(search) = state.search.as_mut() {
+    if let Some(search) = state.search_mut() {
         search.current = (!matches.is_empty()).then_some(0);
         search.matches = matches;
     }
@@ -900,7 +885,7 @@ fn recompute_search(state: &mut WorkbenchState) {
 
 /// Step the active match by `delta` (wrapping) and move the selection onto it.
 fn search_step(state: &mut WorkbenchState, delta: isize) {
-    if let Some(search) = state.search.as_mut() {
+    if let Some(search) = state.search_mut() {
         if search.matches.is_empty() {
             return;
         }
@@ -914,9 +899,7 @@ fn search_step(state: &mut WorkbenchState, delta: isize) {
 
 /// Move the result's selection onto the active match and keep it in the viewport.
 fn move_selection_to_match(state: &mut WorkbenchState) {
-    let target = state
-        .search
-        .as_ref()
+    let target = state.search()
         .and_then(|s| s.current.map(|i| s.matches[i]));
     let Some(row) = target else {
         return;
@@ -934,7 +917,7 @@ fn move_selection_to_match(state: &mut WorkbenchState) {
 
 /// Refresh the status line with the current match count and filter state.
 fn update_search_status(state: &mut WorkbenchState) {
-    let Some(search) = state.search.as_ref() else {
+    let Some(search) = state.search() else {
         return;
     };
     let filter = if search.filter_only { " · filtered" } else { "" };
@@ -964,7 +947,7 @@ fn completion_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     }
     match key.code {
         KeyCode::Esc => {
-            state.completion = None;
+            state.modal = None;
             Vec::new()
         }
         KeyCode::Enter => {
@@ -980,7 +963,7 @@ fn completion_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             Vec::new()
         }
         _ => {
-            state.completion = None;
+            state.modal = None;
             // The key that closed the popup is still ordinary editor input.
             match state.focus {
                 Focus::Editor => editor_key(state, key),
@@ -1086,7 +1069,7 @@ fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// current focus to restore when it closes. The editor buffer is never touched —
 /// the command line is a separate surface, so a half-written query is preserved.
 fn open_command_line(state: &mut WorkbenchState) {
-    state.command_line = Some(CommandLine::new(state.focus));
+    state.modal = Some(Modal::CommandLine(CommandLine::new(state.focus)));
 }
 
 /// Keys while the modal Command line is open (ADR 0017 / issue 02): Enter runs the
@@ -1118,14 +1101,14 @@ fn command_line_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Backspace => {
-            if let Some(cl) = state.command_line.as_mut() {
+            if let Some(cl) = state.command_line_mut() {
                 cl.content.pop();
                 cl.completion = None;
             }
             Vec::new()
         }
         KeyCode::Char(c) if !key.ctrl && !key.alt => {
-            if let Some(cl) = state.command_line.as_mut() {
+            if let Some(cl) = state.command_line_mut() {
                 cl.content.push(c);
                 cl.completion = None;
             }
@@ -1140,7 +1123,7 @@ fn command_line_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// and applies the first, replacing the typed prefix. With no candidates it is a
 /// no-op (and never switches focus — the command line is modal).
 fn complete_command_line(state: &mut WorkbenchState) {
-    let Some(cl) = state.command_line.as_mut() else {
+    let Some(cl) = state.command_line_mut() else {
         return;
     };
     // A repeated Tab cycles the already-open menu rather than re-deriving it (which
@@ -1172,7 +1155,9 @@ fn complete_command_line(state: &mut WorkbenchState) {
 fn recall_command(state: &mut WorkbenchState, older: bool) {
     let history = &state.command_history;
     let len = history.len();
-    let Some(cl) = state.command_line.as_mut() else {
+    // Inline the pattern (not `command_line_mut()`): this borrows only `state.modal`,
+    // disjoint from `state.command_history` borrowed above as `history`.
+    let Some(Modal::CommandLine(cl)) = &mut state.modal else {
         return;
     };
     cl.completion = None;
@@ -1205,7 +1190,7 @@ fn recall_command(state: &mut WorkbenchState, older: bool) {
 
 /// Close the Command line, restoring the focus it was opened from.
 fn close_command_line(state: &mut WorkbenchState) {
-    if let Some(cl) = state.command_line.take() {
+    if let Some(Modal::CommandLine(cl)) = state.modal.take() {
         state.focus = cl.prior_focus;
     }
 }
@@ -1215,7 +1200,7 @@ fn close_command_line(state: &mut WorkbenchState) {
 /// same dispatch a submitted line used before the editor became Cypher-only. A
 /// bare `:` (or empty line) is a silent cancel. Focus returns to where it was.
 fn run_command_line(state: &mut WorkbenchState) -> Vec<Effect> {
-    let Some(cl) = state.command_line.take() else {
+    let Some(Modal::CommandLine(cl)) = state.modal.take() else {
         return Vec::new();
     };
     state.focus = cl.prior_focus;
@@ -1277,16 +1262,16 @@ fn open_completion(state: &mut WorkbenchState) {
     if candidates.is_empty() {
         return;
     }
-    state.completion = Some(Completion {
+    state.modal = Some(Modal::Completion(Completion {
         candidates,
         selected: 0,
         prefix_len: prefix.chars().count(),
-    });
+    }));
 }
 
 /// Move the completion selection by `delta`, wrapping around the candidate list.
 fn cycle_completion(state: &mut WorkbenchState, delta: isize) {
-    if let Some(completion) = state.completion.as_mut() {
+    if let Some(completion) = state.completion_mut() {
         let len = completion.candidates.len() as isize;
         completion.selected = (completion.selected as isize + delta).rem_euclid(len) as usize;
     }
@@ -1294,7 +1279,7 @@ fn cycle_completion(state: &mut WorkbenchState, delta: isize) {
 
 /// Insert the selected candidate, replacing the typed prefix, and close the popup.
 fn apply_completion(state: &mut WorkbenchState) {
-    if let Some(completion) = state.completion.take() {
+    if let Some(Modal::Completion(completion)) = state.modal.take() {
         let candidate = completion.candidates[completion.selected].clone();
         state
             .editor
@@ -1392,8 +1377,7 @@ fn open_detail(state: &mut WorkbenchState) {
     if let Some(result) = state.shown() {
         if result.error.is_some() {
             let statement = result.statement.clone();
-            state.detail = Some(Value::String(statement));
-            state.detail_scroll = 0;
+            state.modal = Some(Modal::Detail { value: Value::String(statement), scroll: 0 });
             return;
         }
     }
@@ -1405,8 +1389,7 @@ fn open_detail(state: &mut WorkbenchState) {
             .cloned()
     });
     if let Some(value) = value {
-        state.detail = Some(value);
-        state.detail_scroll = 0;
+        state.modal = Some(Modal::Detail { value, scroll: 0 });
     }
 }
 
@@ -1461,7 +1444,7 @@ fn yank_row(state: &mut WorkbenchState) -> Vec<Effect> {
 /// Open the export prompt for the on-screen result (slice 09), if there is one.
 fn open_export(state: &mut WorkbenchState) {
     if state.shown().is_some() {
-        state.export = Some(ExportPrompt::default());
+        state.modal = Some(Modal::Export(ExportPrompt::default()));
     } else {
         state.status.message = "no result to export".to_string();
     }
@@ -1473,12 +1456,12 @@ fn export_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     match key.code {
         KeyCode::Enter => return confirm_export(state),
         KeyCode::Esc => {
-            state.export = None;
+            state.modal = None;
             return Vec::new();
         }
         _ => {}
     }
-    if let Some(prompt) = state.export.as_mut() {
+    if let Some(Modal::Export(prompt)) = &mut state.modal {
         match key.code {
             KeyCode::Tab => prompt.format = super::effect::next_export_format(prompt.format),
             KeyCode::Backspace => {
@@ -1495,7 +1478,7 @@ fn export_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// on-screen rows (a partial result after a cancel exports its partial rows). A
 /// blank path keeps the prompt open with a hint.
 fn confirm_export(state: &mut WorkbenchState) -> Vec<Effect> {
-    let Some(prompt) = state.export.as_ref() else {
+    let Some(Modal::Export(prompt)) = &state.modal else {
         return Vec::new();
     };
     if prompt.path.trim().is_empty() {
@@ -1509,7 +1492,7 @@ fn confirm_export(state: &mut WorkbenchState) -> Vec<Effect> {
     };
     let header = result.header.clone();
     let rows = result.rows.clone();
-    state.export = None;
+    state.modal = None;
     state.status.message = format!("exporting to {}…", path.display());
     vec![Effect::Export {
         format,
@@ -1521,14 +1504,13 @@ fn confirm_export(state: &mut WorkbenchState) -> Vec<Effect> {
 
 /// Keys while the `:help` overlay is open: scroll it, or dismiss it.
 fn help_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
+    let Some(Modal::Help { scroll }) = &mut state.modal else {
+        return Vec::new();
+    };
     match key.code {
-        KeyCode::Up | KeyCode::PageUp => {
-            state.help_scroll = state.help_scroll.saturating_sub(1);
-        }
-        KeyCode::Down | KeyCode::PageDown => {
-            state.help_scroll = state.help_scroll.saturating_add(1);
-        }
-        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => state.help = false,
+        KeyCode::Up | KeyCode::PageUp => *scroll = scroll.saturating_sub(1),
+        KeyCode::Down | KeyCode::PageDown => *scroll = scroll.saturating_add(1),
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => state.modal = None,
         _ => {}
     }
     Vec::new()
@@ -1537,22 +1519,19 @@ fn help_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// Keys while the cell-detail overlay is open: scroll it, or dismiss it back to
 /// the table (with the table selection intact, since it was never changed).
 fn detail_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
+    let Some(Modal::Detail { value, scroll }) = &mut state.modal else {
+        return Vec::new();
+    };
     match key.code {
-        KeyCode::Up | KeyCode::PageUp => {
-            state.detail_scroll = state.detail_scroll.saturating_sub(1);
-        }
-        KeyCode::Down | KeyCode::PageDown => {
-            state.detail_scroll = state.detail_scroll.saturating_add(1);
-        }
-        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => state.detail = None,
+        KeyCode::Up | KeyCode::PageUp => *scroll = scroll.saturating_sub(1),
+        KeyCode::Down | KeyCode::PageDown => *scroll = scroll.saturating_add(1),
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => state.modal = None,
         // The cell-detail overlay yanks the same way as the results pane (issue
         // 04 / ADR 0015): 'y' copies the full Value shown via OSC 52.
         KeyCode::Char('y') => {
-            if let Some(value) = state.detail.as_ref() {
-                let text = mgconsole_core::render::tabular(value);
-                state.status.message = "copied value".to_string();
-                return vec![Effect::CopyToClipboard(text)];
-            }
+            let text = mgconsole_core::render::tabular(value);
+            state.status.message = "copied value".to_string();
+            return vec![Effect::CopyToClipboard(text)];
         }
         _ => {}
     }
@@ -1987,8 +1966,7 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
         // `:help`/`:docs` open the keybinding + command overlay (its chords reflect
         // the live `[keys]` bindings). Dismissed by Esc/Enter/q.
         MetaCommand::Help | MetaCommand::Docs => {
-            state.help = true;
-            state.help_scroll = 0;
+            state.modal = Some(Modal::Help { scroll: 0 });
             Vec::new()
         }
     }
@@ -2333,7 +2311,7 @@ mod tests {
         let mut s = wb();
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
         assert_eq!(s.focus, Focus::Editor, "Tab no longer cycles focus");
-        assert!(s.completion.is_none(), "and opened no popup");
+        assert!(s.completion().is_none(), "and opened no popup");
     }
 
     #[test]
@@ -2352,7 +2330,7 @@ mod tests {
     fn colon_on_an_empty_editor_opens_the_command_line_with_a_colon_present() {
         let mut s = wb();
         update(&mut s, Event::Key(Key::char(':')));
-        let cl = s.command_line.as_ref().expect("the command line opened");
+        let cl = s.command_line().expect("the command line opened");
         assert_eq!(cl.content, ":", "seeded with the colon prompt");
         assert_eq!(cl.prior_focus, Focus::Editor);
         assert_eq!(s.editor.buffer(), "", "the colon never reached the editor");
@@ -2363,7 +2341,7 @@ mod tests {
         let mut s = wb();
         type_str(&mut s, "  ");
         update(&mut s, Event::Key(Key::char(':')));
-        assert!(s.command_line.is_some(), "whitespace counts as empty");
+        assert!(s.command_line().is_some(), "whitespace counts as empty");
     }
 
     #[test]
@@ -2371,7 +2349,7 @@ mod tests {
         let mut s = wb();
         type_str(&mut s, "MATCH (n");
         update(&mut s, Event::Key(Key::char(':')));
-        assert!(s.command_line.is_none(), "no command line — the colon is Cypher");
+        assert!(s.command_line().is_none(), "no command line — the colon is Cypher");
         assert_eq!(s.editor.buffer(), "MATCH (n:", "the colon is inserted literally");
     }
 
@@ -2380,7 +2358,7 @@ mod tests {
         let mut s = wb();
         type_str(&mut s, "MATCH (n) RETURN n");
         update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('g'))));
-        let cl = s.command_line.as_ref().expect("the command line opened");
+        let cl = s.command_line().expect("the command line opened");
         assert_eq!(cl.content, ":", "seeded with the colon prompt");
         assert_eq!(s.editor.buffer(), "MATCH (n) RETURN n", "the half-written query is preserved");
     }
@@ -2390,10 +2368,10 @@ mod tests {
         let mut s = wb();
         s.focus = Focus::Results;
         update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('g'))));
-        assert_eq!(s.command_line.as_ref().unwrap().prior_focus, Focus::Results);
+        assert_eq!(s.command_line().unwrap().prior_focus, Focus::Results);
         // Esc cancels and restores the prior focus.
         update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
-        assert!(s.command_line.is_none(), "Esc closed the command line");
+        assert!(s.command_line().is_none(), "Esc closed the command line");
         assert_eq!(s.focus, Focus::Results, "prior focus restored");
         // Esc closed the command line, it did not quit the workbench.
     }
@@ -2404,7 +2382,7 @@ mod tests {
         s.focus = Focus::Results;
         let effects = run_command(&mut s, ":begin");
         assert_eq!(effects, vec![Effect::Transaction(TxOp::Begin)]);
-        assert!(s.command_line.is_none(), "the command line closed after running");
+        assert!(s.command_line().is_none(), "the command line closed after running");
         assert_eq!(s.focus, Focus::Results, "focus returns to where it was");
     }
 
@@ -2414,7 +2392,7 @@ mod tests {
         update(&mut s, Event::Key(Key::char(':'))); // opens with ":"
         let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
         assert!(effects.is_empty(), "a bare colon runs nothing");
-        assert!(s.command_line.is_none(), "and closes");
+        assert!(s.command_line().is_none(), "and closes");
     }
 
     #[test]
@@ -2439,7 +2417,7 @@ mod tests {
         update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('g'))));
         let focus_before = s.focus;
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
-        assert!(s.command_line.is_some(), "still open");
+        assert!(s.command_line().is_some(), "still open");
         assert_eq!(s.focus, focus_before, "Tab did not switch panes");
     }
 
@@ -2456,7 +2434,7 @@ mod tests {
         let mut s = wb();
         open_and_type(&mut s, "beg");
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
-        assert_eq!(s.command_line.as_ref().unwrap().content, ":begin");
+        assert_eq!(s.command_line().unwrap().content, ":begin");
     }
 
     #[test]
@@ -2466,7 +2444,7 @@ mod tests {
         let focus_before = s.focus;
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
         // The content is unchanged and the command line is still open (no focus swap).
-        assert_eq!(s.command_line.as_ref().unwrap().content, ":zzzq");
+        assert_eq!(s.command_line().unwrap().content, ":zzzq");
         assert_eq!(s.focus, focus_before);
     }
 
@@ -2476,9 +2454,9 @@ mod tests {
         // `:s` matches several commands (set, source, save, saved, sysinfo, …).
         open_and_type(&mut s, "s");
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
-        let first = s.command_line.as_ref().unwrap().content.clone();
+        let first = s.command_line().unwrap().content.clone();
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
-        let second = s.command_line.as_ref().unwrap().content.clone();
+        let second = s.command_line().unwrap().content.clone();
         assert_ne!(first, second, "a repeated Tab advances to the next candidate");
         assert!(first.starts_with(":s") && second.starts_with(":s"));
     }
@@ -2488,9 +2466,9 @@ mod tests {
         let mut s = wb();
         open_and_type(&mut s, "se");
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab))); // → :set (or first :se… match)
-        assert!(s.command_line.as_ref().unwrap().completion.is_some());
+        assert!(s.command_line().unwrap().completion.is_some());
         update(&mut s, Event::Key(Key::char('x')));
-        assert!(s.command_line.as_ref().unwrap().completion.is_none(), "an edit drops the menu");
+        assert!(s.command_line().unwrap().completion.is_none(), "an edit drops the menu");
     }
 
     #[test]
@@ -2500,10 +2478,10 @@ mod tests {
         // Open a fresh command line, type something, then recall.
         open_and_type(&mut s, "roll");
         update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
-        assert_eq!(s.command_line.as_ref().unwrap().content, ":begin", "older command recalled");
+        assert_eq!(s.command_line().unwrap().content, ":begin", "older command recalled");
         // Down past the newest restores the in-progress line.
         update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
-        assert_eq!(s.command_line.as_ref().unwrap().content, ":roll", "the edited line is restored");
+        assert_eq!(s.command_line().unwrap().content, ":roll", "the edited line is restored");
     }
 
     #[test]
@@ -2513,9 +2491,9 @@ mod tests {
         run_command(&mut s, ":commit");
         update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('g'))));
         update(&mut s, Event::Key(Key::plain(KeyCode::Up))); // newest → :commit
-        assert_eq!(s.command_line.as_ref().unwrap().content, ":commit");
+        assert_eq!(s.command_line().unwrap().content, ":commit");
         update(&mut s, Event::Key(Key::plain(KeyCode::Up))); // older → :begin
-        assert_eq!(s.command_line.as_ref().unwrap().content, ":begin");
+        assert_eq!(s.command_line().unwrap().content, ":begin");
     }
 
     #[test]
@@ -2684,7 +2662,7 @@ mod tests {
         // Enter on the failed entry (results pane focused) expands the query in full.
         s.focus = Focus::Results;
         update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
-        match &s.detail {
+        match s.detail() {
             Some(Value::String(q)) => assert!(q.contains("MATCH (n) WHERE n.x = 1"), "full query: {q}"),
             other => panic!("expected the full query in the detail overlay, got {other:?}"),
         }
@@ -2884,7 +2862,7 @@ mod tests {
     fn enter_expands_the_selected_cell_into_the_detail_overlay() {
         let mut s = with_one_cell(Value::String("Ada".into()));
         update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
-        assert_eq!(s.detail, Some(Value::String("Ada".into())), "overlay holds the value");
+        assert_eq!(s.detail(), Some(&Value::String("Ada".into())), "overlay holds the value");
     }
 
     #[test]
@@ -2893,7 +2871,7 @@ mod tests {
         update(&mut s, Event::Key(Key::plain(KeyCode::Enter))); // open
         s.shown_mut().unwrap().selected_row = 0;
         update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
-        assert!(s.detail.is_none(), "overlay closed");
+        assert!(s.detail().is_none(), "overlay closed");
         assert_eq!(s.shown().unwrap().selected_row, 0, "selection intact");
     }
 
@@ -2911,9 +2889,9 @@ mod tests {
         update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
         update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
         update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
-        assert_eq!(s.detail_scroll, 2);
+        assert_eq!(s.detail_scroll(), Some(2));
         update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
-        assert_eq!(s.detail_scroll, 1);
+        assert_eq!(s.detail_scroll(), Some(1));
     }
 
     // --- export (slice 09) --------------------------------------------------
@@ -2923,7 +2901,7 @@ mod tests {
         use crate::OutputFormat;
         let mut s = with_one_cell(Value::String("Ada".into()));
         update(&mut s, Event::Key(Key::char('e')));
-        assert!(s.export.is_some(), "prompt opened");
+        assert!(s.export().is_some(), "prompt opened");
         // Cycle the format once (csv -> jsonl) and type a path.
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
         type_str(&mut s, "/tmp/out.jsonl");
@@ -2937,7 +2915,7 @@ mod tests {
             }
             other => panic!("expected Export, got {other:?}"),
         }
-        assert!(s.export.is_none(), "prompt closed on confirm");
+        assert!(s.export().is_none(), "prompt closed on confirm");
     }
 
     #[test]
@@ -2946,7 +2924,7 @@ mod tests {
         update(&mut s, Event::Key(Key::char('e')));
         let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
         assert!(effects.is_empty(), "no export with a blank path");
-        assert!(s.export.is_some(), "prompt stays open");
+        assert!(s.export().is_some(), "prompt stays open");
     }
 
     #[test]
@@ -2955,7 +2933,7 @@ mod tests {
         update(&mut s, Event::Key(Key::char('e')));
         let effects = update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
         assert!(effects.is_empty(), "Esc cancels, does not quit");
-        assert!(s.export.is_none());
+        assert!(s.export().is_none());
     }
 
     #[test]
@@ -3038,7 +3016,7 @@ mod tests {
         let mut s = wb();
         type_str(&mut s, "MAT");
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
-        let completion = s.completion.as_ref().expect("popup open");
+        let completion = s.completion().expect("popup open");
         assert!(
             completion.candidates.contains(&"MATCH".to_string()),
             "candidates: {:?}",
@@ -3054,7 +3032,7 @@ mod tests {
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab))); // open (RETURN matches)
         update(&mut s, Event::Key(Key::plain(KeyCode::Enter))); // insert
         assert_eq!(s.editor.buffer(), "RETURN");
-        assert!(s.completion.is_none(), "popup closed after insert");
+        assert!(s.completion().is_none(), "popup closed after insert");
     }
 
     #[test]
@@ -3062,13 +3040,13 @@ mod tests {
         let mut s = wb();
         type_str(&mut s, "RE"); // several keyword matches
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
-        let count = s.completion.as_ref().unwrap().candidates.len();
+        let count = s.completion().unwrap().candidates.len();
         assert!(count > 1, "needs multiple candidates to cycle");
         update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
-        assert_eq!(s.completion.as_ref().unwrap().selected, 1);
+        assert_eq!(s.completion().unwrap().selected, 1);
         update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
         update(&mut s, Event::Key(Key::plain(KeyCode::Up)));
-        assert_eq!(s.completion.as_ref().unwrap().selected, count - 1, "wraps past the top");
+        assert_eq!(s.completion().unwrap().selected, count - 1, "wraps past the top");
     }
 
     #[test]
@@ -3077,7 +3055,7 @@ mod tests {
         type_str(&mut s, "MAT");
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
         update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
-        assert!(s.completion.is_none());
+        assert!(s.completion().is_none());
     }
 
     #[test]
@@ -3086,7 +3064,7 @@ mod tests {
         // completion-only now (ADR 0017), so it opens no popup and never moves focus.
         let mut s = wb();
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
-        assert!(s.completion.is_none());
+        assert!(s.completion().is_none());
         assert_eq!(s.focus, Focus::Editor);
     }
 
@@ -3095,14 +3073,14 @@ mod tests {
         let mut s = wb();
         type_str(&mut s, "RE"); // several keyword matches
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab))); // open at 0
-        let count = s.completion.as_ref().unwrap().candidates.len();
+        let count = s.completion().unwrap().candidates.len();
         assert!(count > 1, "needs multiple candidates");
         // Shift+Tab steps backwards, wrapping to the last candidate.
         update(&mut s, Event::Key(shift_tab()));
-        assert_eq!(s.completion.as_ref().unwrap().selected, count - 1, "wrapped to the last");
+        assert_eq!(s.completion().unwrap().selected, count - 1, "wrapped to the last");
         // And forward again with Tab.
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
-        assert_eq!(s.completion.as_ref().unwrap().selected, 0);
+        assert_eq!(s.completion().unwrap().selected, 0);
     }
 
     // --- live schema completion source (slice 12) ---------------------------
@@ -3912,7 +3890,7 @@ mod tests {
         let mut s = with_two_col_row();
         // Open the cell-detail overlay on the first cell, then yank from it.
         update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
-        assert!(s.detail.is_some(), "detail overlay open");
+        assert!(s.detail().is_some(), "detail overlay open");
         let effects = update(&mut s, Event::Key(Key::char('y')));
         assert_eq!(effects, vec![Effect::CopyToClipboard("Ada".to_string())]);
         assert!(s.status.message.contains("copied value"));
@@ -3965,16 +3943,16 @@ mod tests {
     fn search_matches_rows_by_substring_across_cells_and_clears_to_the_full_view() {
         let mut s = with_text_rows(&["apple", "banana", "apricot", "cherry"], 10);
         open_search_overlay(&mut s);
-        assert!(s.search.is_some(), "search opened");
+        assert!(s.search().is_some(), "search opened");
         type_str(&mut s, "ap");
-        let search = s.search.as_ref().expect("open");
+        let search = s.search().expect("open");
         assert_eq!(search.matches, vec![0, 2], "apple and apricot match 'ap'");
         assert_eq!(search.current, Some(0));
         // The selection moved onto the first match.
         assert_eq!(s.shown().unwrap().selected_row, 0);
         // Esc clears search and restores the full view.
         update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
-        assert!(s.search.is_none(), "cleared");
+        assert!(s.search().is_none(), "cleared");
     }
 
     #[test]
@@ -3982,7 +3960,7 @@ mod tests {
         let mut s = with_text_rows(&["Apple", "BANANA"], 10);
         open_search_overlay(&mut s);
         type_str(&mut s, "ban");
-        assert_eq!(s.search.as_ref().unwrap().matches, vec![1]);
+        assert_eq!(s.search().unwrap().matches, vec![1]);
     }
 
     #[test]
@@ -3990,7 +3968,7 @@ mod tests {
         let mut s = with_text_rows(&["apple", "banana", "apricot", "cherry", "grape"], 10);
         open_search_overlay(&mut s);
         type_str(&mut s, "a"); // apple(0), banana(1), apricot(2), grape(4)
-        assert_eq!(s.search.as_ref().unwrap().matches, vec![0, 1, 2, 4]);
+        assert_eq!(s.search().unwrap().matches, vec![0, 1, 2, 4]);
         assert_eq!(s.shown().unwrap().selected_row, 0);
         // Down steps to the next match.
         update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
@@ -4013,10 +3991,10 @@ mod tests {
         type_str(&mut s, "ap");
         // Tab turns on the filtered (matching-rows-only) view.
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
-        assert!(s.search.as_ref().unwrap().filter_only, "filter on");
+        assert!(s.search().unwrap().filter_only, "filter on");
         // Tab again restores the full view (toggles off).
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
-        assert!(!s.search.as_ref().unwrap().filter_only, "filter off");
+        assert!(!s.search().unwrap().filter_only, "filter off");
     }
 
     #[test]
@@ -4024,10 +4002,10 @@ mod tests {
         let mut s = with_text_rows(&["apple", "apricot", "banana"], 10);
         open_search_overlay(&mut s);
         type_str(&mut s, "app");
-        assert_eq!(s.search.as_ref().unwrap().matches, vec![0]);
+        assert_eq!(s.search().unwrap().matches, vec![0]);
         update(&mut s, Event::Key(Key::plain(KeyCode::Backspace)));
         // Now "ap" matches both apple and apricot.
-        assert_eq!(s.search.as_ref().unwrap().matches, vec![0, 1]);
+        assert_eq!(s.search().unwrap().matches, vec![0, 1]);
     }
 
     #[test]
@@ -4043,7 +4021,7 @@ mod tests {
         let mut s = wb();
         s.focus = Focus::Results;
         open_search_overlay(&mut s);
-        assert!(s.search.is_none(), "nothing to search");
+        assert!(s.search().is_none(), "nothing to search");
         assert!(s.status.message.contains("no result"));
     }
 
@@ -4375,7 +4353,21 @@ mod tests {
         click(&mut s, 3, 8);
         assert_eq!(s.focus, Focus::Results);
         assert_eq!(s.shown().unwrap().selected_row, 1, "second data row selected");
-        assert!(s.detail.is_some(), "the cell-expand overlay opened");
+        assert!(s.detail().is_some(), "the cell-expand overlay opened");
+    }
+
+    #[test]
+    fn a_click_while_search_is_open_does_not_open_a_second_overlay() {
+        // Regression (the Modal sum type): the mouse is ignored while any Modal is
+        // open, so a click on a result cell while in-result search is open no longer
+        // opens the cell-detail overlay on top of it — "two overlays open" is
+        // unrepresentable now.
+        let mut s = with_mouse_layout(&["apple", "banana", "cherry"]);
+        s.focus = Focus::Results;
+        open_search_overlay(&mut s);
+        assert_eq!(s.modal_kind(), Some(ModalKind::Search), "search is the open modal");
+        click(&mut s, 3, 8); // a cell that would otherwise open cell-detail
+        assert_eq!(s.modal_kind(), Some(ModalKind::Search), "still just search — no detail stacked");
     }
 
     #[test]
@@ -4383,7 +4375,7 @@ mod tests {
         let mut s = with_mouse_layout(&["apple", "banana"]);
         click(&mut s, 1, 6); // the header row
         assert_eq!(s.focus, Focus::Results);
-        assert!(s.detail.is_none(), "no cell expanded from a header click");
+        assert!(s.detail().is_none(), "no cell expanded from a header click");
     }
 
     #[test]
@@ -4416,7 +4408,7 @@ mod tests {
     #[test]
     fn the_mouse_is_ignored_while_an_overlay_is_open() {
         let mut s = with_mouse_layout(&["apple", "banana"]);
-        s.detail = Some(Value::Integer(1));
+        s.modal = Some(Modal::Detail { value: Value::Integer(1), scroll: 0 });
         click(&mut s, 1, 8);
         // Focus unchanged and no new selection — the overlay owns input.
         assert_eq!(s.focus, Focus::Editor);
@@ -4531,13 +4523,13 @@ mod tests {
     fn help_opens_a_dismissable_overlay() {
         let mut s = wb();
         submit_meta(&mut s, ":help");
-        assert!(s.help, "the help overlay opened");
+        assert!(s.help_open(), "the help overlay opened");
         assert_eq!(s.editor.buffer(), "", "the command was consumed");
         // While open, Down scrolls and Esc closes (the overlay owns input).
         update(&mut s, Event::Key(Key::plain(KeyCode::Down)));
-        assert_eq!(s.help_scroll, 1);
+        assert_eq!(s.help_scroll(), Some(1));
         update(&mut s, Event::Key(Key::plain(KeyCode::Esc)));
-        assert!(!s.help, "Esc dismisses the overlay rather than quitting");
+        assert!(!s.help_open(), "Esc dismisses the overlay rather than quitting");
     }
 
     #[test]
@@ -4611,7 +4603,7 @@ mod tests {
     fn question_mark_opens_help_when_the_editor_is_empty() {
         let mut s = wb();
         update(&mut s, Event::Key(Key::char('?')));
-        assert!(s.help, "? opened the help overlay on an empty editor");
+        assert!(s.help_open(), "? opened the help overlay on an empty editor");
     }
 
     #[test]
@@ -4620,7 +4612,7 @@ mod tests {
         type_str(&mut s, "MATCH (n) RETURN n"); // a non-empty editor…
         s.focus = Focus::Results; // …but focus is on the results pane
         update(&mut s, Event::Key(Key::char('?')));
-        assert!(s.help, "? opened help from the results pane");
+        assert!(s.help_open(), "? opened help from the results pane");
         assert_eq!(s.editor.buffer(), "MATCH (n) RETURN n", "the query was not edited");
     }
 
@@ -4629,7 +4621,7 @@ mod tests {
         let mut s = wb();
         type_str(&mut s, "MATCH");
         update(&mut s, Event::Key(Key::char('?')));
-        assert!(!s.help, "? did not open help mid-query");
+        assert!(!s.help_open(), "? did not open help mid-query");
         assert_eq!(s.editor.buffer(), "MATCH?", "? was inserted into the query");
     }
 

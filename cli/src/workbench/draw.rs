@@ -22,8 +22,8 @@ use super::plan::Plan;
 use super::update;
 use super::schema::Schema;
 use super::state::{
-    CommandLine, Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, RunState, SearchState,
-    WorkbenchState,
+    CommandLine, Completion, CurrentResult, DrawerKind, ExportPrompt, Focus, Modal, RunState,
+    SearchState, WorkbenchState,
 };
 use ratatui::text::Span;
 
@@ -126,7 +126,9 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     // results rect for mouse hit-testing (issue 17).
     state.viewport_rows = results_inner.height.saturating_sub(1) as usize;
     state.results_area = results_inner;
-    let search = state.search.as_ref();
+    // In-result search highlights within the result itself, so it is not an overlay
+    // box (unlike the other Modals) — it rides into draw_result.
+    let search = state.search();
     if let Some(result) = state.shown() {
         draw_result(frame, results_inner, result, results_focused, search, &state.palette);
     }
@@ -135,28 +137,26 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     // and keybind hints in the theme's status colour (issue 08).
     draw_status(frame, status_area, state);
 
-    // Overlays, drawn last so they sit above the panes (at most one is open). Each
-    // takes the theme's overlay border colour (issue 08).
+    // The one open Modal, drawn last so it sits above the panes (at most one is open
+    // — the sum type makes "two overlays" unrepresentable). Each takes the theme's
+    // overlay border colour (issue 08). Search has no box (it highlighted above).
     let border = overlay_border(&state.palette);
-    if state.help {
-        draw_help(frame, &update::keybindings_help(&state.keys), state.help_scroll, border);
-    }
-    if let Some(value) = state.detail.as_ref() {
-        draw_detail(frame, value, state.detail_scroll, border);
-    }
-    if let Some(prompt) = state.export.as_ref() {
-        draw_export(frame, prompt, border);
-    }
-    // Completion popup (slice 11), anchored just below the editor cursor.
-    if let Some(completion) = state.completion.as_ref() {
-        let (cx, cy) = editor_cursor;
-        draw_completion(frame, completion, cx, cy, border);
-    }
-
-    // The modal Command line (ADR 0017) takes over the status row while open, and
-    // owns the cursor — drawn last so it wins over the editor's cursor placement.
-    if let Some(command_line) = state.command_line.as_ref() {
-        draw_command_line(frame, status_area, command_line, &state.palette);
+    match &state.modal {
+        Some(Modal::Help { scroll }) => {
+            draw_help(frame, &update::keybindings_help(&state.keys), *scroll, border);
+        }
+        Some(Modal::Detail { value, scroll }) => draw_detail(frame, value, *scroll, border),
+        Some(Modal::Export(prompt)) => draw_export(frame, prompt, border),
+        Some(Modal::Completion(completion)) => {
+            let (cx, cy) = editor_cursor;
+            draw_completion(frame, completion, cx, cy, border);
+        }
+        // The Command line (ADR 0017) takes over the status row and owns the cursor —
+        // drawn last so it wins over the editor's cursor placement.
+        Some(Modal::CommandLine(command_line)) => {
+            draw_command_line(frame, status_area, command_line, &state.palette);
+        }
+        Some(Modal::Search(_)) | None => {}
     }
 }
 
@@ -1028,7 +1028,7 @@ mod tests {
         let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
         let mut cl = CommandLine::new(Focus::Editor);
         cl.content = ":begin".to_string();
-        state.command_line = Some(cl);
+        state.modal = Some(Modal::CommandLine(cl));
         let rendered = render(&mut state);
         assert!(rendered.contains(":begin"), "the command line content is drawn: {rendered}");
     }
@@ -1165,7 +1165,7 @@ mod tests {
     #[test]
     fn the_help_overlay_lists_keys_and_commands() {
         let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
-        state.help = true;
+        state.modal = Some(Modal::Help { scroll: 0 });
         let rendered = render(&mut state);
         assert!(rendered.contains("Help"), "the overlay title is drawn");
         // The top section is visible in the small test viewport.
@@ -1301,11 +1301,11 @@ mod tests {
         // The full help is taller than the small test viewport, so the overlay
         // shows a "more below" indicator at scroll 0.
         let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
-        state.help = true;
+        state.modal = Some(Modal::Help { scroll: 0 });
         let rendered = render(&mut state);
         assert!(rendered.contains('▼'), "more-below indicator at the top: {rendered:?}");
         // Scrolled down a long way, a "more above" indicator appears.
-        state.help_scroll = 40;
+        state.modal = Some(Modal::Help { scroll: 40 });
         let rendered = render(&mut state);
         assert!(rendered.contains('▲'), "more-above indicator once scrolled: {rendered:?}");
     }
@@ -1315,11 +1315,11 @@ mod tests {
         use mgconsole_core::Value;
         // A short Value fits: no indicator.
         let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
-        state.detail = Some(Value::String("short".into()));
+        state.modal = Some(Modal::Detail { value: Value::String("short".into()), scroll: 0 });
         let rendered = render(&mut state);
         assert!(!rendered.contains('▲') && !rendered.contains('▼'), "no indicator when it fits: {rendered:?}");
         // A long Value wraps past the box: a more-below indicator appears.
-        state.detail = Some(Value::String("x".repeat(400)));
+        state.modal = Some(Modal::Detail { value: Value::String("x".repeat(400)), scroll: 0 });
         let rendered = render(&mut state);
         assert!(rendered.contains('▼'), "more-below indicator on an overflowing value: {rendered:?}");
     }
@@ -1389,12 +1389,12 @@ mod tests {
             ..CurrentResult::default()
         });
         // A filtered search for "a": Ada and Ana match, Bob is hidden (issue 16).
-        state.search = Some(SearchState {
+        state.modal = Some(Modal::Search(SearchState {
             query: "a".to_string(),
             filter_only: true,
             matches: vec![0, 2],
             current: Some(0),
-        });
+        }));
         let rendered = render(&mut state);
         assert!(rendered.contains("Ada"), "a matching row is drawn");
         assert!(rendered.contains("Ana"), "the other matching row is drawn");
