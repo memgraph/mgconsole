@@ -1718,6 +1718,17 @@ fn record_history(state: &mut WorkbenchState, submission: &str, effects: &mut Ve
 fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
     match meta {
         MetaCommand::Quit => vec![Effect::Quit],
+        // `:repl` drops to the line REPL over the same live Session (ADR 0019).
+        // Refused while a query is in flight — a switch keeps the Session, so it
+        // must not throw a live result away; cancel first (the one-live-result
+        // guard, ADR 0005). The running query is left untouched.
+        MetaCommand::Repl => {
+            if matches!(state.run, RunState::Running { .. }) {
+                state.status.message = "session busy — cancel first".to_string();
+                return Vec::new();
+            }
+            vec![Effect::SwitchTo(crate::frontend::Frontend::Repl)]
+        }
         MetaCommand::SetParam { name, expr } => {
             // Evaluation runs a query; refuse while one is in flight (ADR 0005).
             if matches!(state.run, RunState::Running { .. }) {
@@ -2058,7 +2069,7 @@ pub fn keybindings_help(keys: &KeyBindings) -> String {
     out.push_str(
         "Commands (type at the command line — : on an empty editor, or Ctrl+G)\n  \
          :param :params · :set · :begin :commit :rollback · :connect :use · :sysinfo\n  \
-         :source :watch :o · :save :saved :load :forget · :close · :help :docs :quit\n\n\
+         :source :watch :o · :save :saved :load :forget · :repl · :close · :help :docs :quit\n\n\
          Tab chords and tool chords are rebindable in ~/.mgconsole/config.toml under [keys].",
     );
     out
@@ -4443,6 +4454,33 @@ mod tests {
     /// submitting it in the editor.
     fn submit_meta(state: &mut WorkbenchState, command: &str) -> Vec<Effect> {
         run_command(state, command)
+    }
+
+    #[test]
+    fn repl_command_requests_a_down_switch_to_the_repl() {
+        // `:repl` drops to the line REPL over the same live Session (ADR 0019): the
+        // reducer emits the switch effect for the dispatch loop to act on.
+        let mut s = wb();
+        let effects = submit_meta(&mut s, ":repl");
+        assert_eq!(
+            effects,
+            vec![Effect::SwitchTo(crate::frontend::Frontend::Repl)]
+        );
+    }
+
+    #[test]
+    fn repl_switch_is_refused_while_a_query_is_in_flight() {
+        // A switch keeps the Session, so it must not throw a live result away: it is
+        // refused with the one-live-result message rather than aborting the query.
+        let mut s = wb();
+        submit_query(&mut s, "MATCH (n) RETURN n;"); // now Running
+        let effects = submit_meta(&mut s, ":repl");
+        assert!(effects.is_empty(), "no switch while busy");
+        assert!(s.status.message.contains("busy"), "status: {}", s.status.message);
+        assert!(
+            matches!(s.run, RunState::Running { .. }),
+            "the running query is left untouched"
+        );
     }
 
     #[test]

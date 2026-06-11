@@ -51,7 +51,8 @@ impl CompletionSource for StaticVocabulary {
 /// are offered; matched case-insensitively like the rest of the vocabulary.
 pub const COMMAND_NAMES: &[&str] = &[
     "begin", "commit", "rollback", "connect", "use", "param", "params", "set", "source", "watch",
-    "save", "saved", "load", "forget", "sysinfo", "close", "help", "docs", "quit", "exit", "o",
+    "save", "saved", "load", "forget", "sysinfo", "close", "repl", "help", "docs", "quit", "exit",
+    "o",
 ];
 
 /// A completion source over the typed `:`-command names (issue 02). Unlike the

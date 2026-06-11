@@ -118,6 +118,11 @@ pub enum Effect {
     /// releases capture so native click-drag selection works; `:set mouse on`
     /// re-enables the Workbench's mouse gestures.
     SetMouseCapture(bool),
+    /// Leave the Workbench and hand the live Session to the named Frontend (ADR
+    /// 0019): `:repl` drops to the line REPL over the same Session. The edge
+    /// restores the terminal (the `TerminalGuard` drops as `run` returns) and the
+    /// dispatch loop re-enters the named Frontend.
+    SwitchTo(crate::frontend::Frontend),
     /// Leave the workbench and restore the terminal.
     Quit,
 }

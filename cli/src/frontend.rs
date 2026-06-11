@@ -20,6 +20,21 @@ pub enum Frontend {
     Workbench,
 }
 
+/// The outcome of running one interactive Frontend (ADR 0019): leave the program,
+/// or hand the live Session to the other Frontend. The dispatch loop above the two
+/// Frontends exits on [`Quit`](Outcome::Quit) and re-enters the named Frontend on
+/// [`SwitchTo`](Outcome::SwitchTo), keeping the same Session underneath — so the
+/// connection, open Transaction, params, Settings, active Database, and Read-only
+/// mode all survive the switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// `:quit` / EOF — end the session and the program.
+    Quit,
+    /// A target-named switch Meta-command (`:repl` / `:workbench`) — re-enter the
+    /// named Frontend over the same Session.
+    SwitchTo(Frontend),
+}
+
 /// Choose the Frontend from the three signals (ADR 0010).
 ///
 /// The piped path is selected first and bypasses both interactive Frontends,

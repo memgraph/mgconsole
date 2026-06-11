@@ -21,7 +21,7 @@ use rustyline::highlight::{CmdKind, Highlighter as RustylineHighlighter};
 use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Editor, Helper, Hinter};
 
-use mgconsole::frontend::{select_frontend, Frontend};
+use mgconsole::frontend::{select_frontend, Frontend, Outcome};
 use mgconsole::history::{self, HistoryFile};
 use mgconsole::config;
 use mgconsole::queries;
@@ -212,7 +212,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// the workbench by default, the line REPL when `--plain` is set or the terminal
 /// cannot host the workbench. Colour is resolved here at the IO boundary and
 /// governs colour *within* whichever Frontend runs, independently of the choice.
-#[allow(clippy::too_many_arguments)]
+// This is the orchestration seam that owns the Session bundle (Settings, the
+// profile/config/options) for the whole interactive session and lends a clone to
+// each Frontend it (re-)enters across a switch (ADR 0019), so it takes them by
+// value by design.
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn run_interactive(
     cli: &Cli,
     session: Session,
@@ -247,91 +251,170 @@ fn run_interactive(
     };
     // History resolution is shared by both interactive Frontends (slice 17).
     let history = open_history(cli);
-    // The Session may already be read-only (connect-time flag/profile); seed the
-    // marker state from it. The REPL shares a flag with its prompt so a runtime
-    // `:set readonly on` updates the prompt too.
-    let read_only = session.is_read_only();
-    match select_frontend(cli.plain, true, supports_tui) {
-        Frontend::Workbench => {
-            #[cfg(feature = "tui")]
-            {
-                // Resolve the Workbench theme + keybindings (issue 14): the built-in
-                // palette named by the `theme` Setting with the `[theme]` overrides,
-                // and the `[keys]` rebindings over the defaults. Warnings are
-                // reported to stderr; one bad line never blocks the workbench.
-                let (palette, theme_warnings) =
-                    mgconsole::theme::resolve_palette(&settings.theme, &config.theme);
-                let (keys, key_warnings) = mgconsole::theme::resolve_keys(&config.keys);
-                for warning in theme_warnings.iter().chain(&key_warnings) {
-                    eprintln!("warning: {warning}");
+    // The REPL renders result data in the TTY-aware resolved format (issue 19):
+    // tabular at a terminal, jsonl when stdout is redirected. An explicit
+    // `--output-format` still wins.
+    let resolved_output = OutputFormat::resolve(cli.output_format, out.is_terminal());
+
+    // The dispatch-loop Session bundle (ADR 0019): the Session is shared via the
+    // Arc so the connection, open Transaction, Read-only mode, and active Database
+    // stay live across a Frontend switch; the `:param` store, Settings, and the
+    // Named-query store are owned here and lent to whichever Frontend runs, so they
+    // carry across too. Loaded once, not per Frontend.
+    let session = std::sync::Arc::new(tokio::sync::Mutex::new(session));
+    let mut params: BTreeMap<String, Value> = BTreeMap::new();
+    let mut settings = settings;
+    let mut queries = load_queries();
+
+    // The Workbench palette/keys are resolved once (issue 14): they do not change
+    // across switches, and resolving per re-entry would reprint the same warnings.
+    #[cfg(feature = "tui")]
+    let (palette, keys) = {
+        let (palette, theme_warnings) =
+            mgconsole::theme::resolve_palette(&settings.theme, &config.theme);
+        let (keys, key_warnings) = mgconsole::theme::resolve_keys(&config.keys);
+        for warning in theme_warnings.iter().chain(&key_warnings) {
+            eprintln!("warning: {warning}");
+        }
+        (palette, keys)
+    };
+
+    // The dispatch loop above the two interactive Frontends (ADR 0019): run the
+    // chosen Frontend, then quit or re-enter the other over the same live Session.
+    let mut current = select_frontend(cli.plain, true, supports_tui);
+    loop {
+        let outcome = match current {
+            Frontend::Workbench => {
+                #[cfg(feature = "tui")]
+                {
+                    let read_only = runtime.block_on(session.lock()).is_read_only();
+                    let endpoint = runtime.block_on(session.lock()).endpoint().to_string();
+                    let wb_config = workbench::WorkbenchConfig {
+                        verbose: cli.verbose_execution_info,
+                        settings: settings.clone(),
+                        params: params.clone(),
+                        profile: profile.clone(),
+                        read_only,
+                        endpoint,
+                        queries: queries.clone(),
+                        palette,
+                        keys: keys.clone(),
+                        theme_overrides: config.theme.clone(),
+                        connect: workbench::state::ConnectContext {
+                            config: config.clone(),
+                            options: options.clone(),
+                        },
+                        ..workbench::WorkbenchConfig::default()
+                    };
+                    let exit = runtime.block_on(workbench::run(
+                        std::sync::Arc::clone(&session),
+                        wb_config,
+                        colorize,
+                        history.clone(),
+                    ))?;
+                    // Reclaim the carried bundle slice for the next Frontend.
+                    settings = exit.settings;
+                    params = exit.params;
+                    exit.outcome
                 }
-                let wb_config = workbench::WorkbenchConfig {
-                    verbose: cli.verbose_execution_info,
-                    settings,
-                    profile,
-                    read_only,
-                    endpoint: session.endpoint().to_string(),
-                    queries: load_queries(),
-                    palette,
-                    keys,
-                    theme_overrides: config.theme.clone(),
-                    connect: workbench::state::ConnectContext { config, options },
-                    ..workbench::WorkbenchConfig::default()
-                };
-                runtime.block_on(workbench::run(session, wb_config, colorize, history))?;
+                #[cfg(not(feature = "tui"))]
+                unreachable!("the resolver cannot pick the workbench without the tui feature");
             }
-            #[cfg(not(feature = "tui"))]
-            unreachable!("the resolver cannot pick the workbench without the tui feature");
-        }
-        Frontend::Repl => {
-            let prompt = std::sync::Arc::new(std::sync::Mutex::new(PromptInfo {
-                endpoint: session.endpoint().to_string(),
-                profile: profile.clone(),
-                read_only,
-                tx: session.transaction_state(),
-                database: None,
-            }));
-            // The REPL renders result data in the TTY-aware resolved format (issue
-            // 19): tabular at a terminal, jsonl when stdout is redirected, so
-            // `mgconsole > out` writes faithful jsonl to the file. An explicit
-            // `--output-format` still wins.
-            let stdout_is_tty = out.is_terminal();
-            let resolved = OutputFormat::resolve(cli.output_format, stdout_is_tty);
-            let mut runner = SessionRunner {
+            Frontend::Repl => run_repl(
                 runtime,
-                session,
-                table_options,
-                row_cap: DEFAULT_ROW_CAP,
-                output_format: resolved,
-                config,
-                options,
-                prompt: prompt.clone(),
-            };
-            let repl_config = ReplConfig {
-                row_cap: DEFAULT_ROW_CAP,
-                settings,
-            };
-            let mut source = RustylineSource::new(history, colorize, prompt)?;
-            let mut queries = load_queries();
-            // Stream discipline (ADR 0014): result data → stdout (`out`); all chrome
-            // — summaries, echoes, confirmations — → stderr, where it stays visible
-            // on the terminal even when stdout is redirected to a file.
-            let mut chrome = io::stderr();
-            repl::run_loop(
-                &mut source,
-                &mut runner,
+                &session,
+                table_options.clone(),
+                &mut params,
+                &mut settings,
                 &mut queries,
+                profile.clone(),
+                config.clone(),
+                options.clone(),
+                resolved_output,
+                colorize,
+                history.clone(),
                 out,
-                &mut chrome,
                 err,
-                &repl_config,
-            )?;
-        }
-        Frontend::Piped => {
-            unreachable!("the piped path is handled by the non-terminal branch")
+            )?,
+            Frontend::Piped => {
+                unreachable!("the piped path is handled by the non-terminal branch")
+            }
+        };
+        match outcome {
+            Outcome::Quit => break,
+            Outcome::SwitchTo(target) => current = target,
         }
     }
     Ok(())
+}
+
+/// Run the line REPL over the shared Session for one stint of the dispatch loop
+/// (ADR 0019), returning whether it quit or handed off to another Frontend. The
+/// `:param` store, Settings, and Named-query store are lent in by `&mut` from the
+/// bundle so a switch carries them across; the prompt is seeded from the *live*
+/// Session so an open Transaction and Read-only mode arrive intact after a switch.
+#[allow(clippy::too_many_arguments)]
+fn run_repl(
+    runtime: &tokio::runtime::Runtime,
+    session: &std::sync::Arc<tokio::sync::Mutex<Session>>,
+    table_options: TableOptions,
+    params: &mut BTreeMap<String, Value>,
+    settings: &mut Settings,
+    queries: &mut queries::NamedQueries,
+    profile: Option<String>,
+    config: mgconsole::config::Config,
+    options: ConnectOptions,
+    output_format: OutputFormat,
+    colorize: bool,
+    history: Option<HistoryFile>,
+    out: &mut io::Stdout,
+    err: &mut io::Stderr,
+) -> Result<Outcome, Box<dyn std::error::Error>> {
+    let (read_only, tx, endpoint) = {
+        let guard = runtime.block_on(session.lock());
+        (
+            guard.is_read_only(),
+            guard.transaction_state(),
+            guard.endpoint().to_string(),
+        )
+    };
+    let prompt = std::sync::Arc::new(std::sync::Mutex::new(PromptInfo {
+        endpoint,
+        profile,
+        read_only,
+        tx,
+        database: None,
+    }));
+    let mut runner = SessionRunner {
+        runtime,
+        session: std::sync::Arc::clone(session),
+        table_options,
+        row_cap: DEFAULT_ROW_CAP,
+        output_format,
+        config,
+        options,
+        prompt: prompt.clone(),
+    };
+    let repl_config = ReplConfig {
+        row_cap: DEFAULT_ROW_CAP,
+    };
+    let mut source = RustylineSource::new(history, colorize, prompt)?;
+    // Stream discipline (ADR 0014): result data → stdout (`out`); all chrome —
+    // summaries, echoes, confirmations — → stderr, where it stays visible on the
+    // terminal even when stdout is redirected to a file.
+    let mut chrome = io::stderr();
+    let outcome = repl::run_loop(
+        &mut source,
+        &mut runner,
+        queries,
+        params,
+        settings,
+        out,
+        &mut chrome,
+        err,
+        &repl_config,
+    )?;
+    Ok(outcome)
 }
 
 /// Whether the current terminal can host the full-screen workbench: stdout is a
@@ -749,7 +832,11 @@ impl LineSource for RustylineSource {
 /// `collect_capped`), and discards the remainder so the connection is reusable.
 struct SessionRunner<'a> {
     runtime: &'a tokio::runtime::Runtime,
-    session: Session,
+    /// The one live Session, shared with the dispatch loop and (when the Workbench
+    /// runs) its query task behind a tokio mutex (ADR 0019). The REPL is single-
+    /// threaded, so the lock is uncontended here; each method locks just long enough
+    /// to drive one operation through `block_on`.
+    session: std::sync::Arc<tokio::sync::Mutex<Session>>,
     table_options: TableOptions,
     row_cap: usize,
     /// The resolved result format (issue 19): `Table` renders the display-mode
@@ -783,8 +870,9 @@ impl SessionRunner<'_> {
     /// reflects it (after begin/commit/rollback, and after a query that may have
     /// poisoned an open transaction).
     fn sync_tx(&self) {
+        let tx = self.runtime.block_on(self.session.lock()).transaction_state();
         if let Ok(mut prompt) = self.prompt.lock() {
-            prompt.tx = self.session.transaction_state();
+            prompt.tx = tx;
         }
     }
 }
@@ -797,7 +885,7 @@ impl QueryRunner for SessionRunner<'_> {
         display: DisplayMode,
     ) -> Result<Rendered, Error> {
         let runtime = self.runtime;
-        let session = &mut self.session;
+        let session = std::sync::Arc::clone(&self.session);
         let cap = self.row_cap;
         let output_format = self.output_format;
         // The `auto` display mode needs the live terminal width to decide whether
@@ -810,6 +898,7 @@ impl QueryRunner for SessionRunner<'_> {
         };
 
         let result = runtime.block_on(async move {
+            let mut session = session.lock().await;
             let start = Instant::now();
             let mut result = session.run_with_params(query, params).await?;
             let header = Header::new(result.header());
@@ -848,9 +937,10 @@ impl QueryRunner for SessionRunner<'_> {
 
     fn evaluate(&mut self, expr: &str, params: &BTreeMap<String, Value>) -> Result<Value, Error> {
         let runtime = self.runtime;
-        let session = &mut self.session;
+        let session = std::sync::Arc::clone(&self.session);
 
         runtime.block_on(async move {
+            let mut session = session.lock().await;
             // Evaluate the expression server-side with the existing params in
             // scope; the single returned value becomes the stored parameter.
             let query = format!("RETURN {expr}");
@@ -866,45 +956,48 @@ impl QueryRunner for SessionRunner<'_> {
     }
 
     fn set_read_only(&mut self, on: bool) {
-        self.session.set_read_only(on);
+        self.runtime.block_on(self.session.lock()).set_read_only(on);
         if let Ok(mut prompt) = self.prompt.lock() {
             prompt.read_only = on;
         }
     }
 
     fn is_read_only(&self) -> bool {
-        self.session.is_read_only()
+        self.runtime.block_on(self.session.lock()).is_read_only()
     }
 
     fn begin(&mut self) -> Result<(), Error> {
-        let result = self.runtime.block_on(self.session.begin());
+        let result = self.runtime.block_on(async { self.session.lock().await.begin().await });
         self.sync_tx();
         result
     }
 
     fn commit(&mut self) -> Result<(), Error> {
-        let result = self.runtime.block_on(self.session.commit());
+        let result = self.runtime.block_on(async { self.session.lock().await.commit().await });
         self.sync_tx();
         result
     }
 
     fn rollback(&mut self) -> Result<(), Error> {
-        let result = self.runtime.block_on(self.session.rollback());
+        let result = self.runtime.block_on(async { self.session.lock().await.rollback().await });
         self.sync_tx();
         result
     }
 
     fn transaction_state(&self) -> TransactionState {
-        self.session.transaction_state()
+        self.runtime.block_on(self.session.lock()).transaction_state()
     }
 
     fn connect(&mut self, target: &str) -> Result<String, Error> {
         // Resolve the target (profile or host[:port]) against the current
-        // connection, then establish a fresh Session — a swap, not a mutation
-        // (issue 07). The prior Session is only dropped once the new one connects,
-        // so a failed connect leaves the session intact.
-        let resolved = resolve_connect_target(target, &self.config, self.session.endpoint(), &self.options)
-            .map_err(Error::Protocol)?;
+        // connection, then establish a fresh Session — a swap of the shared
+        // Session's *contents*, not the Arc (issue 07). The prior Session is only
+        // replaced once the new one connects, so a failed connect leaves it intact.
+        let resolved = {
+            let guard = self.runtime.block_on(self.session.lock());
+            resolve_connect_target(target, &self.config, guard.endpoint(), &self.options)
+                .map_err(Error::Protocol)?
+        };
         let session = self
             .runtime
             .block_on(Session::connect_with(&resolved.endpoint, &resolved.options))?;
@@ -912,12 +1005,16 @@ impl QueryRunner for SessionRunner<'_> {
             Some(name) => format!("{name} ({})", resolved.endpoint),
             None => resolved.endpoint.to_string(),
         };
-        self.session = session;
+        let read_only = {
+            let mut guard = self.runtime.block_on(self.session.lock());
+            *guard = session;
+            guard.is_read_only()
+        };
         self.options = resolved.options;
         if let Ok(mut prompt) = self.prompt.lock() {
             prompt.endpoint = resolved.endpoint.to_string();
             prompt.profile = resolved.profile;
-            prompt.read_only = self.session.is_read_only();
+            prompt.read_only = read_only;
             prompt.tx = TransactionState::Auto;
             // A new Session starts on the server's default Database.
             prompt.database = None;
@@ -926,7 +1023,8 @@ impl QueryRunner for SessionRunner<'_> {
     }
 
     fn use_database(&mut self, database: &str) -> Result<(), Error> {
-        self.runtime.block_on(self.session.use_database(database))?;
+        self.runtime
+            .block_on(async { self.session.lock().await.use_database(database).await })?;
         if let Ok(mut prompt) = self.prompt.lock() {
             prompt.database = Some(database.to_string());
         }
@@ -942,8 +1040,9 @@ impl QueryRunner for SessionRunner<'_> {
     ) -> Result<usize, Error> {
         use mgconsole_core::format::{CypherlWriter, JsonlWriter, RowWriter};
         let runtime = self.runtime;
-        let session = &mut self.session;
+        let session = std::sync::Arc::clone(&self.session);
         runtime.block_on(async move {
+            let mut session = session.lock().await;
             let mut result = session.run_with_params(query, params).await?;
             let header = Header::new(result.header());
             let file = std::fs::File::create(path).map_err(|e| Error::Output(e.to_string()))?;

@@ -63,7 +63,9 @@ pub fn prepare_history_dir(file: &Path) -> Result<(), String> {
 
 /// A history file the REPL reads on start and appends to as queries are entered.
 /// Thin glue over a rustyline [`History`]; persistence is exercised directly in
-/// tests (no terminal needed).
+/// tests (no terminal needed). `Clone` (it is just a path) so the dispatch loop can
+/// lend a copy to each Frontend it re-enters across a switch (ADR 0019).
+#[derive(Clone)]
 pub struct HistoryFile {
     path: PathBuf,
 }

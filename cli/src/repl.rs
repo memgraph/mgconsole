@@ -19,6 +19,7 @@ use std::path::PathBuf;
 
 use mgconsole_core::{render, tabular, DisplayMode, Error, QueryAssembler, TransactionState, Value};
 
+use crate::frontend::Outcome;
 use crate::queries::NamedQueries;
 use crate::settings::Settings;
 use crate::OutputFormat;
@@ -95,6 +96,10 @@ pub enum MetaCommand {
     /// `:forget <name>` — delete a Named query (a deliberately non-generic verb so
     /// it never reads as deleting data, issue 13).
     Forget(String),
+    /// `:repl` — switch to (or stay in) the line REPL over the same live Session
+    /// (ADR 0019). A cross-frontend Meta-command: in the Workbench it drops to the
+    /// REPL; in the REPL it is a gentle no-op. The universal floor — always available.
+    Repl,
     /// A recognised command used wrongly (e.g. `:param` with no expression). The
     /// message explains the misuse so the Frontend can report it without ending
     /// the session.
@@ -155,6 +160,7 @@ pub fn meta_command(line: &str) -> Option<MetaCommand> {
                 MetaCommand::Redirect(args.to_string())
             }
         }
+        "repl" => MetaCommand::Repl,
         "save" => parse_save(args),
         "saved" => MetaCommand::Saved,
         "load" => {
@@ -468,13 +474,12 @@ pub trait QueryRunner {
     ) -> Result<usize, Error>;
 }
 
-/// Frontend-local REPL configuration.
+/// Frontend-local REPL configuration. The `:param` store and Settings are no
+/// longer carried here: they belong to the dispatch-loop Session bundle (ADR
+/// 0019) and are lent to [`run_loop`] by `&mut` so they survive a Frontend switch.
 pub struct ReplConfig {
     /// The tabular row cap, so an overflow warning can name it.
     pub row_cap: usize,
-    /// The console Settings resolved at startup (default < CLI flag). The loop
-    /// takes its own mutable copy so runtime `:set` can change it.
-    pub settings: Settings,
 }
 
 /// The REPL's execute loop: read input, assemble it into complete queries, run
@@ -800,6 +805,9 @@ fn dispatch_meta(
                 writeln!(err, "error: no saved query named '{name}'")?;
             }
         }
+        // `:repl` is the universal floor (ADR 0019): typed in the REPL it is a
+        // gentle, idempotent no-op rather than a switch to itself.
+        MetaCommand::Repl => writeln!(out, "already in the REPL")?,
         MetaCommand::Invalid(message) => writeln!(err, "error: {message}")?,
         MetaCommand::Unknown(cmd) => writeln!(err, "error: unknown command '{cmd}'")?,
     }
@@ -878,21 +886,25 @@ fn source_content(
     Ok(())
 }
 
+/// Drive the REPL until it ends or hands off to the other Frontend (ADR 0019).
+///
+/// The `:param` store and Settings are lent in by `&mut` from the dispatch-loop
+/// Session bundle (not owned here), so a `:repl`/`:workbench` switch carries them
+/// across intact. Returns [`Outcome::Quit`] on `:quit`/EOF, or
+/// [`Outcome::SwitchTo`] when a switch Meta-command is submitted.
+#[allow(clippy::too_many_arguments)]
 pub fn run_loop(
     source: &mut dyn LineSource,
     runner: &mut dyn QueryRunner,
     queries: &mut NamedQueries,
+    params: &mut BTreeMap<String, Value>,
+    settings: &mut Settings,
     data: &mut dyn Write,
     out: &mut dyn Write,
     err: &mut dyn Write,
     config: &ReplConfig,
-) -> io::Result<()> {
+) -> io::Result<Outcome> {
     let mut assembler = QueryAssembler::new();
-    // The `:param` store, bound to every query so `$name` references resolve.
-    let mut params: BTreeMap<String, Value> = BTreeMap::new();
-    // The console Settings, seeded from the resolved config; runtime `:set`
-    // mutates this copy. Kept rigorously distinct from `params` (CONTEXT.md).
-    let mut settings = config.settings.clone();
     // The most recently run query, so `:watch` with no query reuses it (issue 11).
     let mut last_query: Option<String> = None;
     // A one-shot `:o` redirect armed for the next query (issue 12).
@@ -920,8 +932,8 @@ pub fn run_loop(
                 match dispatch_meta(
                     cmd,
                     runner,
-                    &mut settings,
-                    &mut params,
+                    settings,
+                    params,
                     queries,
                     last_query.as_deref(),
                     &mut pending_redirect,
@@ -930,7 +942,7 @@ pub fn run_loop(
                     out,
                     err,
                 )? {
-                    MetaFlow::Quit => break,
+                    MetaFlow::Quit => return Ok(Outcome::Quit),
                     MetaFlow::Handled => continue,
                     // Re-prompt with the recalled text pre-filled; never auto-run.
                     MetaFlow::Recall(text) => {
@@ -947,7 +959,7 @@ pub fn run_loop(
             // A `:o` redirect (issue 12) sends the next query's result to a file
             // (one-shot); otherwise it renders to the screen.
             if let Some((format, path)) = pending_redirect.take() {
-                match runner.run_to_file(&query, &params, format, &path) {
+                match runner.run_to_file(&query, params, format, &path) {
                     Ok(rows) => {
                         writeln!(out, "wrote {rows} row(s) to {} ({format})", path.display())?;
                     }
@@ -955,13 +967,14 @@ pub fn run_loop(
                 }
             } else {
                 execute_query(
-                    runner, &query, &params, settings.display, config.row_cap, data, out, err,
+                    runner, &query, params, settings.display, config.row_cap, data, out, err,
                 )?;
             }
             last_query = Some(query);
         }
     }
-    Ok(())
+    // EOF (Ctrl-D / closed input): end the session, like `:quit`.
+    Ok(Outcome::Quit)
 }
 
 #[cfg(test)]
@@ -1014,6 +1027,22 @@ mod tests {
     fn help_and_docs_are_recognised() {
         assert_eq!(meta_command(":help"), Some(MetaCommand::Help));
         assert_eq!(meta_command(":docs"), Some(MetaCommand::Docs));
+    }
+
+    #[test]
+    fn repl_is_recognised_as_a_meta_command() {
+        // `:repl` is a cross-frontend switch command (ADR 0019), recognised here
+        // so the REPL can no-op it rather than run it as a query.
+        assert_eq!(meta_command(":repl"), Some(MetaCommand::Repl));
+    }
+
+    #[test]
+    fn repl_in_the_repl_is_a_gentle_no_op() {
+        // Typed in the REPL, `:repl` is idempotent: a no-op message, no switch, and
+        // the loop carries on to EOF (the universal floor, ADR 0019).
+        let (_source, _runner, out, err) = drive(vec![Line::Text(":repl".into())], vec![]);
+        assert!(out.contains("already in the REPL"), "no-op message: {out:?}");
+        assert!(err.is_empty(), "no error: {err:?}");
     }
 
     #[test]
@@ -1579,17 +1608,20 @@ mod tests {
         let mut data = Vec::new();
         let mut chrome = Vec::new();
         let mut err = Vec::new();
+        // The `:param` store and Settings are lent in by the dispatch loop (ADR
+        // 0019); the tests own them locally and start from the defaults.
+        let mut params = BTreeMap::new();
+        let mut settings = Settings::default();
         run_loop(
             &mut source,
             &mut runner,
             &mut queries,
+            &mut params,
+            &mut settings,
             &mut data,
             &mut chrome,
             &mut err,
-            &ReplConfig {
-                row_cap: 1000,
-                settings: Settings::default(),
-            },
+            &ReplConfig { row_cap: 1000 },
         )
         .expect("loop runs to EOF");
         let out = String::from_utf8(data).unwrap() + &String::from_utf8(chrome).unwrap();
@@ -1612,17 +1644,18 @@ mod tests {
         let mut data = Vec::new();
         let mut chrome = Vec::new();
         let mut err = Vec::new();
+        let mut params = BTreeMap::new();
+        let mut settings = Settings::default();
         run_loop(
             &mut source,
             &mut runner,
             &mut queries,
+            &mut params,
+            &mut settings,
             &mut data,
             &mut chrome,
             &mut err,
-            &ReplConfig {
-                row_cap: 1000,
-                settings: Settings::default(),
-            },
+            &ReplConfig { row_cap: 1000 },
         )
         .expect("loop runs");
         let data = String::from_utf8(data).unwrap();

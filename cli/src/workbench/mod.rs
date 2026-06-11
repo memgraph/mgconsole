@@ -45,30 +45,44 @@ use mgconsole_core::format::{CsvOptions, CsvWriter, CypherlWriter, Header, Jsonl
 use mgconsole_core::{Error, Record, Session, Value};
 use rustyline::history::{FileHistory, History, SearchDirection};
 
+use crate::frontend::Outcome;
 use crate::history::HistoryFile;
+use crate::settings::Settings;
 use crate::OutputFormat;
 use schema::{parse_schema, NODE_PROPERTIES_QUERY, REL_PROPERTIES_QUERY};
 use terminal::TerminalGuard;
 
-/// Run the workbench to completion over a connected Session, restoring the
-/// terminal on quit and on panic. The Session is shared with the in-flight query
-/// task behind an async mutex so the task can hold it for a query's duration and
-/// release it on completion (or, in slice 07, on cancel).
+/// What the Workbench hands back to the dispatch loop when it returns (ADR 0019):
+/// the [`Outcome`] (quit or switch to the named Frontend) plus the slice of the
+/// Session bundle the Workbench owned for its lifetime — the `:param` store and
+/// Settings — so the loop can lend them to the next Frontend unchanged. The
+/// Session itself is shared via the `Arc<Mutex<…>>` the loop also holds, so it is
+/// not returned here.
+pub struct WorkbenchExit {
+    pub outcome: Outcome,
+    pub params: BTreeMap<String, Value>,
+    pub settings: Settings,
+}
+
+/// Run the workbench until it quits or hands off to the other Frontend (ADR 0019),
+/// restoring the terminal on return and on panic (the `TerminalGuard` is scoped to
+/// this call). The Session is shared with the in-flight query task — and with the
+/// dispatch loop — behind an async mutex, so a `:repl` switch hands the *same* live
+/// Session to the REPL with nothing torn down underneath.
 // The render loop is one cohesive select-multiplex over input/lifecycle/tick
 // events plus the effect interpreter; splitting it would scatter the shared
 // loop state (session, running task, history) across helpers for no clarity win.
 #[allow(clippy::too_many_lines)]
 pub async fn run(
-    session: Session,
+    session: Arc<Mutex<Session>>,
     config: WorkbenchConfig,
     color: bool,
     history: Option<HistoryFile>,
-) -> io::Result<()> {
+) -> io::Result<WorkbenchExit> {
     let _guard = TerminalGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut state = WorkbenchState::new(config, color);
 
-    let session = Arc::new(Mutex::new(session));
     let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
 
     // Persisted command history (slice 17): load prior entries for recall, and
@@ -84,11 +98,16 @@ pub async fn run(
     let mut ticker = tokio::time::interval(std::time::Duration::from_millis(update::TICK_MS));
     // The single in-flight query task (one-live-result, ADR 0005).
     let mut running: Option<tokio::task::JoinHandle<()>> = None;
+    // Fire-and-forget tasks that hold the shared Session (schema fetch, param
+    // eval). Tracked so they can be aborted and awaited before `run` returns — a
+    // `:repl` switch hands the Session to the REPL, and a straggler still holding
+    // the lock would race the REPL's queries (ADR 0019 / ADR 0005).
+    let mut background: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     // Fetch the Schema on connect (Session idle), to back completion + sidebar.
-    tokio::spawn(fetch_schema(Arc::clone(&session), tx.clone()));
+    background.push(tokio::spawn(fetch_schema(Arc::clone(&session), tx.clone())));
 
-    loop {
+    let outcome = 'session: loop {
         terminal.draw(|frame| draw::draw(frame, &mut state))?;
 
         // Multiplex terminal input, query-lifecycle events, and the timer tick;
@@ -100,7 +119,7 @@ pub async fn run(
                     None => continue,
                 },
                 Some(Err(_)) => continue,
-                None => break, // input stream closed
+                None => break 'session Outcome::Quit, // input stream closed
             },
             Some(lifecycle) = rx.recv() => lifecycle,
             _ = ticker.tick() => Event::Tick,
@@ -108,11 +127,13 @@ pub async fn run(
 
         for effect in update(&mut state, event) {
             match effect {
-                Effect::Quit => {
-                    if let Some(task) = running.take() {
-                        task.abort();
-                    }
-                    return Ok(());
+                Effect::Quit => break 'session Outcome::Quit,
+                Effect::SwitchTo(target) => {
+                    // Hand the live Session to the named Frontend (ADR 0019). The
+                    // post-loop cleanup aborts every Session-holding task before
+                    // returning, and the TerminalGuard drops as `run` returns,
+                    // restoring the terminal before the REPL takes the normal screen.
+                    break 'session Outcome::SwitchTo(target);
                 }
                 Effect::RunQuery { id, query, params } => {
                     // The reducer's busy guard means none should be live, but
@@ -135,12 +156,14 @@ pub async fn run(
                 Effect::FetchSchema => {
                     // The fetch shares the one Session, so it serialises behind any
                     // in-flight query rather than competing with it (ADR 0005).
-                    tokio::spawn(fetch_schema(Arc::clone(&session), tx.clone()));
+                    background.retain(|task| !task.is_finished());
+                    background.push(tokio::spawn(fetch_schema(Arc::clone(&session), tx.clone())));
                 }
                 Effect::EvaluateParam { name, expr, params } => {
                     let session = Arc::clone(&session);
                     let tx = tx.clone();
-                    tokio::spawn(evaluate_param(session, tx, name, expr, params));
+                    background.retain(|task| !task.is_finished());
+                    background.push(tokio::spawn(evaluate_param(session, tx, name, expr, params)));
                 }
                 Effect::AppendHistory(line) => {
                     if let Some(file) = &history {
@@ -291,8 +314,26 @@ pub async fn run(
                 }
             }
         }
+    };
+    // Stop every task that holds the shared Session before returning, so nothing
+    // touches it once the next Frontend (the REPL, on a `:repl` switch) takes over.
+    // Abort *and await* each: the await returns only after the task has unwound and
+    // dropped its Session lock/Arc clone, making the hand-off race-free (ADR 0019).
+    if let Some(task) = running.take() {
+        task.abort();
+        let _ = task.await;
     }
-    Ok(())
+    for task in background {
+        task.abort();
+        let _ = task.await;
+    }
+    // Hand the bundle slice the Workbench owned back to the dispatch loop so the
+    // next Frontend inherits the params and Settings unchanged (ADR 0019).
+    Ok(WorkbenchExit {
+        outcome,
+        params: std::mem::take(&mut state.params),
+        settings: state.settings.clone(),
+    })
 }
 
 /// Run one query on the shared Session, streaming its lifecycle back as events.

@@ -451,7 +451,7 @@ impl WorkbenchState {
             viewport_rows: 0,
             editor_area: Rect::default(),
             results_area: Rect::default(),
-            params: BTreeMap::new(),
+            params: config.params.clone(),
             next_id: 0,
             running_buffer: None,
             history_entries: Vec::new(),
@@ -924,6 +924,10 @@ pub struct WorkbenchConfig {
     /// The console Settings resolved at startup (default < CLI flag), seeding the
     /// state's live [`Settings`] which `:set` then mutates (issue 01).
     pub settings: Settings,
+    /// The `:param` store handed in by the dispatch loop (ADR 0019): empty on a
+    /// fresh launch, or the params carried across a Frontend switch. Seeds the
+    /// state's live params, which `:param` then mutates.
+    pub params: BTreeMap<String, Value>,
     /// The active connection profile's name (issue 03), shown in the status bar so
     /// the user always knows which connection they are on. `None` = no profile.
     pub profile: Option<String>,
@@ -972,6 +976,7 @@ impl Default for WorkbenchConfig {
             history_cap: DEFAULT_HISTORY_CAP,
             verbose: false,
             settings: Settings::default(),
+            params: BTreeMap::new(),
             profile: None,
             read_only: false,
             endpoint: String::new(),
