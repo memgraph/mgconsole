@@ -1,6 +1,6 @@
 # 08 — Extended theme: UI-element colours + `light` built-in
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

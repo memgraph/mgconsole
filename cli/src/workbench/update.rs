@@ -3806,6 +3806,11 @@ mod tests {
         // mono: every category the terminal default.
         assert_eq!(s.palette.color(HighlightCategory::Keyword), ThemeColor::Default);
         assert_eq!(s.status.message, "theme = mono");
+        // The light built-in is selectable and tunes both categories and chrome.
+        submit_meta(&mut s, ":set theme light");
+        assert_eq!(s.status.message, "theme = light");
+        assert_eq!(s.palette.color(HighlightCategory::Keyword), ThemeColor::Blue);
+        assert_eq!(s.palette.border, ThemeColor::Blue, "light tunes the chrome too");
     }
 
     #[test]

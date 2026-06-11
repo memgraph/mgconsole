@@ -117,6 +117,13 @@ pub struct Palette {
     pub number: ThemeColor,
     pub comment: ThemeColor,
     pub parameter: ThemeColor,
+    // UI-element colours (issue 08), beyond the syntax categories: the Workbench
+    // chrome the draw used to hardcode. `Default` means "today's appearance" —
+    // `border`/`status` fall back to no explicit colour and `selection` to
+    // reverse-video — so an absent override changes nothing.
+    pub border: ThemeColor,
+    pub selection: ThemeColor,
+    pub status: ThemeColor,
 }
 
 impl Palette {
@@ -143,6 +150,10 @@ impl Palette {
             "number" => self.number = color,
             "comment" => self.comment = color,
             "parameter" => self.parameter = color,
+            // UI-element slots (issue 08).
+            "border" => self.border = color,
+            "selection" => self.selection = color,
+            "status" => self.status = color,
             // `plain` is always the terminal default; accept and ignore an explicit
             // override to it so a config that names it is not an error.
             "plain" if color == ThemeColor::Default => {}
@@ -153,11 +164,13 @@ impl Palette {
 }
 
 /// The built-in theme names, listed by `:set theme` and validated against.
-pub const BUILTIN_THEMES: &[&str] = &["default", "mono"];
+pub const BUILTIN_THEMES: &[&str] = &["default", "mono", "light"];
 
 /// The built-in `Palette` for a theme name, or `None` for an unknown name.
-/// `default` reproduces today's appearance; `mono` is monochrome (every category
-/// the terminal default), the clearly-distinct alternative `:set theme` switches to.
+/// `default` reproduces today's appearance (Cyan chrome, reverse-video selection);
+/// `mono` is monochrome (every category and the chrome the terminal default);
+/// `light` is tuned for a light-background terminal so e.g. comment grey stays
+/// legible. The UI slots (`border`/`selection`/`status`) are carried by each.
 pub fn builtin_palette(name: &str) -> Option<Palette> {
     match name {
         "default" => Some(Palette {
@@ -167,6 +180,11 @@ pub fn builtin_palette(name: &str) -> Option<Palette> {
             number: ThemeColor::Magenta,
             comment: ThemeColor::DarkGray,
             parameter: ThemeColor::Blue,
+            // Today's chrome: Cyan focused borders, reverse-video selection, an
+            // unstyled status bar.
+            border: ThemeColor::Cyan,
+            selection: ThemeColor::Default,
+            status: ThemeColor::Default,
         }),
         "mono" => Some(Palette {
             keyword: ThemeColor::Default,
@@ -175,6 +193,24 @@ pub fn builtin_palette(name: &str) -> Option<Palette> {
             number: ThemeColor::Default,
             comment: ThemeColor::Default,
             parameter: ThemeColor::Default,
+            // Fully monochrome: even the chrome is the terminal default (selection
+            // stays reverse-video, the one cue that needs no colour).
+            border: ThemeColor::Default,
+            selection: ThemeColor::Default,
+            status: ThemeColor::Default,
+        }),
+        // Tuned for a light background: the darker base ANSI colours read on white
+        // where the bright defaults wash out; comment grey stays legible.
+        "light" => Some(Palette {
+            keyword: ThemeColor::Blue,
+            function: ThemeColor::Magenta,
+            string: ThemeColor::Green,
+            number: ThemeColor::Red,
+            comment: ThemeColor::DarkGray,
+            parameter: ThemeColor::Cyan,
+            border: ThemeColor::Blue,
+            selection: ThemeColor::Default,
+            status: ThemeColor::Blue,
         }),
         _ => None,
     }
@@ -614,6 +650,36 @@ mod tests {
         assert!("ctrl+".parse::<Chord>().is_err(), "no key");
         assert!("ctrl+a+b".parse::<Chord>().is_err(), "two keys");
         assert!("ctrl+nope".parse::<Chord>().is_err(), "unknown named key");
+    }
+
+    #[test]
+    fn the_ui_slots_resolve_and_default_reproduces_todays_chrome() {
+        // An absent [theme] table reproduces today's chrome: Cyan focused borders,
+        // reverse-video selection (the Default sentinel), an unstyled status bar.
+        let (palette, warnings) = resolve_palette("default", &BTreeMap::new());
+        assert!(warnings.is_empty());
+        assert_eq!(palette.border, ThemeColor::Cyan);
+        assert_eq!(palette.selection, ThemeColor::Default);
+        assert_eq!(palette.status, ThemeColor::Default);
+        // The new slots are overridable through [theme].
+        let overrides = BTreeMap::from([
+            ("border".to_string(), "magenta".to_string()),
+            ("selection".to_string(), "blue".to_string()),
+            ("status".to_string(), "green".to_string()),
+        ]);
+        let (palette, warnings) = resolve_palette("default", &overrides);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(palette.border, ThemeColor::Magenta);
+        assert_eq!(palette.selection, ThemeColor::Blue);
+        assert_eq!(palette.status, ThemeColor::Green);
+    }
+
+    #[test]
+    fn the_light_builtin_exists_and_differs_from_default() {
+        assert!(BUILTIN_THEMES.contains(&"light"), "light is listed among the built-ins");
+        let light = builtin_palette("light").expect("light is built in");
+        let default = builtin_palette("default").expect("default is built in");
+        assert_ne!(light, default, "light is a distinct palette");
     }
 
     #[test]

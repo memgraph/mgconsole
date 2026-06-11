@@ -16,6 +16,8 @@ use ratatui::Frame;
 use mgconsole_core::Value;
 
 use super::highlight;
+use super::highlight::to_ratatui;
+use crate::theme::{Palette, ThemeColor};
 use super::plan::Plan;
 use super::update;
 use super::schema::Schema;
@@ -28,12 +30,30 @@ use ratatui::text::Span;
 /// Braille spinner frames for the running-query indicator (slice 07).
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
-/// Border colour for a focused pane vs. an unfocused one.
-fn border_style(focused: bool) -> Style {
+/// Border colour for a focused pane vs. an unfocused one (issue 08): the theme's
+/// `border` slot when focused (default Cyan), the terminal default when not.
+fn border_style(palette: &Palette, focused: bool) -> Style {
     if focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(to_ratatui(palette.border))
     } else {
         Style::default()
+    }
+}
+
+/// The colour for overlay borders (issue 08): always the theme's `border` slot
+/// (overlays read as focused). `Default` resolves to the terminal default.
+fn overlay_border(palette: &Palette) -> Color {
+    to_ratatui(palette.border)
+}
+
+/// The style for a selected cell/row (issue 08): the theme's `selection` slot as a
+/// background when set, else reverse-video (today's appearance, and the one cue
+/// that needs no colour).
+fn selection_style(palette: &Palette) -> Style {
+    if palette.selection == ThemeColor::Default {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default().bg(to_ratatui(palette.selection))
     }
 }
 
@@ -84,7 +104,7 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     let editor_focused = matches!(state.focus, Focus::Editor);
     let editor_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(border_style(editor_focused))
+        .border_style(border_style(&state.palette, editor_focused))
         .title("Query");
     let editor_inner = editor_block.inner(editor_area);
     frame.render_widget(editor_block, editor_area);
@@ -124,7 +144,7 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     };
     let results_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(border_style(results_focused))
+        .border_style(border_style(&state.palette, results_focused))
         .title(title);
     let results_inner = results_block.inner(results_area);
     frame.render_widget(results_block, results_area);
@@ -134,26 +154,32 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     state.results_area = results_inner;
     let search = state.search.as_ref();
     if let Some(result) = state.shown() {
-        draw_result(frame, results_inner, result, results_focused, search);
+        draw_result(frame, results_inner, result, results_focused, search, &state.palette);
     }
 
-    // Status bar: the transient message, then the keybind hints.
-    frame.render_widget(Paragraph::new(status_text(state)), status_area);
+    // Status bar: the transient message, then the keybind hints, in the theme's
+    // status colour (issue 08; `Default` → the terminal default).
+    frame.render_widget(
+        Paragraph::new(status_text(state)).style(Style::default().fg(to_ratatui(state.palette.status))),
+        status_area,
+    );
 
-    // Overlays, drawn last so they sit above the panes (at most one is open).
+    // Overlays, drawn last so they sit above the panes (at most one is open). Each
+    // takes the theme's overlay border colour (issue 08).
+    let border = overlay_border(&state.palette);
     if state.help {
-        draw_help(frame, &update::keybindings_help(&state.keys), state.help_scroll);
+        draw_help(frame, &update::keybindings_help(&state.keys), state.help_scroll, border);
     }
     if let Some(value) = state.detail.as_ref() {
-        draw_detail(frame, value, state.detail_scroll);
+        draw_detail(frame, value, state.detail_scroll, border);
     }
     if let Some(prompt) = state.export.as_ref() {
-        draw_export(frame, prompt);
+        draw_export(frame, prompt, border);
     }
     // Completion popup (slice 11), anchored just below the editor cursor.
     if let Some(completion) = state.completion.as_ref() {
         let (cx, cy) = editor_cursor;
-        draw_completion(frame, completion, cx, cy);
+        draw_completion(frame, completion, cx, cy, border);
     }
 }
 
@@ -192,7 +218,7 @@ fn draw_tabbar(frame: &mut Frame, area: Rect, state: &mut WorkbenchState) {
 /// Draw the completion popup: a small list of candidates anchored below the
 /// cursor, the selected one highlighted, with a window that keeps the selection
 /// visible (slice 11).
-fn draw_completion(frame: &mut Frame, completion: &Completion, cursor_x: u16, cursor_y: u16) {
+fn draw_completion(frame: &mut Frame, completion: &Completion, cursor_x: u16, cursor_y: u16, border: Color) {
     const MAX_VISIBLE: usize = 8;
     let visible = completion.candidates.len().min(MAX_VISIBLE);
     let width = completion
@@ -212,7 +238,7 @@ fn draw_completion(frame: &mut Frame, completion: &Completion, cursor_x: u16, cu
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(border));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -354,12 +380,12 @@ fn section(lines: &mut Vec<Line<'static>>, title: &str, items: &[String]) {
 
 /// Draw the export prompt (slice 09): the chosen format and the destination path
 /// being typed, in a centred box.
-fn draw_export(frame: &mut Frame, prompt: &ExportPrompt) {
+fn draw_export(frame: &mut Frame, prompt: &ExportPrompt, border: Color) {
     let area = centered_rect(frame.area(), 60, 30);
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(border))
         .title("Export result (Tab: format · Enter: write · Esc: cancel)");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -370,12 +396,12 @@ fn draw_export(frame: &mut Frame, prompt: &ExportPrompt) {
 /// Draw the cell-detail overlay: a centred box showing the full Value rendered by
 /// the Core's per-Value renderer, wrapped and scrollable so a node/path/map/list
 /// is readable in full (slice 08).
-fn draw_detail(frame: &mut Frame, value: &Value, scroll: u16) {
+fn draw_detail(frame: &mut Frame, value: &Value, scroll: u16, border: Color) {
     let area = centered_rect(frame.area(), 70, 60);
     frame.render_widget(Clear, area); // clear what's beneath the overlay
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(border))
         .title("Cell detail (↑/↓ scroll · Esc/Enter close)");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -389,12 +415,12 @@ fn draw_detail(frame: &mut Frame, value: &Value, scroll: u16) {
 
 /// Draw the `:help` overlay: a centred, scrollable box listing every gesture with
 /// its current chord (so `[keys]` rebindings show through) and the commands.
-fn draw_help(frame: &mut Frame, text: &str, scroll: u16) {
+fn draw_help(frame: &mut Frame, text: &str, scroll: u16, border: Color) {
     let area = centered_rect(frame.area(), 70, 80);
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(border))
         .title("Help — keys & commands (↑/↓ scroll · Esc/Enter/q close)");
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -410,11 +436,11 @@ fn draw_help(frame: &mut Frame, text: &str, scroll: u16) {
 /// operator tree; a `PROFILE` plan is the same tree in the first column of a table
 /// whose other columns are the per-operator hits/time metrics, aligned for reading
 /// (the tree *in* a table). The selected visible line is highlighted when focused.
-fn draw_plan(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool) {
+fn draw_plan(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool, palette: &Palette) {
     if plan.is_profile() {
-        draw_plan_table(frame, area, plan, focused);
+        draw_plan_table(frame, area, plan, focused, palette);
     } else {
-        draw_plan_tree(frame, area, plan, focused);
+        draw_plan_tree(frame, area, plan, focused, palette);
     }
 }
 
@@ -434,13 +460,13 @@ fn plan_tree_cell(plan: &Plan, index: usize) -> String {
 }
 
 /// Draw an `EXPLAIN` plan as a bare collapsible tree (no metrics columns).
-fn draw_plan_tree(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool) {
+fn draw_plan_tree(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool, palette: &Palette) {
     let lines: Vec<Line> = plan
         .visible()
         .into_iter()
         .map(|index| {
             let style = if focused && index == plan.selected {
-                Style::default().add_modifier(Modifier::REVERSED)
+                selection_style(palette)
             } else {
                 Style::default()
             };
@@ -452,12 +478,12 @@ fn draw_plan_tree(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool) {
 
 /// Draw a `PROFILE` plan as a table: the operator tree in the first column, then
 /// hits / relative-time / absolute-time in aligned (right-justified) columns.
-fn draw_plan_table(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool) {
+fn draw_plan_table(frame: &mut Frame, area: Rect, plan: &Plan, focused: bool, palette: &Palette) {
     let rows = plan.visible().into_iter().map(|index| {
         let node = &plan.lines[index];
         let metrics = node.annotation.clone().unwrap_or_default();
         let style = if focused && index == plan.selected {
-            Style::default().add_modifier(Modifier::REVERSED)
+            selection_style(palette)
         } else {
             Style::default()
         };
@@ -660,6 +686,7 @@ fn draw_result(
     result: &CurrentResult,
     focused: bool,
     search: Option<&SearchState>,
+    palette: &Palette,
 ) {
     // A failed submission renders its originating query and the error in place of
     // a table (issue 05), so a failure is reviewable rather than a status that
@@ -671,7 +698,7 @@ fn draw_result(
     // An EXPLAIN/PROFILE result renders as an operator tree, not a table (its plan
     // survives trimming, so this comes before the trimmed check).
     if let Some(plan) = &result.plan {
-        draw_plan(frame, area, plan, focused);
+        draw_plan(frame, area, plan, focused, palette);
         return;
     }
     // A trimmed entry (issue 06) has had its Records dropped to bound memory; show
@@ -733,9 +760,10 @@ fn draw_result(
                     style = style.add_modifier(Modifier::BOLD);
                 }
             }
-            // Highlight the selected cell when the pane is focused.
+            // Highlight the selected cell when the pane is focused (issue 08: the
+            // theme's selection slot, default reverse-video).
             if focused && absolute == result.selected_row && col == result.selected_col {
-                style = style.add_modifier(Modifier::REVERSED);
+                style = style.patch(selection_style(palette));
             }
             Cell::from(truncate_cell(text, width)).style(style)
         });
@@ -1040,6 +1068,52 @@ mod tests {
         assert!(rendered.contains("error"), "the header marks the failed entry: {rendered:?}");
         assert!(rendered.contains("RETRUN"), "the originating query is shown");
         assert!(rendered.contains("syntax error"), "the error is rendered in the result area");
+    }
+
+    /// Render into a `TestBackend` and return the resulting cell buffer, so a test
+    /// can inspect cell *styles* (fg/bg), not just the text.
+    fn render_to_buffer(state: &mut WorkbenchState) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("test backend");
+        terminal.draw(|frame| draw(frame, state)).expect("draw succeeds");
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn the_chrome_picks_up_theme_overrides() {
+        use crate::theme::ThemeColor;
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        // Override the chrome slots; the draw should consult them.
+        state.palette.border = ThemeColor::Magenta;
+        state.palette.status = ThemeColor::Green;
+        state.focus = Focus::Editor; // the editor pane border is then drawn focused
+        let buf = render_to_buffer(&mut state);
+        assert!(
+            buf.content().iter().any(|c| c.fg == Color::Magenta),
+            "a focused pane border uses the theme's border colour"
+        );
+        assert!(
+            buf.content().iter().any(|c| c.fg == Color::Green),
+            "the status bar uses the theme's status colour"
+        );
+    }
+
+    #[test]
+    fn an_overridden_selection_colours_the_selected_cell_background() {
+        use crate::theme::ThemeColor;
+        use mgconsole_core::{Record, Value};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.palette.selection = ThemeColor::Red;
+        state.focus = Focus::Results;
+        state.history.push(CurrentResult {
+            header: vec!["n".to_string()],
+            rows: vec![Record::new(vec![Value::String("Ada".into())])],
+            ..CurrentResult::default()
+        });
+        let buf = render_to_buffer(&mut state);
+        assert!(
+            buf.content().iter().any(|c| c.bg == Color::Red),
+            "the selected cell uses the theme's selection background"
+        );
     }
 
     #[test]
