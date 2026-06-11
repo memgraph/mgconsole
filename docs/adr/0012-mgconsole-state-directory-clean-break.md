@@ -37,3 +37,10 @@ plus a sibling `MGCONSOLE_CONFIG_PATH`).
   than scattered across two roots.
 - If real users ever predate a later move, this clean-switch precedent will not
   apply and a migration path would be needed.
+- On the first interactive run, when no `~/.mgconsole/config.toml` exists, the
+  console populates the directory with a fully-commented example `config.toml` so
+  the format is discoverable. The scaffold is inert (it parses to the defaults,
+  exactly like a missing file) and is skipped for non-interactive runs and when
+  `MGCONSOLE_CONFIG_PATH` is set — first-run *population* of this directory, not a
+  change to its location or the env-override escape hatch (see
+  `.scratch/console-ergonomics/issues/22-first-run-example-config.md`).
