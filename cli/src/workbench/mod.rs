@@ -595,7 +595,10 @@ fn translate_key(key: KeyEvent) -> Key {
         CrosstermKeyCode::Esc => KeyCode::Esc,
         CrosstermKeyCode::Backspace => KeyCode::Backspace,
         CrosstermKeyCode::Delete => KeyCode::Delete,
-        CrosstermKeyCode::Tab => KeyCode::Tab,
+        // Shift+Tab arrives as a distinct BackTab key code (CSI Z); normalise both
+        // to Tab — the shift flag (set unconditionally for BackTab below) tells them
+        // apart, so the reducer sees one Tab key with the right modifier.
+        CrosstermKeyCode::Tab | CrosstermKeyCode::BackTab => KeyCode::Tab,
         CrosstermKeyCode::Left => KeyCode::Left,
         CrosstermKeyCode::Right => KeyCode::Right,
         CrosstermKeyCode::Up => KeyCode::Up,
@@ -610,6 +613,9 @@ fn translate_key(key: KeyEvent) -> Key {
         code,
         ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
         alt: key.modifiers.contains(KeyModifiers::ALT),
-        shift: key.modifiers.contains(KeyModifiers::SHIFT),
+        // BackTab *is* Shift+Tab; some terminals omit the SHIFT modifier on it, so
+        // set shift unconditionally for it (it normalised to Tab above).
+        shift: key.modifiers.contains(KeyModifiers::SHIFT)
+            || matches!(key.code, CrosstermKeyCode::BackTab),
     }
 }

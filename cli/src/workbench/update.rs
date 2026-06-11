@@ -651,6 +651,16 @@ fn handle_gesture(state: &mut WorkbenchState, gesture: Gesture) -> Vec<Effect> {
             open_command_line(state);
             Vec::new()
         }
+        // Shift+Tab with the completion popup closed switches focus between the
+        // editor and the results pane (ADR 0017); with the popup open, Shift+Tab is
+        // intercepted earlier as prev-candidate, so it never reaches here.
+        Gesture::SwitchFocus => {
+            state.focus = match state.focus {
+                Focus::Editor => Focus::Results,
+                Focus::Results => Focus::Editor,
+            };
+            Vec::new()
+        }
         // Buffer (tab) navigation gestures (issue 18). Allowed while a query is
         // live (issue 03): a live query belongs to its origin Buffer and streams
         // there regardless of which Buffer is shown, so switching to read another
@@ -844,6 +854,12 @@ fn update_search_status(state: &mut WorkbenchState) {
 /// Keys while the completion popup is open: cycle/insert/dismiss; any other key
 /// closes the popup and is handled as ordinary input.
 fn completion_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
+    // Shift+Tab cycles to the previous candidate (ADR 0017), the mirror of Tab's
+    // next; checked first since it shares the Tab key code.
+    if key.code == KeyCode::Tab && key.shift {
+        cycle_completion(state, -1);
+        return Vec::new();
+    }
     match key.code {
         KeyCode::Esc => {
             state.completion = None;
@@ -875,19 +891,18 @@ fn completion_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// Keys while the editor pane has focus.
 fn editor_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     match key {
-        // Tab triggers completion for the word under the cursor; with nothing to
-        // complete (empty prefix or no candidates) it cycles focus to the results
-        // pane instead (slice 11).
+        // Tab is completion-only (ADR 0017): it opens the popup for the word under
+        // the cursor. With nothing to complete (empty prefix or no candidates) it is
+        // a no-op — it never switches pane focus. Focus-switch is Shift+Tab, the
+        // SwitchFocus gesture. (Shift+Tab is caught by the gesture layer before
+        // reaching here, so this arm only sees plain Tab.)
         Key {
             code: KeyCode::Tab,
             ctrl: false,
             alt: false,
-            ..
+            shift: false,
         } => {
             open_completion(state);
-            if state.completion.is_none() {
-                state.focus = Focus::Results;
-            }
             Vec::new()
         }
         // Newline gestures. The universal keys (everywhere): Alt+Enter, Ctrl+J.
@@ -1191,10 +1206,9 @@ fn apply_completion(state: &mut WorkbenchState) {
 /// ever rendered, so navigation over a huge result is cheap.
 fn results_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     match key.code {
-        KeyCode::Tab => {
-            state.focus = Focus::Editor;
-            return Vec::new();
-        }
+        // Tab no longer switches focus here (ADR 0017): focus-switch is Shift+Tab
+        // (the SwitchFocus gesture, handled before this). Plain Tab is a no-op.
+        KeyCode::Tab => return Vec::new(),
         // Enter expands the selected cell into the detail overlay (slice 08).
         KeyCode::Enter => {
             // For a plan result, Enter collapses/expands the selected operator;
@@ -1877,7 +1891,7 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
 /// (Enter/newline/Tab/Ctrl-C/quit) are fixed and not rebindable.
 pub fn status_hint(keys: &KeyBindings, newline_hint: &str) -> String {
     format!(
-        "Enter: run · {newline}: newline · Tab: focus · {fmt}: format · ? help · Ctrl-C: cancel · Esc/Ctrl-D: quit",
+        "Enter: run · {newline}: newline · Tab: complete · Shift+Tab: focus · {fmt}: format · ? help · Ctrl-C: cancel · Esc/Ctrl-D: quit",
         newline = newline_hint,
         fmt = keys.chord(Gesture::FormatBuffer),
     )
@@ -1912,7 +1926,8 @@ pub fn keybindings_help(keys: &KeyBindings) -> String {
                 format!(": / {}", chord(Gesture::OpenCommandLine)),
                 "Open the command line (run a :command)",
             ),
-            ("Tab".to_string(), "Complete the word, or switch pane focus"),
+            ("Tab".to_string(), "Complete the word under the cursor"),
+            ("Shift+Tab".to_string(), "Previous candidate, or switch pane focus"),
             ("Ctrl+Z / Ctrl+Y".to_string(), "Undo / redo (incl. format, :load, recall)"),
             ("Ctrl+Up / Ctrl+Down".to_string(), "Recall older / newer query (command history)"),
             ("Ctrl+C".to_string(), "Cancel a running query, or clear the editor"),
@@ -2164,20 +2179,36 @@ mod tests {
         );
     }
 
+    /// Shift+Tab (BackTab), normalised to Tab + shift by the IO edge.
+    fn shift_tab() -> Key {
+        Key { code: KeyCode::Tab, ctrl: false, alt: false, shift: true }
+    }
+
     #[test]
-    fn tab_cycles_focus_between_editor_and_results() {
+    fn shift_tab_switches_focus_between_editor_and_results() {
+        // ADR 0017: Shift+Tab is the focus-switch (with the popup closed); plain Tab
+        // never switches focus.
         let mut s = wb();
         assert_eq!(s.focus, Focus::Editor);
-        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        update(&mut s, Event::Key(shift_tab()));
         assert_eq!(s.focus, Focus::Results);
+        update(&mut s, Event::Key(shift_tab()));
+        assert_eq!(s.focus, Focus::Editor, "and back again from the results pane");
+    }
+
+    #[test]
+    fn plain_tab_on_an_empty_editor_does_not_switch_focus() {
+        // Empty prefix → no candidates → Tab is a no-op (no focus change, ADR 0017).
+        let mut s = wb();
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
-        assert_eq!(s.focus, Focus::Editor);
+        assert_eq!(s.focus, Focus::Editor, "Tab no longer cycles focus");
+        assert!(s.completion.is_none(), "and opened no popup");
     }
 
     #[test]
     fn quit_works_from_the_results_pane_too() {
         let mut s = wb();
-        update(&mut s, Event::Key(Key::plain(KeyCode::Tab))); // focus results
+        update(&mut s, Event::Key(shift_tab())); // focus results
         assert_eq!(
             update(&mut s, Event::Key(Key::plain(KeyCode::Esc))),
             vec![Effect::Quit]
@@ -2919,13 +2950,28 @@ mod tests {
     }
 
     #[test]
-    fn tab_with_no_completable_prefix_moves_focus_to_results() {
-        // An empty prefix offers nothing (the static completer declines it), so
-        // Tab falls back to cycling focus.
+    fn tab_with_no_completable_prefix_is_a_no_op() {
+        // An empty prefix offers nothing (the static completer declines it). Tab is
+        // completion-only now (ADR 0017), so it opens no popup and never moves focus.
         let mut s = wb();
         update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
         assert!(s.completion.is_none());
-        assert_eq!(s.focus, Focus::Results);
+        assert_eq!(s.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn shift_tab_cycles_to_the_previous_candidate_when_the_popup_is_open() {
+        let mut s = wb();
+        type_str(&mut s, "RE"); // several keyword matches
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab))); // open at 0
+        let count = s.completion.as_ref().unwrap().candidates.len();
+        assert!(count > 1, "needs multiple candidates");
+        // Shift+Tab steps backwards, wrapping to the last candidate.
+        update(&mut s, Event::Key(shift_tab()));
+        assert_eq!(s.completion.as_ref().unwrap().selected, count - 1, "wrapped to the last");
+        // And forward again with Tab.
+        update(&mut s, Event::Key(Key::plain(KeyCode::Tab)));
+        assert_eq!(s.completion.as_ref().unwrap().selected, 0);
     }
 
     // --- live schema completion source (slice 12) ---------------------------

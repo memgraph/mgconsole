@@ -354,6 +354,17 @@ impl Chord {
             key,
         }
     }
+
+    /// A `shift+<key>` chord (e.g. `Shift+Tab` / `BackTab`).
+    #[must_use]
+    pub fn shift(key: ChordKey) -> Self {
+        Self {
+            ctrl: false,
+            alt: false,
+            shift: true,
+            key,
+        }
+    }
 }
 
 impl fmt::Display for Chord {
@@ -422,6 +433,11 @@ pub enum Gesture {
     /// Open the modal Command line (ADR 0017): `Ctrl+G` ("go to command") anywhere,
     /// so a `:`-command can be issued mid-composition without disturbing the editor.
     OpenCommandLine,
+    /// Switch focus between the editor and the results pane (ADR 0017): `Shift+Tab`
+    /// when the completion popup is closed (when open, `Shift+Tab` is prev-candidate).
+    /// `Shift+Tab` (`BackTab` / `CSI Z`) is delivered reliably on every terminal,
+    /// unlike `Ctrl+Tab`, which is why it carries the focus-switch.
+    SwitchFocus,
 }
 
 /// Every gesture, in a stable order — for defaults and for listing. Closing a
@@ -437,6 +453,7 @@ pub const GESTURES: &[Gesture] = &[
     Gesture::NextBuffer,
     Gesture::PrevBuffer,
     Gesture::OpenCommandLine,
+    Gesture::SwitchFocus,
 ];
 
 impl Gesture {
@@ -453,6 +470,7 @@ impl Gesture {
             Gesture::NextBuffer => "next-buffer",
             Gesture::PrevBuffer => "prev-buffer",
             Gesture::OpenCommandLine => "open-command-line",
+            Gesture::SwitchFocus => "switch-focus",
         }
     }
 
@@ -483,6 +501,8 @@ impl Gesture {
             // unlike Ctrl+; (ADR 0017 rejected the latter for the same reason
             // ADR 0016 rejected Ctrl+Shift+Z).
             Gesture::OpenCommandLine => Chord::ctrl('g'),
+            // Shift+Tab (BackTab) is reliably delivered everywhere (ADR 0017).
+            Gesture::SwitchFocus => Chord::shift(ChordKey::Tab),
         }
     }
 }
@@ -705,6 +725,9 @@ mod tests {
         // The modal Command line opener defaults to Ctrl+G (ADR 0017).
         assert_eq!(keys.chord(Gesture::OpenCommandLine), Chord::ctrl('g'));
         assert_eq!(keys.gesture_for(Chord::ctrl('g')), Some(Gesture::OpenCommandLine));
+        // Focus-switch defaults to Shift+Tab (ADR 0017).
+        assert_eq!(keys.chord(Gesture::SwitchFocus), Chord::shift(ChordKey::Tab));
+        assert_eq!(keys.gesture_for(Chord::shift(ChordKey::Tab)), Some(Gesture::SwitchFocus));
     }
 
     #[test]

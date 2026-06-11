@@ -1,6 +1,6 @@
 # 03 — Editor `Tab` = completion-only; `Shift+Tab` = focus-switch
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
