@@ -428,19 +428,17 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     if key.ctrl && key.code == KeyCode::Char('c') {
         return interrupt(state);
     }
-    // Editor undo/redo (issue 09), when the editor is focused: Ctrl+Z reverts the
-    // last edit — including a whole-buffer replace from auto-format / `:load` /
-    // history recall — and Ctrl+Y redoes. Scoped to editor focus so Ctrl+Y still
-    // reaches the summary-drawer gesture from the results pane.
-    if matches!(state.focus, Focus::Editor) && key.ctrl {
-        if key.code == KeyCode::Char('z') {
-            state.editor.undo();
-            return Vec::new();
-        }
-        if key.code == KeyCode::Char('y') {
-            state.editor.redo();
-            return Vec::new();
-        }
+    // Editor undo/redo (issue 09): Ctrl+Z reverts the last edit — including a
+    // whole-buffer replace from auto-format / `:load` / history recall — and Ctrl+Y
+    // redoes. These are editor-owned chords (ADR 0016); the summary drawer moved off
+    // Ctrl+Y to Ctrl+N, so they bind globally with no collision.
+    if key.ctrl && key.code == KeyCode::Char('z') {
+        state.editor.undo();
+        return Vec::new();
+    }
+    if key.ctrl && key.code == KeyCode::Char('y') {
+        state.editor.redo();
+        return Vec::new();
     }
     // Bare `?` opens the help overlay when the editor is empty or the results pane
     // is focused (issue 10); typing `?` into a non-empty query still inserts it, so
@@ -1259,6 +1257,58 @@ fn detail_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
     Vec::new()
 }
 
+/// A Workbench command (CONTEXT.md): a typed `:`-command driving a Workbench-only
+/// concept, distinct from the cross-frontend [`MetaCommand`] vocabulary. Parsed by
+/// the Workbench's own layer, so the line REPL never recognises it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkbenchCommand {
+    /// `:close` — close the active Buffer (the typed, deliberate counterpart to the
+    /// navigation gestures, used because closing is destructive).
+    Close,
+}
+
+/// Recognise a Workbench command in a submitted `:`-line, or `None` if it is not
+/// one (a shared meta-command or ordinary query text). Trailing arguments are
+/// ignored — `:close` takes none.
+fn workbench_command(line: &str) -> Option<WorkbenchCommand> {
+    let keyword = line.trim().strip_prefix(':')?.split_whitespace().next()?;
+    match keyword {
+        "close" => Some(WorkbenchCommand::Close),
+        _ => None,
+    }
+}
+
+/// Handle a Workbench command. `:close` closes the active Buffer; the last Buffer
+/// always stays open. Closing is destructive by design, so it always proceeds —
+/// if the active Buffer owns the in-flight query, that query is cancelled as part
+/// of closing (the buffer and its streaming result are dropped together).
+fn handle_workbench_command(state: &mut WorkbenchState, command: WorkbenchCommand) -> Vec<Effect> {
+    match command {
+        WorkbenchCommand::Close => {
+            state.editor.clear();
+            if state.buffer_count() == 1 {
+                state.status.message = "the last buffer stays open".to_string();
+                return Vec::new();
+            }
+            // If the buffer being closed owns the live query, cancel it: its result
+            // streams into this buffer's history, which is about to be dropped.
+            let mut effects = Vec::new();
+            if state.running_buffer == Some(state.active) {
+                if let RunState::Running { id } = state.run {
+                    effects.push(Effect::Cancel { id });
+                }
+                state.run = RunState::Idle;
+                state.running_buffer = None;
+                state.pending.clear();
+            }
+            state.close_buffer();
+            state.status.message =
+                format!("buffer {}/{}", state.active + 1, state.buffer_count());
+            effects
+        }
+    }
+}
+
 /// Handle a submit (plain Enter): split the buffer into statements and run the
 /// first, queuing the rest to run sequentially on the one Session. A `:quit`/
 /// `:exit` buffer leaves the workbench (reusing the REPL's meta parser), even
@@ -1267,6 +1317,13 @@ fn detail_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
 /// so the query can be edited and re-run.
 fn submit(state: &mut WorkbenchState) -> Vec<Effect> {
     let buffer = state.editor.buffer();
+    // A Workbench command (`:close`) is recognised by the Workbench's own command
+    // layer, ahead of the shared meta-command vocabulary (CONTEXT.md "Workbench
+    // command"): it drives a Workbench-only concept and has no meaning in the line
+    // REPL, so it never enters the shared `MetaCommand` parser.
+    if let Some(command) = workbench_command(buffer.trim()) {
+        return handle_workbench_command(state, command);
+    }
     // A `:`-meta command is handled here (reusing the REPL's parser), not run as
     // a query (slice 16 brings the `:param` family into the workbench).
     if let Some(meta) = meta_command(buffer.trim()) {
@@ -1633,22 +1690,6 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 return vec![Effect::PersistQueries];
             }
             state.status.message = format!("error: no saved query named '{name}'");
-            Vec::new()
-        }
-        // `:close` is the deliberate, typed way to close the active Buffer — the
-        // destructive counterpart to the navigation gestures (CONTEXT.md). The
-        // last Buffer always stays open; refused while a query is live.
-        MetaCommand::Close => {
-            state.editor.clear();
-            if matches!(state.run, RunState::Running { .. }) {
-                state.status.message = "session busy — cancel first".to_string();
-            } else if state.buffer_count() == 1 {
-                state.status.message = "the last buffer stays open".to_string();
-            } else {
-                state.close_buffer();
-                state.status.message =
-                    format!("buffer {}/{}", state.active + 1, state.buffer_count());
-            }
             Vec::new()
         }
         MetaCommand::Invalid(message) => {
@@ -3178,14 +3219,12 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_y_toggles_the_summary_drawer() {
+    fn ctrl_n_toggles_the_summary_drawer() {
         let mut s = wb();
-        // In the editor pane Ctrl+Y is redo (issue 09), so the summary-drawer
-        // gesture is reached from the results pane.
-        s.focus = Focus::Results;
-        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('y'))));
+        // Ctrl+N toggles the summary drawer (it moved off Ctrl+Y, now redo; ADR 0016).
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('n'))));
         assert_eq!(s.drawer, Some(DrawerKind::Summary));
-        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('y'))));
+        update(&mut s, Event::Key(Key::ctrl(KeyCode::Char('n'))));
         assert_eq!(s.drawer, None);
     }
 
@@ -3455,6 +3494,50 @@ mod tests {
         close_buffer(&mut s); // closes buffer 2, back to buffer 1
         assert_eq!(s.buffer_count(), 1);
         assert_eq!(s.editor.buffer(), "ONE");
+    }
+
+    #[test]
+    fn close_is_a_workbench_command_not_a_shared_meta_command() {
+        // `:close` is parsed by the Workbench's own layer; it is not part of the
+        // shared meta vocabulary (CONTEXT.md "Workbench command").
+        assert_eq!(
+            crate::repl::meta_command(":close"),
+            Some(crate::repl::MetaCommand::Unknown(":close".to_string()))
+        );
+        assert_eq!(workbench_command(":close"), Some(WorkbenchCommand::Close));
+        assert_eq!(workbench_command(":param x 1"), None, "a shared meta-command is not a workbench command");
+    }
+
+    #[test]
+    fn close_cancels_the_query_when_closing_its_owning_buffer() {
+        let mut s = wb();
+        new_buffer(&mut s); // two buffers; active is buffer 2
+        let id = submit_query(&mut s, "RETURN 1;"); // runs in (and belongs to) buffer 2
+        assert_eq!(s.running_buffer, Some(1));
+        let effects = submit_meta(&mut s, ":close"); // close the owning buffer
+        assert!(effects.contains(&Effect::Cancel { id }), "closing the owning buffer cancels its query");
+        assert_eq!(s.buffer_count(), 1);
+        assert!(matches!(s.run, RunState::Idle), "the session falls idle");
+        assert!(s.running_buffer.is_none(), "no buffer owns a query any more");
+    }
+
+    #[test]
+    fn close_of_an_idle_buffer_leaves_another_buffers_query_running() {
+        let mut s = wb();
+        let id = submit_query(&mut s, "RETURN 1;"); // runs in buffer 1
+        assert_eq!(s.running_buffer, Some(0));
+        new_buffer(&mut s); // buffer 2 (idle) active; running index fixed up to 0
+        assert_eq!(s.running_buffer, Some(0));
+        let effects = submit_meta(&mut s, ":close"); // close idle buffer 2
+        assert!(effects.is_empty(), "no cancel — a different buffer owns the query");
+        assert_eq!(s.buffer_count(), 1);
+        assert!(matches!(s.run, RunState::Running { .. }), "buffer 1's query keeps running");
+        assert_eq!(s.running_buffer, Some(0), "still owned by buffer 1 (now the only buffer)");
+        // Its result still streams into the surviving buffer.
+        update(&mut s, Event::QueryStarted { id, header: vec!["n".to_string()] });
+        update(&mut s, Event::RecordArrived { id, record: one_row() });
+        assert_eq!(s.history.len(), 1);
+        assert_eq!(s.history[0].rows.len(), 1);
     }
 
     #[test]
@@ -3827,10 +3910,10 @@ mod tests {
 
         let (keys, _) = crate::theme::resolve_keys(&BTreeMap::from([(
             "new-buffer".to_string(),
-            "ctrl+n".to_string(),
+            "ctrl+g".to_string(),
         )]));
         let rebound = keybindings_help(&keys);
-        assert!(rebound.contains("ctrl+n"), "the rebound chord is shown: {rebound}");
+        assert!(rebound.contains("ctrl+g"), "the rebound chord is shown: {rebound}");
         assert!(!rebound.contains("ctrl+t"), "the old default chord is gone");
     }
 

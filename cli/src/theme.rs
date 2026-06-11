@@ -462,7 +462,9 @@ impl Gesture {
             Gesture::RefreshSchema => Chord::ctrl('r'),
             Gesture::ToggleSchema => Chord::ctrl('b'),
             Gesture::ToggleParams => Chord::ctrl('p'),
-            Gesture::ToggleSummary => Chord::ctrl('y'),
+            // Ctrl+Y is the editor's redo (ADR 0016 — the editor owns the chords it
+            // uses for editing), so the summary drawer sits on Ctrl+N (notifications).
+            Gesture::ToggleSummary => Chord::ctrl('n'),
             // Ctrl+L is free in a TUI (no scrollback to clear); Ctrl+W stays the
             // editor's delete-word and is no longer a Workbench gesture.
             Gesture::FormatBuffer => Chord::ctrl('l'),

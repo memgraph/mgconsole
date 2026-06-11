@@ -475,7 +475,17 @@ impl WorkbenchState {
         if self.buffers.len() == 1 {
             return;
         }
-        self.buffers.remove(self.active);
+        let removed = self.active;
+        self.buffers.remove(removed);
+        // A live query's origin Buffer (issue 03) keeps pointing at the same Buffer
+        // across the removal: indices after the removed one shift down. The caller
+        // never closes the owning Buffer without first clearing `running_buffer`
+        // (it cancels the query), so the owning index is never the one removed.
+        if let Some(idx) = self.running_buffer {
+            if idx > removed {
+                self.running_buffer = Some(idx - 1);
+            }
+        }
         if self.active >= self.buffers.len() {
             self.active = self.buffers.len() - 1;
         }

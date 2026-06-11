@@ -306,7 +306,7 @@ fn draw_params(frame: &mut Frame, area: Rect, params: &BTreeMap<String, Value>) 
 fn draw_summary(frame: &mut Frame, area: Rect, result: Option<&CurrentResult>, verbose: bool) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("Summary (Ctrl-Y close)");
+        .title("Summary (Ctrl-N close)");
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
