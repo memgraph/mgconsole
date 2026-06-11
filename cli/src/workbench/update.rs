@@ -442,6 +442,17 @@ fn update_key(state: &mut WorkbenchState, key: Key) -> Vec<Effect> {
             return Vec::new();
         }
     }
+    // Bare `?` opens the help overlay when the editor is empty or the results pane
+    // is focused (issue 10); typing `?` into a non-empty query still inserts it, so
+    // a `?` in Cypher text is never swallowed.
+    if key.code == KeyCode::Char('?') && !key.ctrl && !key.alt {
+        let editor_empty = state.editor.buffer().is_empty();
+        if matches!(state.focus, Focus::Results) || editor_empty {
+            state.help = true;
+            state.help_scroll = 0;
+            return Vec::new();
+        }
+    }
     // The rebindable gestures (issue 14): a key press is matched against the
     // resolved `[keys]` bindings (defaults reproduce today's chords). The buffer
     // gestures are bound here too but acted on in issue 18.
@@ -1657,6 +1668,18 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
             Vec::new()
         }
     }
+}
+
+/// The status-bar keybind hint (issue 10), generated from the live `[keys]` so it
+/// shows the user's actual chords (e.g. a rebound format key) rather than a stale
+/// fixed string, and points at the help overlay (`? help`). The structural keys
+/// (Enter/newline/Tab/Ctrl-C/quit) are fixed and not rebindable.
+pub fn status_hint(keys: &KeyBindings, newline_hint: &str) -> String {
+    format!(
+        "Enter: run · {newline}: newline · Tab: focus · {fmt}: format · ? help · Ctrl-C: cancel · Esc/Ctrl-D: quit",
+        newline = newline_hint,
+        fmt = keys.chord(Gesture::FormatBuffer),
+    )
 }
 
 /// The `:help` overlay text (issue 14/18 follow-up): every gesture with its
@@ -3855,6 +3878,59 @@ mod tests {
         let mut s = wb();
         submit_meta(&mut s, ":set");
         assert!(s.status.message.contains("theme = default"), "{}", s.status.message);
+    }
+
+    // --- Discoverability: ? help + live-key hint (issue 10) -------------------
+
+    #[test]
+    fn question_mark_opens_help_when_the_editor_is_empty() {
+        let mut s = wb();
+        update(&mut s, Event::Key(Key::char('?')));
+        assert!(s.help, "? opened the help overlay on an empty editor");
+    }
+
+    #[test]
+    fn question_mark_opens_help_when_the_results_pane_is_focused() {
+        let mut s = wb();
+        type_str(&mut s, "MATCH (n) RETURN n"); // a non-empty editor…
+        s.focus = Focus::Results; // …but focus is on the results pane
+        update(&mut s, Event::Key(Key::char('?')));
+        assert!(s.help, "? opened help from the results pane");
+        assert_eq!(s.editor.buffer(), "MATCH (n) RETURN n", "the query was not edited");
+    }
+
+    #[test]
+    fn question_mark_inserts_into_a_non_empty_query() {
+        let mut s = wb();
+        type_str(&mut s, "MATCH");
+        update(&mut s, Event::Key(Key::char('?')));
+        assert!(!s.help, "? did not open help mid-query");
+        assert_eq!(s.editor.buffer(), "MATCH?", "? was inserted into the query");
+    }
+
+    #[test]
+    fn the_status_hint_points_at_help_and_reflects_a_rebinding() {
+        use crate::theme::resolve_keys;
+        let overrides = std::collections::BTreeMap::from([
+            ("format-buffer".to_string(), "ctrl+g".to_string()),
+        ]);
+        let (keys, _warnings) = resolve_keys(&overrides);
+        let hint = status_hint(&keys, "Alt+Enter");
+        assert!(hint.contains("? help"), "the hint points at help: {hint}");
+        assert!(hint.contains("ctrl+g"), "the hint reflects the rebound format chord: {hint}");
+    }
+
+    #[test]
+    fn the_help_overlay_reflects_a_rebinding() {
+        use crate::theme::resolve_keys;
+        let overrides = std::collections::BTreeMap::from([
+            ("next-buffer".to_string(), "ctrl+n".to_string()),
+        ]);
+        let (keys, _warnings) = resolve_keys(&overrides);
+        let help = keybindings_help(&keys);
+        assert!(help.contains("ctrl+n"), "help shows the rebound next-buffer chord");
+        // The remapped defaults and the :close command are present too.
+        assert!(help.contains(":close"), "help lists the :close command");
     }
 
     // --- Undoable buffer replacement (issue 09) -------------------------------

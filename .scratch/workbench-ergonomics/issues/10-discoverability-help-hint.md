@@ -1,6 +1,6 @@
 # 10 — Discoverability: `?` opens help; hint + help reflect the live keys
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

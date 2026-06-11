@@ -784,10 +784,8 @@ fn draw_result(
 /// (issue 01 AC).
 fn status_text(state: &WorkbenchState) -> String {
     use std::fmt::Write as _;
-    let hints = format!(
-        "Enter: run · {}: newline · Tab: focus · Ctrl-C: cancel · Esc/Ctrl-D: quit",
-        state.config.newline_hint
-    );
+    // The hint reflects the live `[keys]` and points at help (issue 10).
+    let hints = update::status_hint(&state.keys, state.config.newline_hint);
     // While a query is in flight, prefix a spinner to the running message.
     let message = if matches!(state.run, RunState::Running { .. }) {
         let frame = SPINNER[state.spinner % SPINNER.len()];
