@@ -1,6 +1,6 @@
 # Down-switch: `:repl` from the Workbench, over a preserved Session
 
-Status: ready-for-agent
+Status: done
 
 ## What to build
 
