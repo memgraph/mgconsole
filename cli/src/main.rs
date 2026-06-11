@@ -215,6 +215,10 @@ fn run_interactive(
     out: &mut io::Stdout,
     err: &mut io::Stderr,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // First interactive run with no config and no override: scaffold a commented
+    // example so the format is discoverable (issue 22). Inert until edited.
+    scaffold_config_on_first_run();
+
     let colorize = cli.color.resolve(
         no_color_active(std::env::var("NO_COLOR").ok().as_deref()),
         true,
@@ -481,6 +485,28 @@ fn open_history(cli: &Cli) -> Option<HistoryFile> {
             eprintln!("warning: {message}; continuing without history");
             None
         }
+    }
+}
+
+/// On the first interactive run, scaffold a commented example `config.toml` at
+/// the default path so the format is discoverable (issue 22). Gated to the
+/// default location: with `MGCONSOLE_CONFIG_PATH` set, the override path is the
+/// user's to manage and we never write into it. A write failure is a warning, not
+/// fatal — the console still starts on defaults. Called only from the interactive
+/// path, so a piped/`run`/`-c`/NDJSON invocation never writes the file.
+fn scaffold_config_on_first_run() {
+    // An explicit override path is the user's to manage — don't scaffold into it.
+    if std::env::var_os(config::CONFIG_ENV).is_some() {
+        return;
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let Some(path) = config::resolve_config_path(None, home.as_deref()) else {
+        return;
+    };
+    match config::scaffold_example_config(&path) {
+        Ok(true) => eprintln!("wrote example config to {}", path.display()),
+        Ok(false) => {}
+        Err(message) => eprintln!("warning: {message}; continuing without an example config"),
     }
 }
 

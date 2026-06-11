@@ -26,6 +26,54 @@ const DEFAULT_SUBDIR: &str = ".mgconsole";
 /// The config file kept inside the state directory.
 pub const CONFIG_FILENAME: &str = "config.toml";
 
+/// A fully-commented example `config.toml`, written to the default path on the
+/// first interactive run (issue 22) so the format is discoverable without reading
+/// source or docs. Every line is a comment, so a freshly-scaffolded file parses to
+/// [`Config::default()`] exactly as a missing file does — it has zero effect on
+/// behaviour until the user uncomments and edits it. This `const` is the single
+/// source of truth for "what a config looks like"; a unit test parses it to prove
+/// it stays inert.
+pub const EXAMPLE_CONFIG: &str = "\
+# mgconsole configuration — ~/.mgconsole/config.toml
+#
+# This file was scaffolded on first run. Every line is commented out, so it has
+# no effect until you uncomment and edit it. Override the location with the
+# MGCONSOLE_CONFIG_PATH environment variable.
+
+# --- Global settings -------------------------------------------------------
+# Defaults applied to every connection (a --flag or a profile still wins).
+# [settings]
+# display = \"auto\"        # auto | tabular | vertical
+# theme   = \"default\"     # default | mono — Workbench/Cypher colour theme
+
+# --- Connection profiles ---------------------------------------------------
+# A named bundle of where/how to connect, selected with `--profile <name>` or
+# `:connect <name>`. Every field is optional; an omitted one falls back to the
+# CLI flag or the built-in default.
+# [profiles.local]
+# host     = \"127.0.0.1\"
+# port     = 7687
+# use_ssl  = false
+# username = \"\"           # empty username → anonymous (no password sought)
+# password = \"\"           # plaintext; prefer the MGCONSOLE_PASSWORD env var
+# readonly = false        # pin read-only mode for this profile
+
+# Per-profile setting overrides (overlay the global [settings] above).
+# [profiles.local.settings]
+# display = \"vertical\"
+
+# --- Workbench theme overrides ---------------------------------------------
+# Per-category colour overrides on top of the active theme (TUI only).
+# [theme]
+# keyword = \"magenta\"
+# string  = \"green\"
+
+# --- Workbench keybindings -------------------------------------------------
+# Rebind a Workbench gesture to a different chord (TUI only).
+# [keys]
+# toggle-schema = \"ctrl+g\"
+";
+
 /// Resolve the config-file path: the `MGCONSOLE_CONFIG_PATH` override wins and is
 /// taken literally (the shell expands a typed `~`); otherwise the default is
 /// `~/.mgconsole/config.toml` expanded against `home`. With neither an override
@@ -141,6 +189,29 @@ pub fn load(path: &Path) -> Result<Config, String> {
         Err(e) => return Err(format!("could not read config {}: {e}", path.display())),
     };
     parse(&text).map_err(|e| format!("invalid config {}: {e}", path.display()))
+}
+
+/// Write the commented [`EXAMPLE_CONFIG`] template to `path` if no file is there
+/// yet, creating the state directory if needed (issue 22). Mirrors
+/// [`crate::history::prepare_history_dir`]'s ensure-dir-then-write shape.
+///
+/// Returns `Ok(true)` when the example was written, `Ok(false)` when a file
+/// already existed (no clobber), and a clear `Err` when the directory or file
+/// could not be created — the caller treats that as a warning, not a fatal error,
+/// so the console still starts on defaults. The trigger conditions (interactive
+/// first run, default path, env override unset) are decided by the caller; this is
+/// the pure write-if-missing step.
+pub fn scaffold_example_config(path: &Path) -> Result<bool, String> {
+    if path.exists() {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(path, EXAMPLE_CONFIG)
+        .map_err(|e| format!("could not write example config {}: {e}", path.display()))?;
+    Ok(true)
 }
 
 /// Parse a `[settings]` table into a [`FileSettings`] overlay, validating each
@@ -331,6 +402,53 @@ mod tests {
     fn an_unknown_theme_name_in_settings_is_rejected() {
         let err = parse("[settings]\ntheme = \"neon\"\n").expect_err("unknown theme");
         assert!(err.contains("neon"), "{err}");
+    }
+
+    #[test]
+    fn the_example_config_template_is_inert() {
+        // Acceptance: a freshly-scaffolded file parses to Config::default() — the
+        // template has zero effect until the user uncomments and edits it.
+        assert_eq!(parse(EXAMPLE_CONFIG).expect("template parses"), Config::default());
+    }
+
+    #[test]
+    fn scaffolding_writes_once_and_never_clobbers() {
+        let dir = std::env::temp_dir().join(format!("mgconsole-scaffold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(CONFIG_FILENAME);
+
+        // First run: the example is written into a freshly created state dir.
+        assert_eq!(scaffold_example_config(&path), Ok(true), "writes when missing");
+        assert!(path.is_file(), "the file now exists");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            EXAMPLE_CONFIG
+        );
+
+        // A user edits the file, then runs again: the second run must not clobber.
+        std::fs::write(&path, "# edited by hand\n").expect("user edit");
+        assert_eq!(scaffold_example_config(&path), Ok(false), "no second write");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read back"),
+            "# edited by hand\n",
+            "the hand edit is preserved"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_scaffold_write_failure_is_a_clear_error() {
+        // Put a regular file where a directory component must go, so creating the
+        // state directory underneath it fails (mirrors the history-dir test).
+        let blocker = std::env::temp_dir().join(format!("mg_cfg_blocker_{}", std::process::id()));
+        std::fs::write(&blocker, b"x").expect("write blocker file");
+        let path = blocker.join("sub").join(CONFIG_FILENAME);
+
+        let err = scaffold_example_config(&path).expect_err("writing under a file must fail");
+        assert!(err.contains("could not create"), "message: {err}");
+
+        std::fs::remove_file(&blocker).ok();
     }
 
     #[test]
