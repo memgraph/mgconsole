@@ -6,6 +6,10 @@ Date: 2026-06-10
 
 Accepted
 
+Amended by ADR 0019: the startup selection logic below still decides which
+Frontend you *start* in, but the choice is no longer permanent — the two
+interactive Frontends can be switched at runtime over a preserved Session.
+
 ## Context
 
 The first interactive Frontend (ADR 0002) is a line-based REPL on rustyline: it

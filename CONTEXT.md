@@ -11,7 +11,11 @@ the definition here wins until deliberately changed.
   to text. It knows nothing about how a human drives it.
 - **Frontend** — a way of driving the Core. The interactive REPL is the first
   Frontend; a full-screen terminal UI and a non-interactive script runner are
-  other Frontends over the same Core.
+  other Frontends over the same Core. Which one a run *starts* in is selected at
+  startup (ADR 0010), but the two interactive Frontends are not locked in for the
+  run: `:repl` and `:workbench` switch between them at runtime over the same live
+  Session, so the connection, open Transaction, params, and Settings all survive
+  the switch (ADR 0019). A Frontend is a skin over a Session, not an owner of it.
 - **Meta-command** — an instruction the user types to drive the console itself
   rather than the database, prefixed with `:` and recognised before the line is
   treated as Cypher (e.g. `:help`, `:param`, `:quit`). The console parses every
@@ -59,7 +63,12 @@ the definition here wins until deliberately changed.
 ## Session and results
 
 - **Session** — a single live conversation with one Memgraph server over which
-  queries run and results return, in order.
+  queries run and results return, in order. It owns the whole conversational
+  state — the connection, active profile, Read-only mode, open Transaction,
+  active Database, `:param` store, Schema, and Settings — independently of which
+  Frontend is driving it, which is what lets a `:repl`/`:workbench` switch hand
+  the one Session from one Frontend to the other intact (ADR 0019). _Contrast_:
+  Buffer and editor text, which are Frontend-local and do not survive the switch.
 - **Endpoint** — the host and port identifying the one Memgraph server a Session
   connects to: the _where_ of a connection, distinct from the _how_
   (authentication and transport security).
