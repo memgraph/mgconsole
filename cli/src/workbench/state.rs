@@ -20,9 +20,59 @@ use crate::settings::Settings;
 use crate::syntax::{word_start, Completer};
 
 use crate::OutputFormat;
+use super::effect::TxOp;
 use super::event::{Key, KeyCode};
 use super::plan::Plan;
 use super::schema::Schema;
+
+/// The disposition of a Transaction episode (issue 04 / CONTEXT.md): a tagged
+/// Result-history entry starts [`Open`] and is resolved retroactively to
+/// [`Committed`] or [`RolledBack`] when the episode ends.
+///
+/// [`Open`]: Self::Open
+/// [`Committed`]: Self::Committed
+/// [`RolledBack`]: Self::RolledBack
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    Open,
+    Committed,
+    RolledBack,
+}
+
+impl Disposition {
+    /// The bracketed label shown in the results-pane header (issue 04).
+    pub fn label(self) -> &'static str {
+        match self {
+            Disposition::Open => "open",
+            Disposition::Committed => "committed",
+            Disposition::RolledBack => "rolled back",
+        }
+    }
+}
+
+/// A Result-history entry's place in a Transaction episode (issue 04): the episode
+/// number, the statement's ordinal within it, and the episode's disposition. A
+/// query run inside `:begin`…`:commit`/`:rollback` carries one of these so it is
+/// reviewable as *what it was* — the Nth statement of an episode that was
+/// ultimately committed or undone. Autocommit entries carry `None` instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransactionTag {
+    pub episode: u32,
+    pub ordinal: u32,
+    pub disposition: Disposition,
+}
+
+impl TransactionTag {
+    /// The header label, e.g. `tx 2 · stmt 3 [open]` (issue 04).
+    pub fn label(self) -> String {
+        format!(
+            "tx {} · stmt {} [{}]",
+            self.episode,
+            self.ordinal,
+            self.disposition.label()
+        )
+    }
+}
 
 /// The open completion popup (slice 11): the candidates for the word under the
 /// cursor, the highlighted one, and the length (in characters) of the prefix a
@@ -296,6 +346,24 @@ pub struct WorkbenchState {
     /// The explicit-transaction state (issue 05), mirrored from the Session by the
     /// `TransactionApplied` event. Drives the `[tx]`/`[tx failed]` status marker.
     pub tx: TransactionState,
+    /// The current Transaction episode number (issue 04): incremented when a
+    /// `:begin` opens a transaction, so each episode is distinct. Session-scoped —
+    /// shared across all Buffers, since they share the one open Transaction.
+    pub tx_episode: u32,
+    /// The per-statement ordinal within the current episode (issue 04): reset on
+    /// `:begin`, incremented on each submission made while the Transaction is Open.
+    /// Continues across Buffers, so statements from several Buffers share one
+    /// ordinal sequence within the episode.
+    pub tx_ordinal: u32,
+    /// The explicit-transaction op awaiting its `TransactionApplied` result (issue
+    /// 04): set when `:begin`/`:commit`/`:rollback` is issued, consumed when the
+    /// outcome arrives so the episode is opened or resolved by the *actual* result
+    /// (a poisoned `:commit` that the server rejects does not resolve the episode).
+    pub pending_tx_op: Option<TxOp>,
+    /// The Transaction tag stamped on the in-flight query's Result-history entry
+    /// (issue 04), carried from submission to the entry created on start/failure —
+    /// the transaction analogue of [`running_statement`](Self::running_statement).
+    pub running_tag: Option<TransactionTag>,
     /// The active profile name (issue 03/07): seeded from config, updated by
     /// `:connect`. Shown in the status bar.
     pub profile: Option<String>,
@@ -376,6 +444,10 @@ impl WorkbenchState {
             read_only: config.read_only,
             mouse: true,
             tx: TransactionState::Auto,
+            tx_episode: 0,
+            tx_ordinal: 0,
+            pending_tx_op: None,
+            running_tag: None,
             profile: config.profile.clone(),
             endpoint: config.endpoint.clone(),
             database: None,
@@ -671,6 +743,10 @@ pub struct CurrentResult {
     /// entry carrying its originating [`statement`](Self::statement) and error,
     /// not a status message that scrolls away. `None` for a successful query.
     pub error: Option<String>,
+    /// The Transaction episode this entry belongs to (issue 04), or `None` for an
+    /// autocommit entry. Stamped at submission while a transaction is Open; its
+    /// disposition is resolved retroactively when the episode ends.
+    pub tx_tag: Option<TransactionTag>,
     /// Set when this entry has been trimmed from the bounded Result history (issue
     /// 06): its Records were dropped to bound memory, but its lightweight
     /// correlation — statement, summary, error — is kept so it stays navigable as

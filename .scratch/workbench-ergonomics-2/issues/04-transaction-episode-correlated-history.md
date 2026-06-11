@@ -1,6 +1,6 @@
 # 04 — Transaction episode model + correlated history tags
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

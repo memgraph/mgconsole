@@ -21,8 +21,8 @@ use super::event::{Event, Key, KeyCode, MouseEvent, MouseKind};
 use super::plan::{is_plan_query, Plan};
 use super::schema::{Schema, SchemaSource};
 use super::state::{
-    CommandCompletion, CommandLine, Completion, CurrentResult, DrawerKind, ExportPrompt, Focus,
-    RunState, SearchState, WatchState, WorkbenchState,
+    CommandCompletion, CommandLine, Completion, CurrentResult, Disposition, DrawerKind,
+    ExportPrompt, Focus, RunState, SearchState, TransactionTag, WatchState, WorkbenchState,
 };
 
 /// Apply one event to the state, returning the effects to perform.
@@ -70,15 +70,19 @@ pub fn update(state: &mut WorkbenchState, event: Event) -> Vec<Effect> {
             Vec::new()
         }
         Event::TransactionApplied { state: tx, message } => {
-            state.tx = tx;
-            if let Some(message) = message {
-                state.status.message = message;
-            }
+            on_transaction_applied(state, tx, message);
             Vec::new()
         }
         Event::Connected(result) => {
             match result {
                 Ok(connected) => {
+                    // The swap aborts any open transaction (ADR 0011): resolve its
+                    // episode's entries as rolled back before the marker resets, so
+                    // they are not left dangling `[open]` (issue 04).
+                    if state.tx != mgconsole_core::TransactionState::Auto {
+                        resolve_episode(state, Disposition::RolledBack);
+                    }
+                    state.pending_tx_op = None;
                     state.endpoint = connected.endpoint;
                     state.profile = connected.profile;
                     state.read_only = connected.read_only;
@@ -200,9 +204,12 @@ fn on_started(state: &mut WorkbenchState, id: u64, header: Vec<String>) {
     }
     state.running_started = true;
     let statement = state.running_statement.clone().unwrap_or_default();
+    let tag = state.running_tag;
     let cap = state.config.history_cap;
     if let Some((history, view)) = state.running_target() {
-        history.push(CurrentResult::new(statement, header));
+        let mut result = CurrentResult::new(statement, header);
+        result.tx_tag = tag;
+        history.push(result);
         *view = history.len() - 1;
         trim_history(history, cap);
     }
@@ -294,6 +301,7 @@ fn on_failed(state: &mut WorkbenchState, id: u64, error: &Error) -> Vec<Effect> 
     let error_text = error.to_string();
     let statement = state.running_statement.clone().unwrap_or_default();
     let started = state.running_started;
+    let tag = state.running_tag;
     let cap = state.config.history_cap;
     if let Some((history, view)) = state.running_target() {
         if started {
@@ -303,6 +311,7 @@ fn on_failed(state: &mut WorkbenchState, id: u64, error: &Error) -> Vec<Effect> 
         } else {
             let mut result = CurrentResult::new(statement, Vec::new());
             result.error = Some(error_text.clone());
+            result.tx_tag = tag;
             history.push(result);
             *view = history.len() - 1;
             trim_history(history, cap);
@@ -344,6 +353,7 @@ fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
     state.run = RunState::Running { id };
     state.spinner = 0;
     state.running_started = false;
+    state.running_tag = next_transaction_tag(state);
     if state.running_buffer.is_none() {
         state.running_buffer = Some(state.active);
     }
@@ -356,6 +366,84 @@ fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
         query,
         params: state.params.clone(),
     }]
+}
+
+/// The Transaction tag for the statement about to run (issue 04): when a
+/// transaction is open, advance the episode's per-statement ordinal and tag the
+/// statement with the episode number, that ordinal, and `Open` (resolved later).
+/// An autocommit statement carries no tag. Ordinals continue across Buffers because
+/// the counters are session-scoped on the state.
+fn next_transaction_tag(state: &mut WorkbenchState) -> Option<TransactionTag> {
+    if state.tx == mgconsole_core::TransactionState::Auto {
+        return None;
+    }
+    state.tx_ordinal += 1;
+    Some(TransactionTag {
+        episode: state.tx_episode,
+        ordinal: state.tx_ordinal,
+        disposition: Disposition::Open,
+    })
+}
+
+/// Apply a `TransactionApplied` event (issue 04/05): mirror the Session's
+/// transaction state, show any message, and — driven by the op that was awaiting
+/// its result — open a new episode (`:begin` → Open) or resolve the current one's
+/// entries across every Buffer (`:commit` → committed, `:rollback` → rolled back).
+/// A query-driven poison sync (no pending op) only updates the marker; the poisoned
+/// episode stays Open until a later `:rollback` resolves it.
+fn on_transaction_applied(
+    state: &mut WorkbenchState,
+    tx: mgconsole_core::TransactionState,
+    message: Option<String>,
+) {
+    use mgconsole_core::TransactionState;
+    state.tx = tx;
+    if let Some(message) = message {
+        state.status.message = message;
+    }
+    let Some(op) = state.pending_tx_op.take() else {
+        return;
+    };
+    match op {
+        // A new episode opened: bump the number and restart the ordinal sequence.
+        TxOp::Begin if tx == TransactionState::Open => {
+            state.tx_episode += 1;
+            state.tx_ordinal = 0;
+        }
+        // The episode ended: flip every still-open entry of it, in all Buffers.
+        TxOp::Commit if tx == TransactionState::Auto => {
+            resolve_episode(state, Disposition::Committed);
+        }
+        TxOp::Rollback if tx == TransactionState::Auto => {
+            resolve_episode(state, Disposition::RolledBack);
+        }
+        // The op did not take effect (e.g. a poisoned `:commit` the server rejected,
+        // which leaves the transaction Failed): leave the episode unresolved.
+        _ => {}
+    }
+}
+
+/// Resolve the current Transaction episode's entries to `disposition` (issue 04),
+/// retroactively across every Buffer's Result history: each entry tagged with the
+/// current episode and still `Open` flips. A rolled-back entry keeps its rows (it
+/// stays navigable as a record of what ran) but now reads as undone.
+fn resolve_episode(state: &mut WorkbenchState, disposition: Disposition) {
+    fn resolve_in(history: &mut [CurrentResult], episode: u32, disposition: Disposition) {
+        for result in history {
+            if let Some(tag) = result.tx_tag.as_mut() {
+                if tag.episode == episode && tag.disposition == Disposition::Open {
+                    tag.disposition = disposition;
+                }
+            }
+        }
+    }
+    let episode = state.tx_episode;
+    // The active Buffer's live history, then every parked Buffer's (issue 03/18):
+    // all entries of the ending episode resolve together, wherever they were run.
+    resolve_in(&mut state.history, episode, disposition);
+    for buffer in &mut state.buffers {
+        resolve_in(&mut buffer.history, episode, disposition);
+    }
 }
 
 /// Ctrl-C. While a query runs, cancel it: keep the rows already streamed on
@@ -1725,11 +1813,15 @@ fn handle_meta(state: &mut WorkbenchState, meta: MetaCommand) -> Vec<Effect> {
                 state.status.message = "session busy — cancel first".to_string();
                 return Vec::new();
             }
-            vec![Effect::Transaction(match meta {
+            let op = match meta {
                 MetaCommand::Begin => TxOp::Begin,
                 MetaCommand::Commit => TxOp::Commit,
                 _ => TxOp::Rollback,
-            })]
+            };
+            // Remember the op so its TransactionApplied result can open or resolve
+            // the episode by the actual outcome (issue 04).
+            state.pending_tx_op = Some(op);
+            vec![Effect::Transaction(op)]
         }
         // `:connect` swaps the whole Session (issue 07). Refuse mid-query; warn
         // that an open transaction is aborted by the swap (ADR 0011).
@@ -3279,6 +3371,139 @@ mod tests {
         let effects = run_command(&mut s, ":begin");
         assert!(effects.is_empty(), "no tx op while a query is in flight");
         assert!(s.status.message.contains("busy"), "status: {}", s.status.message);
+    }
+
+    // --- transaction episodes + correlated history (issue 04) -----------------
+
+    /// Open a transaction: run `:begin` and deliver the Session's `Open` result, as
+    /// the edge would, so the reducer opens a new episode.
+    fn begin_tx(state: &mut WorkbenchState) {
+        run_command(state, ":begin");
+        update(
+            state,
+            Event::TransactionApplied {
+                state: mgconsole_core::TransactionState::Open,
+                message: Some("transaction open".to_string()),
+            },
+        );
+    }
+
+    /// End a transaction with `op` (`:commit`/`:rollback`) and deliver the resulting
+    /// `Auto` state, so the reducer resolves the episode.
+    fn end_tx(state: &mut WorkbenchState, op: &str) {
+        run_command(state, op);
+        update(
+            state,
+            Event::TransactionApplied {
+                state: mgconsole_core::TransactionState::Auto,
+                message: Some("transaction ended".to_string()),
+            },
+        );
+    }
+
+    /// Run a query to completion with `rows` rows (tagging it via the open episode).
+    /// Clears the editor first, since submit keeps the buffer for re-run.
+    fn run_rows(state: &mut WorkbenchState, query: &str, rows: usize) {
+        state.editor.clear();
+        let id = submit_query(state, query);
+        complete(state, id, rows);
+    }
+
+    #[test]
+    fn statements_in_an_episode_are_numbered_and_autocommit_is_untagged() {
+        let mut s = wb();
+        // An autocommit query carries no tag.
+        run_rows(&mut s, "RETURN 0;", 1);
+        assert!(s.history[0].tx_tag.is_none(), "autocommit is untagged");
+
+        begin_tx(&mut s);
+        assert_eq!(s.tx_episode, 1, "the first :begin opens episode 1");
+        run_rows(&mut s, "RETURN 1;", 1);
+        run_rows(&mut s, "RETURN 2;", 1);
+        let tag1 = s.history[1].tx_tag.expect("tagged");
+        let tag2 = s.history[2].tx_tag.expect("tagged");
+        assert_eq!((tag1.episode, tag1.ordinal), (1, 1));
+        assert_eq!((tag2.episode, tag2.ordinal), (1, 2), "ordinals increment per statement");
+        assert_eq!(tag1.disposition, Disposition::Open);
+    }
+
+    #[test]
+    fn ordinals_continue_across_buffers_within_one_episode() {
+        let mut s = wb();
+        begin_tx(&mut s);
+        run_rows(&mut s, "RETURN 1;", 1); // buffer 1, stmt 1
+        new_buffer(&mut s);
+        run_rows(&mut s, "RETURN 2;", 1); // buffer 2, stmt 2 (same episode)
+        let here = s.history[0].tx_tag.expect("buffer 2 tagged");
+        assert_eq!((here.episode, here.ordinal), (1, 2), "the ordinal continued across Buffers");
+        // Buffer 1 kept stmt 1.
+        prev_buffer(&mut s);
+        let there = s.history[0].tx_tag.expect("buffer 1 tagged");
+        assert_eq!((there.episode, there.ordinal), (1, 1));
+    }
+
+    #[test]
+    fn commit_resolves_every_episode_entry_retroactively_across_buffers() {
+        let mut s = wb();
+        begin_tx(&mut s);
+        run_rows(&mut s, "RETURN 1;", 1); // buffer 1
+        new_buffer(&mut s);
+        run_rows(&mut s, "RETURN 2;", 1); // buffer 2
+        end_tx(&mut s, ":commit");
+        // Buffer 2's entry is resolved...
+        assert_eq!(s.history[0].tx_tag.unwrap().disposition, Disposition::Committed);
+        // ...and so is buffer 1's, retroactively.
+        prev_buffer(&mut s);
+        assert_eq!(s.history[0].tx_tag.unwrap().disposition, Disposition::Committed);
+    }
+
+    #[test]
+    fn a_rolled_back_entry_keeps_its_rows_and_is_marked_undone() {
+        let mut s = wb();
+        begin_tx(&mut s);
+        run_rows(&mut s, "MATCH (n) RETURN n;", 3);
+        end_tx(&mut s, ":rollback");
+        let entry = &s.history[0];
+        assert_eq!(entry.tx_tag.unwrap().disposition, Disposition::RolledBack);
+        assert_eq!(entry.rows.len(), 3, "the rows are kept, just marked undone");
+    }
+
+    #[test]
+    fn a_poisoned_transaction_resolves_to_rolled_back() {
+        let mut s = wb();
+        begin_tx(&mut s);
+        // A statement fails inside the transaction, poisoning it.
+        let id = submit_query(&mut s, "BAD;");
+        let boom = Error::Query(QueryError {
+            code: "Memgraph.ClientError.MemgraphError.SyntaxError".to_string(),
+            message: "bad cypher".to_string(),
+        });
+        update(&mut s, Event::QueryFailed { id, error: boom });
+        // The edge syncs the poisoned marker (no pending op → no resolution).
+        update(
+            &mut s,
+            Event::TransactionApplied {
+                state: mgconsole_core::TransactionState::Failed,
+                message: None,
+            },
+        );
+        assert_eq!(s.tx, mgconsole_core::TransactionState::Failed);
+        assert_eq!(s.history[0].tx_tag.unwrap().disposition, Disposition::Open, "still open until rolled back");
+        // Only :rollback recovers a poisoned transaction — it resolves the episode.
+        end_tx(&mut s, ":rollback");
+        assert_eq!(s.history[0].tx_tag.unwrap().disposition, Disposition::RolledBack);
+    }
+
+    #[test]
+    fn a_second_episode_increments_the_number_and_resets_ordinals() {
+        let mut s = wb();
+        begin_tx(&mut s);
+        run_rows(&mut s, "RETURN 1;", 1);
+        end_tx(&mut s, ":commit");
+        begin_tx(&mut s);
+        run_rows(&mut s, "RETURN 2;", 1);
+        let tag = s.history[1].tx_tag.expect("tagged");
+        assert_eq!((tag.episode, tag.ordinal), (2, 1), "a new episode, ordinal restarts");
     }
 
     // --- :connect (issue 07) ------------------------------------------------

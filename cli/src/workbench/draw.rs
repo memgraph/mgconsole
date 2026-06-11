@@ -115,33 +115,7 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     // Results pane: a native table with a pinned header and a lazily-rendered
     // visible window, or just a summary line for a result with no columns.
     let results_focused = matches!(state.focus, Focus::Results);
-    let title = match state.shown() {
-        Some(result) if result.error.is_some() => {
-            format!("Results [{}/{}] (error)", state.view + 1, state.history.len())
-        }
-        Some(result) if result.plan.is_some() => {
-            format!("Results [{}/{}] (plan)", state.view + 1, state.history.len())
-        }
-        Some(result) => format!(
-            "Results [{}/{}] ({} row{}{}{})",
-            state.view + 1,
-            state.history.len(),
-            result.rows.len(),
-            if result.rows.len() == 1 { "" } else { "s" },
-            if result.truncated { ", truncated" } else { "" },
-            if result.partial { ", partial" } else { "" }
-        ),
-        None => "Results".to_string(),
-    };
-    // Append the originating query snippet for the shown entry (issue 05): the
-    // pane header shows which query produced the displayed outcome, at every
-    // history position; cell-expand shows it in full.
-    let title = match state.shown() {
-        Some(result) if !result.statement.trim().is_empty() => {
-            format!("{title} · {}", query_snippet(&result.statement, 40))
-        }
-        _ => title,
-    };
+    let title = results_title(state);
     let results_block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style(&state.palette, results_focused))
@@ -198,6 +172,41 @@ fn draw_command_line(frame: &mut Frame, area: Rect, command_line: &CommandLine, 
     frame.render_widget(Paragraph::new(command_line.content.as_str()).style(style), area);
     let cursor_x = area.x + (command_line.content.chars().count() as u16).min(area.width.saturating_sub(1));
     frame.set_cursor_position((cursor_x, area.y));
+}
+
+/// Compose the results-pane block title: the history position and row/plan/error
+/// summary, then the originating query snippet (issue 05), then the Transaction
+/// episode tag (issue 04) when the shown entry has one. Autocommit entries carry no
+/// transaction tag.
+fn results_title(state: &WorkbenchState) -> String {
+    let title = match state.shown() {
+        Some(result) if result.error.is_some() => {
+            format!("Results [{}/{}] (error)", state.view + 1, state.history.len())
+        }
+        Some(result) if result.plan.is_some() => {
+            format!("Results [{}/{}] (plan)", state.view + 1, state.history.len())
+        }
+        Some(result) => format!(
+            "Results [{}/{}] ({} row{}{}{})",
+            state.view + 1,
+            state.history.len(),
+            result.rows.len(),
+            if result.rows.len() == 1 { "" } else { "s" },
+            if result.truncated { ", truncated" } else { "" },
+            if result.partial { ", partial" } else { "" }
+        ),
+        None => "Results".to_string(),
+    };
+    let title = match state.shown() {
+        Some(result) if !result.statement.trim().is_empty() => {
+            format!("{title} · {}", query_snippet(&result.statement, 40))
+        }
+        _ => title,
+    };
+    match state.shown().and_then(|result| result.tx_tag) {
+        Some(tag) => format!("{title} · {}", tag.label()),
+        None => title,
+    }
 }
 
 /// Draw the windowed Buffer tab bar (issue 07): each tab auto-titled from its
@@ -975,6 +984,27 @@ mod tests {
         state.command_line = Some(cl);
         let rendered = render(&mut state);
         assert!(rendered.contains(":begin"), "the command line content is drawn: {rendered}");
+    }
+
+    #[test]
+    fn the_results_header_shows_the_transaction_episode_tag() {
+        use crate::workbench::state::{Disposition, TransactionTag};
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        let mut result = CurrentResult::new("RETURN 1".to_string(), vec!["n".to_string()]);
+        result.tx_tag = Some(TransactionTag { episode: 2, ordinal: 3, disposition: Disposition::RolledBack });
+        state.history.push(result);
+        let rendered = render(&mut state);
+        assert!(rendered.contains("tx 2"), "episode shown: {rendered}");
+        assert!(rendered.contains("stmt 3"), "ordinal shown");
+        assert!(rendered.contains("rolled back"), "disposition shown");
+    }
+
+    #[test]
+    fn an_autocommit_result_header_carries_no_transaction_tag() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        state.history.push(CurrentResult::new("RETURN 1".to_string(), vec!["n".to_string()]));
+        let rendered = render(&mut state);
+        assert!(!rendered.contains("tx 1") && !rendered.contains("stmt"), "no tag: {rendered}");
     }
 
     #[test]
