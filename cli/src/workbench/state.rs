@@ -293,15 +293,6 @@ pub struct WorkbenchState {
     pub params: BTreeMap<String, Value>,
     /// Monotonic id stamped on each query, so its lifecycle events match.
     pub next_id: u64,
-    /// The statement of the in-flight query, carried from submit to the result
-    /// entry created when the query starts (for plan detection, slice 14).
-    pub running_statement: Option<String>,
-    /// Whether the in-flight query has had its `QueryStarted` (so a Result-history
-    /// entry already exists for it). Lets a failure that arrives *before* any
-    /// Record still produce exactly one entry: set the error on the started entry
-    /// if there is one, else push a fresh failure entry (issue 05). Reset per
-    /// statement in `start_query`, set in `on_started`.
-    pub running_started: bool,
     /// The Buffer that owns the in-flight query (issue 03), as an index into
     /// [`buffers`](Self::buffers). A live query streams its Records, completion,
     /// and failure into this Buffer even while another is active, so switching
@@ -360,10 +351,6 @@ pub struct WorkbenchState {
     /// outcome arrives so the episode is opened or resolved by the *actual* result
     /// (a poisoned `:commit` that the server rejects does not resolve the episode).
     pub pending_tx_op: Option<TxOp>,
-    /// The Transaction tag stamped on the in-flight query's Result-history entry
-    /// (issue 04), carried from submission to the entry created on start/failure —
-    /// the transaction analogue of [`running_statement`](Self::running_statement).
-    pub running_tag: Option<TransactionTag>,
     /// The active profile name (issue 03/07): seeded from config, updated by
     /// `:connect`. Shown in the status bar.
     pub profile: Option<String>,
@@ -431,8 +418,6 @@ impl WorkbenchState {
             results_area: Rect::default(),
             params: BTreeMap::new(),
             next_id: 0,
-            running_statement: None,
-            running_started: false,
             running_buffer: None,
             history_entries: Vec::new(),
             command_history: Vec::new(),
@@ -447,7 +432,6 @@ impl WorkbenchState {
             tx_episode: 0,
             tx_ordinal: 0,
             pending_tx_op: None,
-            running_tag: None,
             profile: config.profile.clone(),
             endpoint: config.endpoint.clone(),
             database: None,
@@ -702,13 +686,42 @@ fn window_tabs(widths: &[u16], active: usize, budget: u16) -> (usize, usize) {
     (start, end)
 }
 
-/// Whether a query is in flight. While `Running`, a second submit is refused
-/// (one-live-result, ADR 0005). The `id` matches the running query's lifecycle
-/// events; events for any other id are stragglers and ignored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Whether a query is in flight, and — while `Running` — everything about the one
+/// in-flight statement (one-live-result, ADR 0005). The `id` matches the running
+/// query's lifecycle events; events for any other id are stragglers and ignored.
+///
+/// The per-statement facts live *inside* the `Running` variant so they cannot
+/// dangle while `Idle`: `statement` (carried to the result entry, for plan
+/// detection), `started` (whether `QueryStarted` has arrived — distinguishes a
+/// failure before any record from one after), and `tag` (the Transaction episode
+/// stamp, issue 04). The Buffer that owns the query (`running_buffer`) and the rest
+/// of the batch (`pending`) live on [`WorkbenchState`] instead — they outlive one
+/// statement and belong to the submission, not the in-flight statement.
+///
+/// Not `Copy` (it owns a `String`): id-only callers go through [`running_id`].
+///
+/// [`running_id`]: Self::running_id
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunState {
     Idle,
-    Running { id: u64 },
+    Running {
+        id: u64,
+        statement: String,
+        started: bool,
+        tag: Option<TransactionTag>,
+    },
+}
+
+impl RunState {
+    /// The id of the query in flight, or `None` when idle — for the many callers
+    /// that only need "is a query running, and which id" without the payload.
+    pub fn running_id(&self) -> Option<u64> {
+        if let RunState::Running { id, .. } = self {
+            Some(*id)
+        } else {
+            None
+        }
+    }
 }
 
 /// The result on screen: a column header, the rows streamed so far, and the

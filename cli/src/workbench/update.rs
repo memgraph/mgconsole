@@ -190,7 +190,7 @@ fn on_tick(state: &mut WorkbenchState) -> Vec<Effect> {
 /// Whether `id` is the query currently in flight (so its events are live, not
 /// stragglers from a superseded query — the one-live-result guard, ADR 0005).
 fn is_current(state: &WorkbenchState, id: u64) -> bool {
-    matches!(state.run, RunState::Running { id: running } if running == id)
+    state.run.running_id() == Some(id)
 }
 
 /// A query began: push a fresh result onto its *origin* Buffer's history stack
@@ -202,9 +202,14 @@ fn on_started(state: &mut WorkbenchState, id: u64, header: Vec<String>) {
     if !is_current(state, id) {
         return;
     }
-    state.running_started = true;
-    let statement = state.running_statement.clone().unwrap_or_default();
-    let tag = state.running_tag;
+    // Mark the in-flight statement started, and take its statement text + tag for
+    // the entry. `run` is `Running` here (is_current passed).
+    let (statement, tag) = if let RunState::Running { started, statement, tag, .. } = &mut state.run {
+        *started = true;
+        (statement.clone(), *tag)
+    } else {
+        return;
+    };
     let cap = state.config.history_cap;
     if let Some((history, view)) = state.running_target() {
         let mut result = CurrentResult::new(statement, header);
@@ -299,9 +304,13 @@ fn on_failed(state: &mut WorkbenchState, id: u64, error: &Error) -> Vec<Effect> 
         return Vec::new();
     }
     let error_text = error.to_string();
-    let statement = state.running_statement.clone().unwrap_or_default();
-    let started = state.running_started;
-    let tag = state.running_tag;
+    // `run` is `Running` here (is_current passed): take the statement, started flag,
+    // and tag for the entry.
+    let (statement, started, tag) = if let RunState::Running { statement, started, tag, .. } = &state.run {
+        (statement.clone(), *started, *tag)
+    } else {
+        return Vec::new();
+    };
     let cap = state.config.history_cap;
     if let Some((history, view)) = state.running_target() {
         if started {
@@ -350,15 +359,20 @@ fn advance(state: &mut WorkbenchState) -> Vec<Effect> {
 fn start_query(state: &mut WorkbenchState, query: String) -> Vec<Effect> {
     let id = state.next_id;
     state.next_id += 1;
-    state.run = RunState::Running { id };
     state.spinner = 0;
-    state.running_started = false;
-    state.running_tag = next_transaction_tag(state);
+    // Compute the Transaction tag first — it advances `tx_ordinal` (issue 04) — then
+    // construct the in-flight statement as one value.
+    let tag = next_transaction_tag(state);
+    state.run = RunState::Running {
+        id,
+        statement: query.clone(),
+        started: false,
+        tag,
+    };
     if state.running_buffer.is_none() {
         state.running_buffer = Some(state.active);
     }
     state.status.message = "running…".to_string();
-    state.running_statement = Some(query.clone());
     // Remember the last query so `:watch` with no query can reuse it (issue 11).
     state.last_query = Some(query.clone());
     vec![Effect::RunQuery {
@@ -451,7 +465,7 @@ fn resolve_episode(state: &mut WorkbenchState, disposition: Disposition) {
 /// and emit [`Effect::Cancel`] (the edge aborts the task and RESETs the Session,
 /// ADR 0005). When idle, abandon the typed buffer (the REPL's interrupt).
 fn interrupt(state: &mut WorkbenchState) -> Vec<Effect> {
-    if let RunState::Running { id } = state.run {
+    if let Some(id) = state.run.running_id() {
         // Mark the origin Buffer's partial result, even if another Buffer is shown.
         let mut rows = 0;
         if let Some((history, _)) = state.running_target() {
@@ -1584,7 +1598,7 @@ fn handle_workbench_command(state: &mut WorkbenchState, command: WorkbenchComman
             // streams into this buffer's history, which is about to be dropped.
             let mut effects = Vec::new();
             if state.running_buffer == Some(state.active) {
-                if let RunState::Running { id } = state.run {
+                if let Some(id) = state.run.running_id() {
                     effects.push(Effect::Cancel { id });
                 }
                 state.run = RunState::Idle;
@@ -1639,14 +1653,19 @@ fn start_query_to_file(
 ) -> Vec<Effect> {
     let id = state.next_id;
     state.next_id += 1;
-    state.run = RunState::Running { id };
     state.spinner = 0;
-    state.running_started = false;
+    // A `:o` redirect produces no Result-history entry (its result streams to a
+    // file), so it carries no Transaction tag and does not advance the ordinal.
+    state.run = RunState::Running {
+        id,
+        statement: query.clone(),
+        started: false,
+        tag: None,
+    };
     if state.running_buffer.is_none() {
         state.running_buffer = Some(state.active);
     }
     state.status.message = format!("running… → {} ({format})", path.display());
-    state.running_statement = Some(query.clone());
     state.last_query = Some(query.clone());
     vec![Effect::RunQueryToFile {
         id,
@@ -2216,8 +2235,30 @@ mod tests {
         );
         // The submission is also recorded in history (slice 17).
         assert!(matches!(effects.get(1), Some(Effect::AppendHistory(_))));
-        assert!(matches!(s.run, RunState::Running { id: 0 }));
+        assert!(matches!(s.run, RunState::Running { id: 0, .. }));
         assert_eq!(s.editor.buffer(), "RETURN 1;", "the buffer is kept for re-run");
+    }
+
+    #[test]
+    fn the_in_flight_statement_lives_inside_the_running_variant() {
+        // The per-statement facts are carried in `Running`, not dangling fields, so
+        // they cannot outlive the query; `running_id()` is the id-only accessor.
+        let mut s = wb();
+        type_str(&mut s, "RETURN 1");
+        update(&mut s, Event::Key(Key::plain(KeyCode::Enter)));
+        match &s.run {
+            RunState::Running { id, statement, started, tag } => {
+                assert_eq!(*id, 0);
+                assert_eq!(statement, "RETURN 1");
+                assert!(!*started, "QueryStarted has not arrived yet");
+                assert!(tag.is_none(), "autocommit carries no tag");
+            }
+            RunState::Idle => panic!("a query is in flight"),
+        }
+        assert_eq!(s.run.running_id(), Some(0));
+        // Draining the query falls Idle — the per-statement facts go with the variant.
+        complete(&mut s, 0, 1);
+        assert_eq!(s.run.running_id(), None);
     }
 
     #[test]
@@ -3565,10 +3606,7 @@ mod tests {
         assert!(s.source_halt, "stop-on-error armed");
 
         // A failure halts the batch: the queued statement is dropped.
-        let id = match s.run {
-            RunState::Running { id } => id,
-            RunState::Idle => panic!("should be running"),
-        };
+        let id = s.run.running_id().expect("should be running");
         let boom = Error::Query(QueryError {
             code: "X.SyntaxError".to_string(),
             message: "bad".to_string(),
@@ -3612,7 +3650,7 @@ mod tests {
 
         // The redirected query completes via the Redirected event and the session
         // is idle again.
-        let id = match s.run { RunState::Running { id } => id, RunState::Idle => panic!("running") };
+        let id = s.run.running_id().expect("running");
         let effects = update(
             &mut s,
             Event::Redirected { id, result: Ok((PathBuf::from("/tmp/wb_o.csv"), 1)) },
@@ -3637,7 +3675,7 @@ mod tests {
         let effects = run_command(&mut s, ":watch 1s");
         assert!(matches!(effects.first(), Some(Effect::RunQuery { query, .. }) if query == "RETURN 1"));
         assert!(s.watch.is_some());
-        let id = match s.run { RunState::Running { id } => id, RunState::Idle => panic!("running") };
+        let id = s.run.running_id().expect("running");
         complete(&mut s, id, 1);
         let after_first = s.history.len();
 
@@ -3649,7 +3687,7 @@ mod tests {
             fired = update(&mut s, Event::Tick);
         }
         assert!(matches!(fired.first(), Some(Effect::RunQuery { .. })), "a re-run fired");
-        let id = match s.run { RunState::Running { id } => id, RunState::Idle => panic!("running") };
+        let id = s.run.running_id().expect("running");
         complete(&mut s, id, 1);
         assert_eq!(s.history.len(), after_first, "the snapshot was replaced, not appended");
     }
@@ -3661,7 +3699,7 @@ mod tests {
         complete(&mut s, id, 1);
         s.editor.clear();
         run_command(&mut s, ":watch 1s");
-        let id = match s.run { RunState::Running { id } => id, RunState::Idle => panic!("running") };
+        let id = s.run.running_id().expect("running");
         complete(&mut s, id, 1);
         assert!(s.watch.is_some());
         // Any key stops it.
