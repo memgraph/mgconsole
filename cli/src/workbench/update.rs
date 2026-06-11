@@ -4510,6 +4510,47 @@ mod tests {
     }
 
     #[test]
+    fn parking_and_restoring_a_view_preserves_buffers_history_and_active() {
+        // Workbench → REPL → Workbench is non-destructive (issue 04): detaching the
+        // view and reattaching it onto a fresh Workbench restores every Buffer (editor
+        // text + per-Buffer Result history) and the active index.
+        let mut s = wb();
+        type_str(&mut s, "first buffer");
+        s.new_buffer(); // active = 1, a fresh Buffer
+        run_to_completion(&mut s, "RETURN 1;"); // give Buffer 1 some Result history
+        s.editor.clear(); // a submitted query stays in the editor — start clean
+        type_str(&mut s, "second buffer"); // and a distinct editor draft
+        assert_eq!(s.active, 1);
+        assert_eq!(s.history.len(), 1, "Buffer 1 has a result");
+
+        // Detach (the down-switch) and reattach onto a fresh Workbench (the re-entry).
+        let view = s.detach_view();
+        let mut restored = wb();
+        restored.install_view(view);
+
+        assert_eq!(restored.buffers.len(), 2, "both Buffers restored");
+        assert_eq!(restored.active, 1, "the active index is preserved");
+        assert_eq!(restored.editor.buffer(), "second buffer", "active editor restored");
+        assert_eq!(restored.history.len(), 1, "the active Buffer's Result history restored");
+        // The inactive Buffer's editor text travels too.
+        restored.switch_to(0);
+        assert_eq!(restored.editor.buffer(), "first buffer", "inactive Buffer restored");
+    }
+
+    #[test]
+    fn an_open_transaction_is_reflected_on_workbench_entry() {
+        // The tx marker is rebound from the live Session on entry (issue 04): an
+        // explicit transaction opened before a Frontend switch shows on re-entry,
+        // rather than being silently displayed as autocommit.
+        let config = WorkbenchConfig {
+            tx: mgconsole_core::TransactionState::Open,
+            ..WorkbenchConfig::default()
+        };
+        let s = WorkbenchState::new(config, true);
+        assert_eq!(s.tx, mgconsole_core::TransactionState::Open);
+    }
+
+    #[test]
     fn workbench_command_in_the_workbench_is_a_gentle_no_op() {
         // `:workbench` is the up-switch target; typed in the Workbench it is an
         // idempotent no-op (ADR 0019), the mirror of `:repl` in the REPL — no switch

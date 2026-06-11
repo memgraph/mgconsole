@@ -188,6 +188,21 @@ pub struct Buffer {
     pub recall_saved: Option<String>,
 }
 
+/// The suspended Workbench *view* parked by the dispatch loop across a Frontend
+/// switch (issue 04, ADR 0019): every Buffer (editor text + per-Buffer Result
+/// history) and the active index, so a Workbench → REPL → Workbench round-trip
+/// restores the tabs and results you left rather than rebuilding one fresh Buffer.
+///
+/// It is deliberately *only* the Workbench-local view — no session state. read-only,
+/// the active Database, params, Settings, and the transaction live in the Session
+/// bundle the loop owns and are read live on every Workbench entry, so reattaching a
+/// parked view onto the current Session needs no per-field reconciliation: the
+/// Buffers are pure editor + results, and everything session-scoped is already fresh.
+pub struct WorkbenchView {
+    pub buffers: Vec<Buffer>,
+    pub active: usize,
+}
+
 /// The maximum width (in characters) of an auto-derived tab title (issue 07),
 /// before the `…` truncation marker; the tab cell is this plus side padding.
 pub const MAX_TAB_TITLE: usize = 12;
@@ -469,7 +484,9 @@ impl WorkbenchState {
             settings: config.settings.clone(),
             read_only: config.read_only,
             mouse: true,
-            tx: TransactionState::Auto,
+            // Seeded from the live Session (issue 04) so an explicit transaction
+            // opened before a Frontend switch shows its `[tx]` marker on re-entry.
+            tx: config.tx,
             tx_episode: 0,
             tx_ordinal: 0,
             pending_tx_op: None,
@@ -726,6 +743,29 @@ impl WorkbenchState {
         self.checkout(target);
     }
 
+    /// Detach the whole Workbench view to be parked across a Frontend switch (issue
+    /// 04): park the active Buffer's live state into its slot, then move out the
+    /// Buffer set and active index. The whole-`Vec` analogue of [`checkout`](Self::checkout).
+    pub fn detach_view(&mut self) -> WorkbenchView {
+        self.buffers[self.active] = self.take_active();
+        WorkbenchView {
+            buffers: std::mem::take(&mut self.buffers),
+            active: self.active,
+        }
+    }
+
+    /// Reattach a parked view on Workbench re-entry (issue 04): adopt its Buffer set
+    /// and active index, then install the active Buffer's state into the live
+    /// top-level fields. Session-scoped state is *not* here — it is read live from
+    /// the bundle on entry — so this is the whole rebind. `active` is clamped
+    /// defensively so an out-of-range index can never panic.
+    pub fn install_view(&mut self, view: WorkbenchView) {
+        self.buffers = view.buffers;
+        self.active = view.active.min(self.buffers.len().saturating_sub(1));
+        let incoming = std::mem::take(&mut self.buffers[self.active]);
+        self.install_active(incoming);
+    }
+
     /// Move the live top-level Buffer state out into an owned [`Buffer`].
     fn take_active(&mut self) -> Buffer {
         Buffer {
@@ -943,6 +983,11 @@ pub struct WorkbenchConfig {
     pub profile: Option<String>,
     /// Whether the Session started read-only (issue 04), seeding the marker state.
     pub read_only: bool,
+    /// The Session's transaction state on entry (issue 04): seeds the `[tx]` marker
+    /// so an explicit transaction opened before a Frontend switch is reflected on
+    /// re-entry, not silently shown as autocommit. Read live from the Session by the
+    /// dispatch loop (ADR 0019). `Auto` on a fresh launch.
+    pub tx: TransactionState,
     /// The Endpoint the Session started on (issue 07), shown in the status bar.
     pub endpoint: String,
     /// The config + current connect options, so `:connect` can resolve a profile
@@ -990,6 +1035,7 @@ impl Default for WorkbenchConfig {
             initial_editor: String::new(),
             profile: None,
             read_only: false,
+            tx: TransactionState::Auto,
             endpoint: String::new(),
             connect: ConnectContext::default(),
             queries: NamedQueries::in_memory(),

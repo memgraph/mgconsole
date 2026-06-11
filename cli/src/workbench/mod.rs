@@ -21,7 +21,7 @@ pub mod update;
 
 pub use effect::Effect;
 pub use event::{Connected, Event, Key, KeyCode};
-pub use state::{WorkbenchConfig, WorkbenchState};
+pub use state::{WorkbenchConfig, WorkbenchState, WorkbenchView};
 pub use update::update;
 
 use std::collections::BTreeMap;
@@ -65,6 +65,10 @@ pub struct WorkbenchExit {
     /// The active Buffer's editor text at exit (issue 03), carried down to seed the
     /// REPL's input line on a `:repl` switch so a half-drafted query is not lost.
     pub carry: String,
+    /// The suspended Workbench view to park across the switch (issue 04): `Some` on a
+    /// `SwitchTo` so a later re-entry restores every Buffer and the active index;
+    /// `None` on `Quit` (nothing to restore).
+    pub view: Option<WorkbenchView>,
 }
 
 /// Run the workbench until it quits or hands off to the other Frontend (ADR 0019),
@@ -80,11 +84,18 @@ pub async fn run(
     session: Arc<Mutex<Session>>,
     config: WorkbenchConfig,
     color: bool,
+    view: Option<WorkbenchView>,
     history: Option<HistoryFile>,
 ) -> io::Result<WorkbenchExit> {
     let _guard = TerminalGuard::enter()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let mut state = WorkbenchState::new(config, color);
+    // A parked view from a prior Workbench stint (issue 04) restores every Buffer and
+    // the active index over the now-live Session; a fresh launch (None) keeps the one
+    // Buffer `new` built, seeded by `initial_editor` (issue 03).
+    if let Some(view) = view {
+        state.install_view(view);
+    }
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
 
@@ -333,11 +344,17 @@ pub async fn run(
     // Hand the bundle slice the Workbench owned back to the dispatch loop so the
     // next Frontend inherits the params and Settings unchanged (ADR 0019), plus the
     // active Buffer's editor text to carry down onto the REPL's input line (issue 03).
+    // On a switch (not a Quit) also park the whole view so a later re-entry restores
+    // the tabs and Result history (issue 04). Read the carry *before* detaching — the
+    // detach moves the active editor out.
+    let carry = state.editor.buffer();
+    let view = matches!(outcome, Outcome::SwitchTo(_)).then(|| state.detach_view());
     Ok(WorkbenchExit {
         outcome,
         params: std::mem::take(&mut state.params),
         settings: state.settings.clone(),
-        carry: state.editor.buffer(),
+        carry,
+        view,
     })
 }
 

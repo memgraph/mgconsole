@@ -273,6 +273,12 @@ fn run_interactive(
     // Workbench's active Buffer draft going down, the REPL's input line coming up.
     // Empty on first entry; the destination Frontend seeds its editor from it.
     let mut carry = String::new();
+    // The suspended Workbench view parked across a switch (issue 04): every Buffer
+    // (editor + Result history) and the active index, so a Workbench → REPL →
+    // Workbench round-trip restores the tabs rather than rebuilding one fresh Buffer.
+    // `None` until the Workbench has run and switched away.
+    #[cfg(feature = "tui")]
+    let mut parked_view: Option<workbench::WorkbenchView> = None;
 
     // The Workbench palette/keys are resolved once (issue 14): they do not change
     // across switches, and resolving per re-entry would reprint the same warnings.
@@ -297,20 +303,34 @@ fn run_interactive(
                 {
                     let read_only = runtime.block_on(session.lock()).is_read_only();
                     let endpoint = runtime.block_on(session.lock()).endpoint().to_string();
+                    // The transaction marker is rebound from the live Session on entry
+                    // (issue 04) so an explicit transaction opened before the switch is
+                    // reflected, not shown as autocommit.
+                    let tx = runtime.block_on(session.lock()).transaction_state();
+                    // A parked view (issue 04) restores every Buffer over the now-live
+                    // Session; its active Buffer already holds the editor text, so the
+                    // (empty) up-carry must not seed/clobber it. Only a *fresh* entry
+                    // (no parked view) seeds the one Buffer from the carry (issue 03).
+                    let view = parked_view.take();
+                    let initial_editor = if view.is_some() {
+                        carry.clear();
+                        String::new()
+                    } else {
+                        std::mem::take(&mut carry)
+                    };
                     let wb_config = workbench::WorkbenchConfig {
                         verbose: cli.verbose_execution_info,
                         settings: settings.clone(),
                         params: params.clone(),
                         profile: profile.clone(),
                         read_only,
+                        tx,
                         endpoint,
                         queries: queries.clone(),
                         palette,
                         keys: keys.clone(),
                         theme_overrides: config.theme.clone(),
-                        // Seed the one fresh Buffer with the editor text carried up
-                        // from the REPL (issue 03); empty on a fresh launch.
-                        initial_editor: std::mem::take(&mut carry),
+                        initial_editor,
                         connect: workbench::state::ConnectContext {
                             config: config.clone(),
                             options: options.clone(),
@@ -321,13 +341,16 @@ fn run_interactive(
                         std::sync::Arc::clone(&session),
                         wb_config,
                         colorize,
+                        view,
                         history.clone(),
                     ))?;
                     // Reclaim the carried bundle slice for the next Frontend, plus the
-                    // active Buffer's editor text to carry down (issue 03).
+                    // active Buffer's editor text to carry down (issue 03) and the
+                    // parked view to restore on a later re-entry (issue 04).
                     settings = exit.settings;
                     params = exit.params;
                     carry = exit.carry;
+                    parked_view = exit.view;
                     exit.outcome
                 }
                 #[cfg(not(feature = "tui"))]

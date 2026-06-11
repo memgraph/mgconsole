@@ -103,3 +103,11 @@ Frontends. A runtime switch makes it the central problem.
 - v1 round-trips are lossy (tabs and Result history discarded on a down-switch).
   This is an accepted v1 limitation, not the end state; view-parking is the
   follow-up.
+  - **Update (2026-06-11):** view-parking shipped (frontend-switch issue 04). The
+    dispatch loop now parks the whole Workbench view — every Buffer (editor text +
+    per-Buffer Result history) and the active index — across a switch and restores
+    it on re-entry, so a Workbench → REPL → Workbench round-trip is non-destructive.
+    The view holds no session state, so reattaching it onto the live Session needs
+    no per-field reconciliation. (The active-Database *marker* is not yet rebound on
+    an up-switch — the Session exposes no current-database getter — a small separate
+    follow-up; the transaction marker is rebound.)
