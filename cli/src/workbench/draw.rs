@@ -75,7 +75,7 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
         (areas[0], areas[1], areas[2], areas[3]);
     state.tabbar_area = if show_tabs { tabbar_area } else { Rect::default() };
     if show_tabs {
-        draw_tabbar(frame, tabbar_area, state.active, state.buffer_count(), state.running_buffer);
+        draw_tabbar(frame, tabbar_area, state);
     }
 
     // Editor pane: a bordered block with the query editor rendered inside it.
@@ -157,32 +157,36 @@ pub fn draw(frame: &mut Frame, state: &mut WorkbenchState) {
     }
 }
 
-/// The fixed on-screen width of one Buffer tab (issue 18). Fixed so the reducer
-/// can map a tab-bar click back to a Buffer index by integer division.
-pub const TAB_WIDTH: u16 = 6;
-
-/// Draw the Buffer tab bar (issue 18): one fixed-width numbered tab per Buffer,
-/// the active one reversed. Fixed widths keep click hit-testing trivial. The
-/// Buffer that owns the in-flight query (issue 03) is marked with a `•` so a
-/// query running in a background Buffer — and its completion — is not missed.
-fn draw_tabbar(frame: &mut Frame, area: Rect, active: usize, count: usize, running: Option<usize>) {
-    let mut spans = Vec::with_capacity(count);
-    for index in 0..count {
-        // A running background Buffer carries a leading dot; the label stays the
-        // fixed `TAB_WIDTH` so the click hit-test by integer division still holds.
-        let inner = if running == Some(index) {
-            format!("•{}", index + 1)
-        } else {
-            format!("{}", index + 1)
-        };
-        let label = format!("{inner:^width$}", width = TAB_WIDTH as usize);
+/// Draw the windowed Buffer tab bar (issue 07): each tab auto-titled from its
+/// content (the originating query of its shown result, else the first non-empty
+/// editor line, else its number), the active one reversed, the Buffer owning the
+/// in-flight query marked `•` (issue 03). When the tabs exceed the width the bar
+/// windows to keep the active tab visible, with `‹`/`›` overflow markers. The laid-
+/// out tabs are cached on the state so a click maps to the right Buffer under
+/// windowing (the reducer reads [`WorkbenchState::tab_hits`]).
+fn draw_tabbar(frame: &mut Frame, area: Rect, state: &mut WorkbenchState) {
+    let bar = state.layout_tabs(area);
+    let mut spans = Vec::new();
+    if bar.left_more {
+        spans.push(Span::raw("‹"));
+    }
+    for tab in &bar.tabs {
+        // The cell is the title padded to its width (one space each side).
+        let pad = (tab.width as usize).saturating_sub(tab.title.chars().count());
+        let left = pad / 2;
+        let right = pad - left;
+        let label = format!("{}{}{}", " ".repeat(left), tab.title, " ".repeat(right));
         let mut style = Style::default();
-        if index == active {
+        if tab.index == state.active {
             style = style.add_modifier(Modifier::REVERSED);
         }
         spans.push(Span::styled(label, style));
     }
+    if bar.right_more {
+        spans.push(Span::raw("›"));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    state.tab_hits = bar.tabs;
 }
 
 /// Draw the completion popup: a small list of candidates anchored below the
@@ -1036,6 +1040,23 @@ mod tests {
         assert!(rendered.contains("error"), "the header marks the failed entry: {rendered:?}");
         assert!(rendered.contains("RETRUN"), "the originating query is shown");
         assert!(rendered.contains("syntax error"), "the error is rendered in the result area");
+    }
+
+    #[test]
+    fn the_tab_bar_auto_titles_and_windows_with_an_overflow_marker() {
+        let mut state = WorkbenchState::new(WorkbenchConfig::default(), true);
+        // Many buffers with distinct titles, so the bar must window in 80 cols.
+        for n in 0..12 {
+            state.new_buffer();
+            // Give each buffer a recognisable editor line for its title.
+            for c in format!("QUERY_{n:02}").chars() {
+                state.editor.edit(crate::workbench::event::Key::char(c));
+            }
+        }
+        let rendered = render(&mut state);
+        // The active (last) buffer's title shows, and an overflow marker appears.
+        assert!(rendered.contains("QUERY_11"), "the active tab's title is shown: {rendered:?}");
+        assert!(rendered.contains('‹'), "an overflow marker shows there are more tabs left");
     }
 
     #[test]

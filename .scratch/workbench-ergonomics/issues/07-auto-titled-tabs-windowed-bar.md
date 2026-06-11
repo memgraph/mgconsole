@@ -1,6 +1,6 @@
 # 07 — Auto-titled tabs + windowed tab bar
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 

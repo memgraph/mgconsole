@@ -84,6 +84,31 @@ pub struct Buffer {
     pub recall_saved: Option<String>,
 }
 
+/// The maximum width (in characters) of an auto-derived tab title (issue 07),
+/// before the `…` truncation marker; the tab cell is this plus side padding.
+pub const MAX_TAB_TITLE: usize = 12;
+
+/// One rendered Buffer tab in the windowed tab bar (issue 07): which Buffer it is,
+/// its absolute screen column and cell width, and its derived title. The draw
+/// renders these and the reducer hit-tests a click against their column ranges, so
+/// titling, windowing, and click-mapping share one layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabHit {
+    pub index: usize,
+    pub col: u16,
+    pub width: u16,
+    pub title: String,
+}
+
+/// The laid-out tab bar for one frame (issue 07): the visible tabs and whether
+/// there are more Buffers off either edge (so the draw shows overflow markers).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TabBar {
+    pub tabs: Vec<TabHit>,
+    pub left_more: bool,
+    pub right_more: bool,
+}
+
 /// The complete workbench state for the current slice.
 // A flat aggregate of mostly-independent UI flags (focus markers, open overlays,
 // colour); grouping the bools to satisfy the lint would obscure that 1:1 mapping.
@@ -146,6 +171,10 @@ pub struct WorkbenchState {
     /// The tab bar's rectangle from the last draw (issue 17/18), cached for mouse
     /// hit-testing; empty when only one Buffer is open (no tab bar drawn).
     pub tabbar_area: Rect,
+    /// The visible tabs and their screen column ranges from the last draw (issue
+    /// 07), cached so a tab-bar click maps to the right Buffer under windowing and
+    /// variable title widths. The draw is the only writer; the reducer reads.
+    pub tab_hits: Vec<TabHit>,
     /// The editor pane's inner rectangle from the last draw (issue 17), cached so
     /// the reducer can hit-test a mouse click without knowing the layout. The draw
     /// is the only writer; the reducer only reads.
@@ -263,6 +292,7 @@ impl WorkbenchState {
             buffers: vec![Buffer::default()],
             active: 0,
             tabbar_area: Rect::default(),
+            tab_hits: Vec::new(),
             viewport_rows: 0,
             editor_area: Rect::default(),
             results_area: Rect::default(),
@@ -321,6 +351,80 @@ impl WorkbenchState {
     /// The number of open Buffers (issue 18); always ≥1.
     pub fn buffer_count(&self) -> usize {
         self.buffers.len()
+    }
+
+    /// The auto-derived title for Buffer `index` (issue 07): a short snippet of its
+    /// content — the originating query of its shown Result-history entry, falling
+    /// back to the first non-empty editor line, then to the Buffer number — with a
+    /// leading `•` when that Buffer owns the in-flight query. Whitespace is
+    /// collapsed and the text truncated to [`MAX_TAB_TITLE`] with a trailing `…`.
+    pub fn buffer_title(&self, index: usize) -> String {
+        // The active Buffer's state is top-level; the others are parked.
+        let (editor, history, view) = if index == self.active {
+            (&self.editor, &self.history, self.view)
+        } else {
+            let buffer = &self.buffers[index];
+            (&buffer.editor, &buffer.history, buffer.view)
+        };
+        let from_history = history
+            .get(view)
+            .map(|result| result.statement.as_str())
+            .filter(|s| !s.trim().is_empty());
+        let from_editor = || {
+            editor
+                .lines()
+                .iter()
+                .map(|line| line.trim())
+                .find(|line| !line.is_empty())
+        };
+        let raw = from_history.or_else(from_editor);
+        let collapsed = raw
+            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|s| !s.is_empty())
+            // A Buffer with neither a result nor typed text falls back to its number.
+            .unwrap_or_else(|| (index + 1).to_string());
+        let title = if collapsed.chars().count() > MAX_TAB_TITLE {
+            let mut s: String = collapsed.chars().take(MAX_TAB_TITLE - 1).collect();
+            s.push('…');
+            s
+        } else {
+            collapsed
+        };
+        let marker = if self.running_buffer == Some(index) { "•" } else { "" };
+        format!("{marker}{title}")
+    }
+
+    /// Lay out the windowed tab bar for `area` (issue 07): derive each Buffer's
+    /// title, size its cell (title + one-space padding each side), and window the
+    /// bar so the active tab stays visible, leaving a column for an overflow marker
+    /// on each side that has more Buffers. Pure — the draw renders the result and
+    /// caches the tabs for click hit-testing, so titling/windowing/click agree.
+    pub fn layout_tabs(&self, area: Rect) -> TabBar {
+        let count = self.buffer_count();
+        let titles: Vec<String> = (0..count).map(|i| self.buffer_title(i)).collect();
+        let widths: Vec<u16> = titles
+            .iter()
+            .map(|t| t.chars().count() as u16 + 2)
+            .collect();
+        let total: u16 = widths.iter().sum();
+        // Reserve a column for a marker on each side when the bar overflows.
+        let overflow = total > area.width;
+        let budget = if overflow { area.width.saturating_sub(2) } else { area.width };
+        let (start, end) = window_tabs(&widths, self.active, budget);
+        let left_more = start > 0;
+        let right_more = end < count;
+        let mut tabs = Vec::with_capacity(end - start);
+        let mut x = area.x + u16::from(left_more);
+        for index in start..end {
+            tabs.push(TabHit {
+                index,
+                col: x,
+                width: widths[index],
+                title: titles[index].clone(),
+            });
+            x += widths[index];
+        }
+        TabBar { tabs, left_more, right_more }
     }
 
     /// Park the active Buffer's live state into `buffers[active]` and check out
@@ -418,6 +522,36 @@ impl WorkbenchState {
         self.recall_index = buffer.recall_index;
         self.recall_saved = buffer.recall_saved;
     }
+}
+
+/// Choose the window of tab indices `[start, end)` to show (issue 07): always
+/// includes `active`, and grows outward (forward first, then back) while the cells
+/// fit `budget`. Returns the whole range when everything fits.
+fn window_tabs(widths: &[u16], active: usize, budget: u16) -> (usize, usize) {
+    let count = widths.len();
+    if count == 0 {
+        return (0, 0);
+    }
+    let active = active.min(count - 1);
+    let (mut start, mut end) = (active, active + 1);
+    let mut used = widths[active].min(budget);
+    loop {
+        let mut grew = false;
+        if end < count && used + widths[end] <= budget {
+            used += widths[end];
+            end += 1;
+            grew = true;
+        }
+        if start > 0 && used + widths[start - 1] <= budget {
+            used += widths[start - 1];
+            start -= 1;
+            grew = true;
+        }
+        if !grew {
+            break;
+        }
+    }
+    (start, end)
 }
 
 /// Whether a query is in flight. While `Running`, a second submit is refused

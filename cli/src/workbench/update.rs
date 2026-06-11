@@ -491,11 +491,19 @@ fn update_mouse(state: &mut WorkbenchState, mouse: MouseEvent) -> Vec<Effect> {
 /// last tab is ignored. Allowed while a query is live (issue 03): the live query
 /// streams into its origin Buffer regardless of which is shown.
 fn click_tab(state: &mut WorkbenchState, col: u16) {
-    let offset = col.saturating_sub(state.tabbar_area.x);
-    let index = (offset / super::draw::TAB_WIDTH) as usize;
-    if index < state.buffer_count() && index != state.active {
-        state.switch_to(index);
-        state.status.message = format!("buffer {}/{}", state.active + 1, state.buffer_count());
+    // Map the click to a Buffer through the windowed layout the draw cached (issue
+    // 07): each visible tab owns the column range `[col, col + width)`. A click on
+    // an overflow marker or empty space hits no tab and is ignored.
+    let hit = state
+        .tab_hits
+        .iter()
+        .find(|tab| col >= tab.col && col < tab.col + tab.width)
+        .map(|tab| tab.index);
+    if let Some(index) = hit {
+        if index != state.active {
+            state.switch_to(index);
+            state.status.message = format!("buffer {}/{}", state.active + 1, state.buffer_count());
+        }
     }
 }
 
@@ -3473,7 +3481,7 @@ mod tests {
         new_buffer(&mut s); // two buffers; active is buffer 2
         let id = submit_query(&mut s, "RETURN 1;");
         assert_eq!(s.running_buffer, Some(1));
-        s.tabbar_area = Rect::new(0, 0, super::super::draw::TAB_WIDTH * 2, 1);
+        lay_out_tabs(&mut s);
         click(&mut s, 1, 0); // click buffer 1's tab while buffer 2's query runs
         assert_eq!(s.active, 0, "switched to buffer 1 mid-query");
         // The query's records still route to buffer 2.
@@ -3489,12 +3497,65 @@ mod tests {
         let mut s = wb();
         type_str(&mut s, "ONE");
         new_buffer(&mut s); // buffer 2 active
-        // The draw would set tabbar_area; simulate a 2-tab bar at the top.
-        s.tabbar_area = Rect::new(0, 0, super::super::draw::TAB_WIDTH * 2, 1);
-        // Click the first tab (columns 0..TAB_WIDTH).
+        // The draw would lay out the tab bar; do the same so the click has hits.
+        lay_out_tabs(&mut s);
+        // Click the first tab (its column range starts at the bar's left edge).
         click(&mut s, 1, 0);
         assert_eq!(s.active, 0, "clicked the first tab");
         assert_eq!(s.editor.buffer(), "ONE");
+    }
+
+    // --- Auto-titled tabs + windowed bar (issue 07) ---------------------------
+
+    #[test]
+    fn a_tab_is_auto_titled_from_its_query_then_editor_then_number() {
+        let mut s = wb();
+        // Buffer 1 has a result, so its title comes from the originating query.
+        s.history.push(CurrentResult::new("MATCH (n) RETURN n".into(), vec!["n".into()]));
+        assert!(s.buffer_title(0).contains("MATCH"), "titled from the query: {}", s.buffer_title(0));
+        // A fresh buffer with neither result nor text falls back to its number.
+        new_buffer(&mut s);
+        assert_eq!(s.buffer_title(1), "2", "empty buffer titled by number");
+        // Typing gives it an editor-line title.
+        type_str(&mut s, "CREATE (x)");
+        assert!(s.buffer_title(1).contains("CREATE"), "titled from the editor line");
+    }
+
+    #[test]
+    fn the_running_buffer_tab_is_marked_in_its_title() {
+        let mut s = wb();
+        new_buffer(&mut s);
+        s.running_buffer = Some(0);
+        assert!(s.buffer_title(0).starts_with('•'), "a running buffer is marked: {}", s.buffer_title(0));
+        assert!(!s.buffer_title(1).starts_with('•'), "an idle buffer is not");
+    }
+
+    #[test]
+    fn the_tab_bar_windows_to_keep_the_active_tab_visible() {
+        let mut s = wb();
+        for _ in 0..9 {
+            new_buffer(&mut s); // 10 buffers; active is the last
+        }
+        let bar = s.layout_tabs(Rect::new(0, 0, 20, 1));
+        assert!(bar.tabs.iter().any(|t| t.index == s.active), "the active tab is in the window");
+        assert!(bar.left_more, "tabs off the left edge are marked");
+        assert!(bar.tabs.first().unwrap().index > 0, "the bar scrolled past the first tab");
+    }
+
+    #[test]
+    fn a_tab_click_maps_to_the_right_buffer_under_windowing() {
+        let mut s = wb();
+        for _ in 0..9 {
+            new_buffer(&mut s);
+        }
+        let area = Rect::new(0, 0, 20, 1);
+        s.tabbar_area = area;
+        s.tab_hits = s.layout_tabs(area).tabs;
+        // Click a visible tab that isn't the active one; it selects that Buffer
+        // even though the bar is scrolled (the hit accounts for the offset).
+        let target = s.tab_hits.iter().find(|t| t.index != s.active).cloned().expect("another tab");
+        click(&mut s, target.col + 1, 0);
+        assert_eq!(s.active, target.index, "the click mapped to the windowed tab's buffer");
     }
 
     // --- Mouse support (issue 17) ---------------------------------------------
@@ -3515,6 +3576,14 @@ mod tests {
 
     fn click(state: &mut WorkbenchState, column: u16, row: u16) {
         update(state, Event::Mouse(MouseEvent { kind: MouseKind::Down, column, row }));
+    }
+
+    /// Lay out the tab bar over a wide bar as the draw would (issue 07), so a
+    /// tab-bar click has hit boxes to map against without a terminal.
+    fn lay_out_tabs(state: &mut WorkbenchState) {
+        let area = Rect::new(0, 0, 80, 1);
+        state.tabbar_area = area;
+        state.tab_hits = state.layout_tabs(area).tabs;
     }
 
     fn scroll(state: &mut WorkbenchState, kind: MouseKind, column: u16, row: u16) {
