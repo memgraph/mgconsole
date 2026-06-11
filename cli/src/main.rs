@@ -87,11 +87,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = load_config();
     let (connection, settings) = resolve_profile_connection(&cli, explicit, &config);
 
-    // Resolve auth before touching the network: a username with no password gets
-    // a hidden prompt; an empty username stays anonymous.
-    let password = match resolve_password(&connection.username, &connection.password, || {
-        rpassword::prompt_password("Password: ")
-    }) {
+    // Resolve auth before touching the network (issue 24). Precedence: explicit
+    // --password flag > MGCONSOLE_PASSWORD env > profile password > hidden prompt;
+    // an empty username stays anonymous (env ignored). `connection.password` already
+    // merged flag-or-profile (flag wins when explicit), so split it back out by
+    // whether --password was given so the env var can slot between the two.
+    let env_password = std::env::var(mgconsole::PASSWORD_ENV).ok();
+    let flag_password = explicit.password.then(|| connection.password.clone());
+    let profile_password = (!explicit.password).then(|| connection.password.clone());
+    let password = match resolve_password(
+        &connection.username,
+        flag_password.as_deref(),
+        env_password.as_deref(),
+        profile_password.as_deref(),
+        || rpassword::prompt_password("Password: "),
+    ) {
         Ok(password) => password,
         Err(message) => {
             eprintln!("error: {message}");

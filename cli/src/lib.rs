@@ -485,22 +485,50 @@ fn parse_endpoint(target: &str, current: &Endpoint) -> Result<Endpoint, String> 
     Ok(Endpoint::new(host.to_string(), port))
 }
 
-/// Resolve the password to authenticate with, prompting only when a username is
-/// given without one.
+/// The environment variable that supplies the password non-interactively (issue
+/// 24), alongside the other `MGCONSOLE_*` overrides. It sits between the explicit
+/// `--password` flag and a profile password in [`resolve_password`]'s precedence,
+/// so a script can authenticate without leaking the password to shell history or
+/// `ps` (cf. `PGPASSWORD`).
+pub const PASSWORD_ENV: &str = "MGCONSOLE_PASSWORD";
+
+/// Resolve the password to authenticate with, folding the non-interactive sources
+/// into one precedence chain and prompting only as the last resort.
+///
+/// Precedence (issue 24): explicit `--password` flag > `MGCONSOLE_PASSWORD` env >
+/// profile password > hidden prompt. The first non-empty source wins, so a script
+/// can export `MGCONSOLE_PASSWORD` and connect with no prompt and no CLI leak
+/// (cf. `PGPASSWORD`), while an explicit `--password` still takes precedence. Each
+/// source is passed in separately (rather than pre-merged) precisely so env can sit
+/// *between* the flag and the profile.
 ///
 /// The hidden, no-echo prompt is terminal IO, so it is injected as `prompt`:
-/// `main` passes a real no-echo reader; tests pass a closure. An empty username
-/// means an anonymous (unauthenticated) connection, so the password is
-/// irrelevant and never prompted for. A prompt that yields an empty password
-/// fails with a clear message rather than attempting a doomed empty login.
+/// `main` passes a real no-echo reader; tests pass a closure. The env value is read
+/// once at the call site and passed in, so this stays pure and testable. An empty
+/// username means an anonymous (unauthenticated) connection, so no password is
+/// sought — `MGCONSOLE_PASSWORD` is ignored entirely, no prompt fires. A prompt
+/// that yields an empty password fails with a clear message rather than attempting
+/// a doomed empty login.
 pub fn resolve_password(
     username: &str,
-    password: &str,
+    flag_password: Option<&str>,
+    env_password: Option<&str>,
+    profile_password: Option<&str>,
     prompt: impl FnOnce() -> std::io::Result<String>,
 ) -> Result<String, String> {
-    if username.is_empty() || !password.is_empty() {
+    // Anonymous connection: no password is sought and the env var is ignored.
+    if username.is_empty() {
+        return Ok(String::new());
+    }
+    // flag > env > profile: the first source that carries a non-empty password.
+    let chosen = [flag_password, env_password, profile_password]
+        .into_iter()
+        .flatten()
+        .find(|p| !p.is_empty());
+    if let Some(password) = chosen {
         return Ok(password.to_string());
     }
+    // Nothing supplied a password for a named user: fall back to the prompt.
     let entered = prompt().map_err(|e| format!("could not read password: {e}"))?;
     if entered.is_empty() {
         return Err(format!("a password is required for user '{username}'"));
@@ -909,26 +937,52 @@ mod tests {
     }
 
     #[test]
-    fn anonymous_connection_never_prompts() {
-        let pw = resolve_password("", "", never_prompts).expect("anonymous ok");
+    fn anonymous_connection_never_prompts_and_ignores_the_env() {
+        // An empty username is anonymous: MGCONSOLE_PASSWORD is ignored entirely,
+        // no prompt fires, and the password is empty.
+        let pw = resolve_password("", Some("flagpw"), Some("envpw"), Some("profpw"), never_prompts)
+            .expect("anonymous ok");
         assert_eq!(pw, "");
     }
 
     #[test]
-    fn explicit_password_is_used_without_prompting() {
-        let pw = resolve_password("alice", "secret", never_prompts).expect("explicit ok");
-        assert_eq!(pw, "secret");
+    fn explicit_flag_password_wins_over_env_and_profile() {
+        let pw = resolve_password(
+            "alice",
+            Some("secret"),
+            Some("envpw"),
+            Some("profpw"),
+            never_prompts,
+        )
+        .expect("explicit ok");
+        assert_eq!(pw, "secret", "the --password flag wins");
     }
 
     #[test]
-    fn username_without_password_prompts() {
-        let pw = resolve_password("alice", "", || Ok("typed".to_string())).expect("prompt ok");
+    fn env_password_beats_the_profile_but_loses_to_the_flag() {
+        // No flag: the env var authenticates with no prompt, over the profile.
+        let pw = resolve_password("alice", None, Some("envpw"), Some("profpw"), never_prompts)
+            .expect("env ok");
+        assert_eq!(pw, "envpw");
+    }
+
+    #[test]
+    fn the_profile_password_is_used_when_neither_flag_nor_env_is_set() {
+        let pw = resolve_password("alice", None, None, Some("profpw"), never_prompts)
+            .expect("profile ok");
+        assert_eq!(pw, "profpw");
+    }
+
+    #[test]
+    fn username_with_no_flag_env_or_profile_prompts() {
+        let pw = resolve_password("alice", None, None, None, || Ok("typed".to_string()))
+            .expect("prompt ok");
         assert_eq!(pw, "typed");
     }
 
     #[test]
     fn empty_prompted_password_fails_clearly() {
-        let err = resolve_password("alice", "", || Ok(String::new()))
+        let err = resolve_password("alice", None, None, None, || Ok(String::new()))
             .expect_err("empty password rejected");
         assert!(err.contains("alice"), "message names the user: {err}");
     }
