@@ -60,6 +60,12 @@ DEFINE_int32(port, 7687, "Server port.");
 DEFINE_string(username, "", "Database username.");
 DEFINE_string(password, "", "Database password.");
 DEFINE_bool(use_ssl, false, "Use SSL when connecting to the server.");
+DEFINE_string(connection_type, "direct",
+              "(direct|routing) If routing, uses client-side routing protocol to connect to the main data instance.");
+// Selects the target database (sent in the ROUTE extra and in every RUN/BEGIN extra). When empty, the
+// server's default database is used. Multi-database selection requires Memgraph enterprise; community ignores it.
+DEFINE_string(db, "", "Database to use. When set, queries run against this database (enterprise multi-tenancy); "
+                      "a non-existent database fails with 'Unknown database name'. Empty uses the default database.");
 
 // output
 DEFINE_bool(fit_to_screen, false, "Fit output width to screen width.");
@@ -180,13 +186,19 @@ int main(int argc, char **argv) {
 
 #endif /* _WIN32 */
 
-  utils::bolt::Config bolt_config{
-      .host = FLAGS_host,
-      .port = FLAGS_port,
-      .username = FLAGS_username,
-      .password = FLAGS_password,
-      .use_ssl = FLAGS_use_ssl,
-  };
+  auto const connection_type = utils::ToLowerCase(FLAGS_connection_type);
+  if (connection_type != "direct" && connection_type != "routing") {
+    console::EchoFailure("Unsupported connection type!", "Connection type can be 'direct' or 'routing'.");
+    return 1;
+  }
+
+  utils::bolt::Config bolt_config{.db = FLAGS_db,
+                                  .host = FLAGS_host,
+                                  .username = FLAGS_username,
+                                  .password = FLAGS_password,
+                                  .port = FLAGS_port,
+                                  .use_ssl = FLAGS_use_ssl,
+                                  .routed_connection = connection_type == "routing"};
 
   if (console::is_a_tty(STDIN_FILENO)) {  // INTERACTIVE
     auto const history_file = std::invoke([&]() -> std::string {

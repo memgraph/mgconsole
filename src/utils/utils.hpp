@@ -66,6 +66,11 @@ fs::path GetUserHomeDir();
 std::string ToUpperCase(std::string s);
 
 /**
+ * return string with all lowercased characters (locale independent)
+ */
+auto ToLowerCase(std::string s) -> std::string;
+
+/**
  * removes whitespace characters from the start and from the end of a string.
  *
  * @param str string that is going to be trimmed
@@ -282,8 +287,12 @@ struct BatchResult {
 // The extra part is preserved for the next GetQuery call
 std::optional<Query> GetQuery(Replxx *replxx_instance, bool collect_info = false);
 
-QueryResult ExecuteQuery(mg_session *session, const std::string &query, const mg_map *params = nullptr);
-BatchResult ExecuteBatch(mg_session *session, const Batch &batch);
+// When `db` is non-empty it is sent as the `db` field of the RUN extra metadata, selecting the target database
+// for multi-tenant (enterprise) Memgraph. Community ignores it; enterprise validates it and fails with an
+// "Unknown database name" error if it doesn't exist.
+QueryResult ExecuteQuery(mg_session *session, const std::string &query, const mg_map *params = nullptr,
+                         const std::string &db = "");
+BatchResult ExecuteBatch(mg_session *session, const Batch &batch, const std::string &db = "");
 
 }  // namespace query
 

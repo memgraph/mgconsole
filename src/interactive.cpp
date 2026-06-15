@@ -34,8 +34,8 @@ namespace params = query::params;
 // Evaluates a Cypher expression server-side and returns a copy of the resulting
 // value. Existing parameters are made available to the expression.
 mg_memory::MgValuePtr EvaluateParamExpression(mg_session *session, const std::string &expression,
-                                              const params::ParamStore &store) {
-  auto result = query::ExecuteQuery(session, "RETURN " + expression, store.AsMap().get());
+                                              const params::ParamStore &store, const std::string &db) {
+  auto result = query::ExecuteQuery(session, "RETURN " + expression, store.AsMap().get(), db);
   if (result.records.empty() || mg_list_size(result.records.front().get()) == 0) {
     throw utils::ClientQueryException("expression did not produce a value");
   }
@@ -59,7 +59,8 @@ void ListParams(const params::ParamStore &store) {
 // Handles a `:param`/`:params` command line. Query-level failures (e.g. a bad
 // expression) are reported without aborting the shell; fatal connection
 // failures propagate to the reconnect logic in Run.
-void HandleParamCommand(mg_session *session, params::ParamStore &store, const std::string &line) {
+void HandleParamCommand(mg_session *session, params::ParamStore &store, const std::string &line,
+                        const std::string &db) {
   const auto parsed = params::ParseParamCommand(line);
   if (!parsed.command) {
     console::EchoFailure("Invalid parameter command", parsed.error);
@@ -68,7 +69,7 @@ void HandleParamCommand(mg_session *session, params::ParamStore &store, const st
   switch (parsed.command->kind) {
     case params::ParamCommand::Kind::kSet:
       try {
-        auto value = EvaluateParamExpression(session, parsed.command->expression, store);
+        auto value = EvaluateParamExpression(session, parsed.command->expression, store, db);
         store.Set(parsed.command->name, value.get());
         console::EchoInfo("Set parameter '" + parsed.command->name + "'");
       } catch (const utils::ClientQueryException &e) {
@@ -153,8 +154,8 @@ int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_hi
   };
 
   int num_retries = 3;
-  auto session = MakeBoltSession(bolt_config);
-  if (session.get() == nullptr) {
+  utils::bolt::RoutedSession session(bolt_config);
+  if (!session.Connected()) {
     cleanup_resources();
     return 1;
   }
@@ -179,7 +180,7 @@ int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_hi
 
     try {
       if (query->is_param_command) {
-        HandleParamCommand(session.get(), param_store, query->query);
+        HandleParamCommand(session.Get(), param_store, query->query, bolt_config.db);
         auto history_ret = save_history();
         if (history_ret != 0) {
           cleanup_resources();
@@ -187,7 +188,7 @@ int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_hi
         }
         continue;
       }
-      auto ret = query::ExecuteQuery(session.get(), query->query, param_store.AsMap().get());
+      auto ret = query::ExecuteQuery(session.Get(), query->query, param_store.AsMap().get(), bolt_config.db);
       if (ret.records.size() > 0) {
         Output(ret.header, ret.records, output_opts, csv_opts);
       }
@@ -220,14 +221,12 @@ int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_hi
       console::EchoFailure("Client received connection exception", e.what());
       console::EchoInfo("Trying to reconnect...");
       bool is_connected = false;
-      session.reset(nullptr);
       while (num_retries > 0) {
         --num_retries;
-        session = utils::bolt::MakeBoltSession(bolt_config);
-        if (session.get() == nullptr) {
-          console::EchoFailure("Connection failure", mg_session_error(session.get()));
-          session.reset(nullptr);
-        } else {
+        // In routed mode this re-fetches the routing table (failover); in
+        // direct mode it reconnects to the same instance.
+        session.Reconnect();
+        if (session.Connected()) {
           is_connected = true;
           break;
         }

@@ -15,6 +15,7 @@
 
 #include "batch_import.hpp"
 
+#include <chrono>
 #include <random>
 #include <thread>
 #include <unordered_map>
@@ -156,10 +157,19 @@ struct BatchExecutionContext {
       : batch_size(batch_size),
         max_batches(max_batches),
         max_concurrent_executions(max_concurrent_executions),
-        thread_pool(max_concurrent_executions) {
+        thread_pool(max_concurrent_executions),
+        config(bolt_config) {
     sessions.reserve(max_concurrent_executions);
     for (uint64_t thread_i = 0; thread_i < max_concurrent_executions; ++thread_i) {
-      sessions[thread_i] = MakeBoltSession(bolt_config);
+      // Each worker connects to the resolved main. In routed mode every worker
+      // re-routes independently at creation, so the coordinator may receive up
+      // to `workers_number` (e.g. 32) ROUTE calls at startup. The TTL expiry of
+      // the last route determines when sessions are refreshed (see Run).
+      if (config.routed_connection) {
+        sessions[thread_i] = utils::bolt::MakeRoutedBoltSession(config, &expiry);
+      } else {
+        sessions[thread_i] = MakeBoltSession(config);
+      }
       if (!sessions[thread_i].get()) {
         MG_FAIL("a session uninitialized");
       }
@@ -175,6 +185,10 @@ struct BatchExecutionContext {
   utils::ThreadPool thread_pool{max_concurrent_executions};
   utils::Notifier notifier;
   std::vector<mg_memory::MgSessionPtr> sessions;
+  /// Connection config; kept so workers can be reconnected / re-routed.
+  utils::bolt::Config config;
+  /// When the current routing table's TTL expires (routed mode only).
+  std::chrono::steady_clock::time_point expiry{};
 };
 
 Batches FetchBatches(BatchExecutionContext &execution_context) {
@@ -201,7 +215,7 @@ Batches FetchBatches(BatchExecutionContext &execution_context) {
 void ExecuteSerial(const std::vector<query::Query> &queries, BatchExecutionContext &context) {
   for (const auto &query : queries) {
     try {
-      query::ExecuteQuery(context.sessions[0].get(), query.query);
+      query::ExecuteQuery(context.sessions[0].get(), query.query, nullptr, context.config.db);
     } catch (const utils::ClientQueryException &e) {
       console::EchoFailure("Client received query exception", e.what());
       MG_FAIL("Unable to ExecuteSerial");
@@ -248,7 +262,7 @@ uint64_t ExecuteBatchesParallel(std::vector<query::Batch> &batches, BatchExecuti
         if (batch.backoff > 1) {
           std::this_thread::sleep_for(std::chrono::milliseconds(batch.backoff));
         }
-        auto ret = query::ExecuteBatch(execution_context.sessions[thread_i].get(), batch);
+        auto ret = query::ExecuteBatch(execution_context.sessions[thread_i].get(), batch, bolt_config.db);
         if (ret.is_executed) {
           batch.is_executed = true;
           executed_batches++;
@@ -265,7 +279,11 @@ uint64_t ExecuteBatchesParallel(std::vector<query::Batch> &batches, BatchExecuti
           promise->Fill(false);
         }
         if (mg_session_status(execution_context.sessions[thread_i].get()) == MG_SESSION_BAD) {
-          execution_context.sessions[thread_i] = MakeBoltSession(bolt_config);
+          if (bolt_config.routed_connection) {
+            execution_context.sessions[thread_i] = utils::bolt::MakeRoutedBoltSession(bolt_config, nullptr);
+          } else {
+            execution_context.sessions[thread_i] = MakeBoltSession(bolt_config);
+          }
         }
       });
       f_execs.insert_or_assign(thread_i, std::move(future));
@@ -287,6 +305,18 @@ int Run(const utils::bolt::Config &bolt_config, int batch_size, int workers_numb
   // (workers_number).
   BatchExecutionContext execution_context(batch_size, workers_number, workers_number, bolt_config);
   while (true) {
+    // Round boundary checkpoint (single-threaded): in routed mode, if the
+    // routing table's TTL has expired, re-route once to find the (possibly new)
+    // main and reconnect every worker session to it. This keeps proactive TTL
+    // refresh out of the parallel rounds where it would be race-prone.
+    if (bolt_config.routed_connection && std::chrono::steady_clock::now() >= execution_context.expiry) {
+      for (uint64_t thread_i = 0; thread_i < execution_context.max_concurrent_executions; ++thread_i) {
+        execution_context.sessions[thread_i] = utils::bolt::MakeRoutedBoltSession(bolt_config, &execution_context.expiry);
+        if (!execution_context.sessions[thread_i].get()) {
+          MG_FAIL("failed to re-route a worker session after TTL expiry");
+        }
+      }
+    }
     auto batches = FetchBatches(execution_context);
     if (batches.Empty()) {
       break;

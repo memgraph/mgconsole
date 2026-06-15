@@ -21,8 +21,8 @@ using namespace std::string_literals;
 
 int Run(const utils::bolt::Config &bolt_config, const format::CsvOptions &csv_opts,
         const format::OutputOptions &output_opts) {
-  auto session = MakeBoltSession(bolt_config);
-  if (session.get() == nullptr) {
+  utils::bolt::RoutedSession session(bolt_config);
+  if (!session.Connected()) {
     return 1;
   }
 
@@ -36,7 +36,7 @@ int Run(const utils::bolt::Config &bolt_config, const format::CsvOptions &csv_op
     }
 
     try {
-      auto ret = query::ExecuteQuery(session.get(), query->query);
+      auto ret = query::ExecuteQuery(session.Get(), query->query, nullptr, bolt_config.db);
       if (ret.records.size() > 0) {
         Output(ret.header, ret.records, output_opts, csv_opts);
       }
