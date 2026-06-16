@@ -36,7 +36,11 @@ int Run(const utils::bolt::Config &bolt_config, const format::CsvOptions &csv_op
     }
 
     try {
-      auto ret = query::ExecuteQuery(session.Get(), query->query, nullptr, bolt_config.db);
+      // Resolve the session (may proactively re-route) before observing this query so transaction-control
+      // statements in a dump stream are not interrupted by a re-route mid-transaction.
+      auto *session_ptr = session.Get();
+      session.ObserveQuery(query->query);
+      auto ret = query::ExecuteQuery(session_ptr, query->query, nullptr, bolt_config.db);
       if (ret.records.size() > 0) {
         Output(ret.header, ret.records, output_opts, csv_opts);
       }

@@ -166,9 +166,9 @@ struct BatchExecutionContext {
       // to `workers_number` (e.g. 32) ROUTE calls at startup. The TTL expiry of
       // the last route determines when sessions are refreshed (see Run).
       if (config.routed_connection) {
-        sessions[thread_i] = utils::bolt::MakeRoutedBoltSession(config, &expiry);
+        sessions.push_back(utils::bolt::MakeRoutedBoltSession(config, &expiry));
       } else {
-        sessions[thread_i] = MakeBoltSession(config);
+        sessions.push_back(MakeBoltSession(config));
       }
       if (!sessions[thread_i].get()) {
         MG_FAIL("a session uninitialized");
@@ -311,7 +311,8 @@ int Run(const utils::bolt::Config &bolt_config, int batch_size, int workers_numb
     // refresh out of the parallel rounds where it would be race-prone.
     if (bolt_config.routed_connection && std::chrono::steady_clock::now() >= execution_context.expiry) {
       for (uint64_t thread_i = 0; thread_i < execution_context.max_concurrent_executions; ++thread_i) {
-        execution_context.sessions[thread_i] = utils::bolt::MakeRoutedBoltSession(bolt_config, &execution_context.expiry);
+        execution_context.sessions[thread_i] =
+            utils::bolt::MakeRoutedBoltSession(bolt_config, &execution_context.expiry);
         if (!execution_context.sessions[thread_i].get()) {
           MG_FAIL("failed to re-route a worker session after TTL expiry");
         }

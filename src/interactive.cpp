@@ -188,7 +188,12 @@ int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_hi
         }
         continue;
       }
-      auto ret = query::ExecuteQuery(session.Get(), query->query, param_store.AsMap().get(), bolt_config.db);
+      // Resolve the session (may proactively re-route) before observing this query: the re-route decision must
+      // use the transaction state as it was *before* this query, so a COMMIT/ROLLBACK still runs on the session
+      // that holds the open transaction.
+      auto *session_ptr = session.Get();
+      session.ObserveQuery(query->query);
+      auto ret = query::ExecuteQuery(session_ptr, query->query, param_store.AsMap().get(), bolt_config.db);
       if (ret.records.size() > 0) {
         Output(ret.header, ret.records, output_opts, csv_opts);
       }

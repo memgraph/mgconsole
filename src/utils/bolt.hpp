@@ -51,8 +51,10 @@ class RoutedSession {
   explicit RoutedSession(Config config);
 
   // Returns the underlying session. In routed mode, if the routing table TTL
-  // has expired, transparently re-routes (rebuilds the session) first. May
-  // return nullptr if a (re-)connection attempt failed.
+  // has expired (and no explicit transaction is open), transparently re-routes
+  // first; a failed re-route keeps the existing session. May return nullptr if
+  // a (re-)connection attempt failed and there is no prior session to fall back
+  // on.
   mg_session *Get();
 
   // Forces a rebuild of the session (direct or routed per config). Used by the
@@ -62,13 +64,24 @@ class RoutedSession {
   // True if a session is currently established.
   bool Connected() const;
 
+  // Observes a query about to be executed so the session can track explicit
+  // transaction boundaries (BEGIN/COMMIT/ROLLBACK) and suppress proactive
+  // re-routing while a transaction is open. Safe to call in direct mode (no-op
+  // effect on routing).
+  void ObserveQuery(const std::string &query);
+
  private:
+  // Backoff applied after a failed proactive re-route so we don't retry on
+  // every Get() while the coordinator is briefly unreachable.
+  static constexpr std::chrono::seconds kRerouteRetryBackoffSec{2};
+
   void Rebuild();
 
   Config config_;
   mg_memory::MgSessionPtr session_;
   std::chrono::steady_clock::time_point expiry_{};
   bool routed_;
+  bool in_transaction_{false};
 };
 
 }  // namespace utils::bolt

@@ -139,7 +139,9 @@ mg_memory::MgSessionPtr MakeRoutedBoltSession(const Config &config, std::chrono:
     return mg_memory::MakeCustomUnique<mg_session>(nullptr);
   }
   mg_map_insert(routing.get(), "address", mg_value_make_string(coord_address.c_str()));
-  mg_map_insert(extra.get(), "db", mg_value_make_string(config.db.c_str()));
+  if (!config.db.empty()) {
+    mg_map_insert(extra.get(), "db", mg_value_make_string(config.db.c_str()));
+  }
 
   mg_map *rt_raw = nullptr;
   const int status = mg_session_route(coord.get(), routing.get(), nullptr, extra.get(), &rt_raw);
@@ -152,7 +154,7 @@ mg_memory::MgSessionPtr MakeRoutedBoltSession(const Config &config, std::chrono:
 
   // 3. Parse the routing table: TTL (seconds) and the WRITE (main) instance.
   const mg_value *ttl_val = mg_map_at(rt.get(), "ttl");
-  if (ttl_val != nullptr && expiry_out != nullptr) {
+  if (ttl_val != nullptr && mg_value_get_type(ttl_val) == MG_VALUE_TYPE_INTEGER && expiry_out != nullptr) {
     *expiry_out = std::chrono::steady_clock::now() + std::chrono::seconds(mg_value_integer(ttl_val));
   }
 
@@ -224,10 +226,18 @@ void RoutedSession::Rebuild() {
 }
 
 mg_session *RoutedSession::Get() {
-  if (routed_ && std::chrono::steady_clock::now() >= expiry_) {
-    // Proactive TTL re-route: the previous routing table has expired, fetch a
-    // fresh one (and possibly a new main) before handing back the session.
-    Rebuild();
+  // Proactive TTL re-route: once the previous routing table has expired, fetch a fresh one (and possibly a new
+  // main) before handing back the session. Suppressed while an explicit transaction is open (re-routing would
+  // silently drop it) and made non-destructive: a failed re-route keeps the existing working session rather than
+  // discarding a healthy connection over a transient coordinator hiccup.
+  if (routed_ && !in_transaction_ && std::chrono::steady_clock::now() >= expiry_) {
+    auto refreshed = MakeRoutedBoltSession(config_, &expiry_);
+    if (refreshed.get() != nullptr || session_.get() == nullptr) {
+      session_ = std::move(refreshed);
+    } else {
+      // Keep the still-usable session; back off so we retry periodically instead of on every call.
+      expiry_ = std::chrono::steady_clock::now() + kRerouteRetryBackoffSec;
+    }
   }
   return session_.get();
 }
@@ -235,5 +245,16 @@ mg_session *RoutedSession::Get() {
 void RoutedSession::Reconnect() { Rebuild(); }
 
 bool RoutedSession::Connected() const { return session_.get() != nullptr; }
+
+void RoutedSession::ObserveQuery(const std::string &query) {
+  // Track explicit-transaction state from the transaction-control keyword so proactive re-routing can avoid
+  // tearing down an open transaction. Best-effort: matches the leading keyword of the trimmed query.
+  const auto upper = utils::ToUpperCase(utils::Trim(query));
+  if (upper.rfind("BEGIN", 0) == 0) {
+    in_transaction_ = true;
+  } else if (upper.rfind("COMMIT", 0) == 0 || upper.rfind("ROLLBACK", 0) == 0) {
+    in_transaction_ = false;
+  }
+}
 
 }  // namespace utils::bolt
