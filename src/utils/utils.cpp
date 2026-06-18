@@ -16,13 +16,14 @@
 #include <string.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
 #include <ios>
 #include <iostream>
-#include <iomanip>
 #include <ostream>
 #include <string>
 #include <string_view>
@@ -80,6 +81,11 @@ fs::path GetUserHomeDir() {
 
 std::string ToUpperCase(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](char c) { return toupper(c); });
+  return s;
+}
+
+auto ToLowerCase(std::string s) -> std::string {
+  std::transform(s.begin(), s.end(), s.begin(), [](char c) { return tolower(c); });
   return s;
 }
 
@@ -314,7 +320,8 @@ void PrintValue(std::ostream &os, const mg_date_time *date_time) {
 }
 
 void PrintValue(std::ostream &os, const mg_date_time_zone_id *date_time_zone_id) {
-  PrintDateTimeComponents(os, mg_date_time_zone_id_seconds(date_time_zone_id), mg_date_time_zone_id_nanoseconds(date_time_zone_id));
+  PrintDateTimeComponents(os, mg_date_time_zone_id_seconds(date_time_zone_id),
+                          mg_date_time_zone_id_nanoseconds(date_time_zone_id));
   os << "[";
   PrintStringUnescaped(os, mg_date_time_zone_id_timezone_name(date_time_zone_id));
   os << "]";
@@ -947,8 +954,17 @@ void PrintQueryInfo(const Query &query) {
   std::cout << "line: " << query.line_number << " index: " << query.index << " query: " << query.query << std::endl;
 }
 
-QueryResult ExecuteQuery(mg_session *session, const std::string &query, const mg_map *params) {
-  int status = mg_session_run(session, query.c_str(), params, nullptr, nullptr, nullptr);
+QueryResult ExecuteQuery(mg_session *session, const std::string &query, const mg_map *params, const std::string &db) {
+  // Select the target database via the RUN extra metadata when a db is configured (multi-tenant select).
+  mg_memory::MgMapPtr extra = mg_memory::MakeCustomUnique<mg_map>(nullptr);
+  if (!db.empty()) {
+    extra = mg_memory::MakeCustomUnique<mg_map>(mg_map_make_empty(1));
+    if (!extra) {
+      throw utils::ClientFatalException("out of memory, failed to allocate the RUN extra map");
+    }
+    mg_map_insert(extra.get(), "db", mg_value_make_string(db.c_str()));
+  }
+  int status = mg_session_run(session, query.c_str(), params, extra.get(), nullptr, nullptr);
   auto start = std::chrono::system_clock::now();
   if (status != 0) {
     if (mg_session_status(session) == MG_SESSION_BAD) {
@@ -1043,13 +1059,24 @@ void PrintBatchesInfo(const std::vector<Batch> &batches) {
   }
 }
 
-BatchResult ExecuteBatch(mg_session *session, const Batch &batch) {
+BatchResult ExecuteBatch(mg_session *session, const Batch &batch, const std::string &db) {
   if (session == nullptr) {
     std::cout << "Session uninitialized" << std::endl;
     return BatchResult{.is_executed = false};
   }
   mg_result *result;
-  auto begin_status = mg_session_begin_transaction(session, nullptr);
+  // Select the target database for the whole transaction via the BEGIN extra metadata. Once inside the explicit
+  // transaction the per-query RUN extra is ignored by the server, so the inner ExecuteQuery calls omit the db.
+  mg_memory::MgMapPtr begin_extra = mg_memory::MakeCustomUnique<mg_map>(nullptr);
+  if (!db.empty()) {
+    begin_extra = mg_memory::MakeCustomUnique<mg_map>(mg_map_make_empty(1));
+    if (!begin_extra) {
+      std::cout << "Unable to start transaction: out of memory" << std::endl;
+      return BatchResult{.is_executed = false};
+    }
+    mg_map_insert(begin_extra.get(), "db", mg_value_make_string(db.c_str()));
+  }
+  auto begin_status = mg_session_begin_transaction(session, begin_extra.get());
   if (begin_status != 0) {
     auto error = mg_session_error(session);
     std::cout << "Unable to start transaction: " << error << std::endl;

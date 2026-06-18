@@ -1,5 +1,8 @@
+*.idx
+
 # build directory
 build/
+bin/
 
 # vim temporary files
 *.swp
