@@ -165,7 +165,6 @@ mg_memory::MgSessionPtr MakeRoutedBoltSession(const Config &config, std::chrono:
   }
   const mg_list *servers = mg_value_list(servers_val);
   std::optional<std::string> write_address;
-  bool has_router = false;
   for (uint32_t i = 0; i < mg_list_size(servers); ++i) {
     const mg_value *server_val = mg_list_at(servers, i);
     const mg_map *server = mg_value_map(server_val);
@@ -217,6 +216,7 @@ RoutedSession::RoutedSession(Config config)
 }
 
 void RoutedSession::Rebuild() {
+  in_transaction_ = false;
   if (routed_) {
     session_ = MakeRoutedBoltSession(config_, &expiry_);
   } else {
