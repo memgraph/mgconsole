@@ -115,26 +115,31 @@ int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_hi
     console::SetStdinEcho(true);
   }
 
-  fs::path history_dir = history;
-  if (history == (constants::kDefaultHistoryBaseDir + "/" + constants::kDefaultHistoryMemgraphDir)) {
-    // Fetch home dir for user.
-    history_dir = utils::GetUserHomeDir() / constants::kDefaultHistoryMemgraphDir;
-  }
-  if (!utils::EnsureDir(history_dir)) {
-    console::EchoFailure("History directory doesn't exist", history_dir.string());
-    // Should program exit here or just continue with warning message?
-    cleanup_resources();
-    return 1;
-  }
-  fs::path history_file = history_dir / constants::kHistoryFilename;
-  // Read history file.
-  if (fs::exists(history_file)) {
-    auto ret = replxx_history_load(replxx_instance, history_file.string().c_str());
-    if (ret != 0) {
-      console::EchoFailure("Unable to read history file", history_file.string());
+  // When history is disabled, skip touching the filesystem entirely: don't
+  // resolve/create the history directory and don't read the history file.
+  fs::path history_file;
+  if (!no_history) {
+    fs::path history_dir = history;
+    if (history == (constants::kDefaultHistoryBaseDir + "/" + constants::kDefaultHistoryMemgraphDir)) {
+      // Fetch home dir for user.
+      history_dir = utils::GetUserHomeDir() / constants::kDefaultHistoryMemgraphDir;
+    }
+    if (!utils::EnsureDir(history_dir)) {
+      console::EchoFailure("History directory doesn't exist", history_dir.string());
       // Should program exit here or just continue with warning message?
       cleanup_resources();
       return 1;
+    }
+    history_file = history_dir / constants::kHistoryFilename;
+    // Read history file.
+    if (fs::exists(history_file)) {
+      auto ret = replxx_history_load(replxx_instance, history_file.string().c_str());
+      if (ret != 0) {
+        console::EchoFailure("Unable to read history file", history_file.string());
+        // Should program exit here or just continue with warning message?
+        cleanup_resources();
+        return 1;
+      }
     }
   }
 
