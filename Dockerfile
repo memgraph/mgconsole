@@ -27,6 +27,6 @@ FROM gcr.io/distroless/base-debian13:debug
 
 WORKDIR /mgconsole
 
-COPY --from=builder /mgconsole/build/src/mgconsole /usr/local/bin/mgconsole
+COPY --from=builder /bin/mgconsole /usr/local/bin/mgconsole
 
 ENTRYPOINT ["mgconsole"]
