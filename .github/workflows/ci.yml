@@ -215,7 +215,7 @@ jobs:
 
       - name: Build and test mgconsole in Docker container
         run: |
-          docker build -t mgconsole .
+          docker build --build-arg GIT_REF=${{ github.sha }} -t mgconsole .
 
       - name: Run latest Memgraph Docker container
         run: |
