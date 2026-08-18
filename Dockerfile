@@ -12,19 +12,21 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone https://github.com/memgraph/mgconsole.git /mgconsole
+ARG GIT_REF=master
+
+RUN git clone https://github.com/memgraph/mgconsole.git /mgconsole && \
+    git -C /mgconsole checkout --detach "$GIT_REF"
 
 WORKDIR /mgconsole
 
-RUN mkdir build && cd build && \
-    cmake -DCMAKE_BUILD_TYPE=Release .. && \
-    make && \
-    make install
+RUN cmake -B build -DCMAKE_BUILD_TYPE=Release . && \
+    cmake --build build && \
+    cmake --install build --strip
 
 FROM gcr.io/distroless/base-debian13:debug
 
 WORKDIR /mgconsole
 
-COPY --from=builder /mgconsole/build/src/mgconsole /usr/local/bin/mgconsole
+COPY --from=builder /bin/mgconsole /usr/local/bin/mgconsole
 
 ENTRYPOINT ["mgconsole"]

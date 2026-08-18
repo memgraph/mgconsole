@@ -24,8 +24,14 @@ The binary lands at `build/src/mgconsole`. `compile_commands.json` is emitted in
 `-Wall -Wextra -pedantic -Werror` is enabled — warnings break the build.
 
 **Static / release build** (matches what ships): `./build-generic-linux.sh` builds inside the
-`memgraph/mgbuild` Docker image with the Memgraph toolchain and `-DMGCONSOLE_STATIC_SSL=ON`,
-producing `build/generic/mgconsole`.
+`memgraph/mgbuild:v8_ubuntu-24.04` image with the Memgraph toolchain and
+`-DMGCONSOLE_STATIC_SSL=ON`, producing `build/generic/mgconsole`. It exports `CC`/`CXX` pointing
+at `/opt/toolchain-v8/bin/{gcc,g++}` (configured `--with-sysroot`) plus
+`OPENSSL_ROOT_DIR=/opt/toolchain-v8/sysroot/usr`, so everything — including the
+`ExternalProject` deps, which inherit the environment but not CMake toolchain settings — links
+against the toolchain's GLIBC 2.31 sysroot instead of the image's GLIBC 2.39. That's what keeps
+the generic binary runnable on older distros; the script prints the maximum `GLIBC_*` version
+the binary ends up referencing (currently 2.25).
 
 ## Test
 

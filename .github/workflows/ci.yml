@@ -1,6 +1,6 @@
 name: CI
 
-on: 
+on:
   push:
   workflow_dispatch:
     inputs:
@@ -43,7 +43,7 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
         with:
           name: "mgconsole_ctest.log"
-          path: build/Testing/Temporary/LastTest.log 
+          path: build/Testing/Temporary/LastTest.log
 
   build_windows_mingw:
     name: Build and test mgconsole on Windows
@@ -200,9 +200,9 @@ jobs:
         run: |
           docker rmi $MEMGRAPH_IMAGE || true
           if [[ "${{ matrix.arch }}" == "X64" ]]; then
-            docker rmi memgraph/mgbuild:v7_centos-9 || true
+            docker rmi memgraph/mgbuild:v8_ubuntu-24.04 || true
           elif [[ "${{ matrix.arch }}" == "ARM64" ]]; then
-            docker rmi memgraph/mgbuild:v7_debian-12-arm || true
+            docker rmi memgraph/mgbuild:v8_ubuntu-24.04-arm || true
           fi
 
   docker_build_and_test:
@@ -215,7 +215,7 @@ jobs:
 
       - name: Build and test mgconsole in Docker container
         run: |
-          docker build -t mgconsole .
+          docker build --build-arg GIT_REF=${{ github.sha }} -t mgconsole .
 
       - name: Run latest Memgraph Docker container
         run: |
@@ -240,11 +240,11 @@ jobs:
       - name: Test mgconsole in Docker container
         run: |
           # Test pipe directly into docker run
-          echo "RETURN 1;" | docker run --network host mgconsole:latest
+          echo "RETURN 1;" | docker run --network host -i mgconsole:latest
 
           # Test entrypoint override with echo
           docker run --network host --rm --entrypoint sh mgconsole:latest -c "echo 'RETURN 1;' | mgconsole"
-      
+
       - name: Cleanup docker images
         run: |
           docker rmi mgconsole || true
