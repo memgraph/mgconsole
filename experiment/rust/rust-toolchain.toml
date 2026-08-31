@@ -1,0 +1,10 @@
+# The MSRV is enforced by `rust-version = "1.96"` in the workspace Cargo.toml
+# (cargo errors on an older toolchain). This file's job is to guarantee the
+# lint/format components are present on whatever stable toolchain is in use.
+#
+# Channel is left as `stable` rather than an exact `1.96.0` so a fresh checkout
+# does not force a separate toolchain download in an offline environment; bump
+# `rust-version` when a newer feature is needed.
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]

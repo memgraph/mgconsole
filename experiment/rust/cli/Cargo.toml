@@ -1,0 +1,46 @@
+[package]
+name = "mgconsole"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Rust Memgraph console (interactive REPL frontend)."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "mgconsole"
+path = "src/main.rs"
+
+[features]
+# The full-screen TUI workbench (ADR 0010) is the default interactive Frontend,
+# so `tui` is in the default set; `cargo build --no-default-features` yields a
+# lean REPL-only binary that compiles without ratatui/crossterm (issue 01 AC 6).
+default = ["tui"]
+tui = ["dep:ratatui", "dep:tui-textarea", "dep:crossterm", "dep:futures"]
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+mgconsole-core = { path = "../core" }
+rpassword = "7.5.4"
+# Config file (issue 02): a hand-edited `~/.mgconsole/config.toml` with a
+# `[settings]` table, parsed via serde-derived raw types.
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+rustyline = { version = "15", features = ["derive", "with-file-history"] }
+terminal_size = "0.4"
+tokio = { workspace = true }
+# Workbench (feature `tui`). Pinned to ratatui 0.29 so tui-textarea 0.7 shares a
+# single ratatui (and a single crossterm). `crossterm` is named directly only to
+# turn on its `event-stream` feature (unified onto ratatui's crossterm 0.28), so
+# the async loop multiplexes terminal input via `EventStream`; `futures` provides
+# `StreamExt::next`.
+ratatui = { version = "0.29", optional = true }
+tui-textarea = { version = "0.7", optional = true }
+crossterm = { version = "0.28", features = ["event-stream"], optional = true }
+futures = { version = "0.3", optional = true }
+
+[dev-dependencies]
+testcontainers = "0.27"
+tokio = { version = "1", features = ["full"] }

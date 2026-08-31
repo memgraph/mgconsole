@@ -1,0 +1,6 @@
+# Formatting contract for the workspace. The project formats with stable
+# rustfmt's defaults — `cargo fmt` (component pinned in rust-toolchain.toml) is
+# the single source of truth, so style is never argued in review. `max_width`
+# is stated explicitly (it is also the default) to pin the one knob most likely
+# to drift and to document that the wrapping you see is rustfmt's, not hand-rolled.
+max_width = 100

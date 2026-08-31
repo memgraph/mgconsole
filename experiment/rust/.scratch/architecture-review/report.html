@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Architecture review — mgconsole</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose", flowchart: { htmlLabels: true, curve: "basis" } });
+    </script>
+    <style>
+      .seam { stroke-dasharray: 5 4; }
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); }
+      .label { font-size: 0.62rem; letter-spacing: 0.08em; text-transform: uppercase; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .mermaid { display:flex; justify-content:center; }
+      .struck { text-decoration: line-through; text-decoration-thickness: 1px; opacity: 0.55; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans antialiased">
+    <main class="max-w-5xl mx-auto px-6 py-12 space-y-14">
+
+      <!-- ============ HEADER ============ -->
+      <header class="space-y-5">
+        <div class="flex items-baseline justify-between flex-wrap gap-2">
+          <h1 class="font-serif text-4xl tracking-tight">Architecture review — <span class="text-indigo-700">mgconsole</span></h1>
+          <span class="text-sm text-slate-500">2026-06-11 · grilled &amp; resolved</span>
+        </div>
+        <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-5 py-4 space-y-2">
+          <div class="label text-emerald-700">Outcome after grilling</div>
+          <p class="text-emerald-950 text-sm max-w-3xl">
+            Each candidate below was worked against the <strong>deletion test</strong> and the real call graph.
+            Three of the four <strong>did not survive</strong>: the automated pass over-identified duplication it
+            couldn't disambiguate without the call graph. The codebase is well-factored. The one change worth
+            making — A, demoted from a "deepening" to a thin string dedupe — <strong>shipped</strong>.
+          </p>
+          <div class="flex flex-wrap gap-2 text-xs pt-1">
+            <span class="px-2.5 py-1 rounded-full bg-emerald-200 text-emerald-900 font-semibold">A · Demoted → thin dedupe (shipped)</span>
+            <span class="px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 font-semibold">B · Rejected</span>
+            <span class="px-2.5 py-1 rounded-full bg-rose-100 text-rose-800 font-semibold">C · Rejected</span>
+            <span class="px-2.5 py-1 rounded-full bg-slate-200 text-slate-700 font-semibold">D · Skipped</span>
+          </div>
+        </div>
+        <p class="text-slate-600 max-w-3xl text-sm">
+          The original hypotheses and diagrams are kept below for the record; each card now opens with the
+          <strong>verdict</strong> the grilling reached and the load-bearing reason.
+        </p>
+        <!-- legend -->
+        <div class="flex flex-wrap gap-5 text-xs text-slate-600 border-y border-slate-200 py-3">
+          <span class="flex items-center gap-2"><span class="inline-block w-6 h-4 border border-slate-400 bg-white"></span> module</span>
+          <span class="flex items-center gap-2"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#475569" stroke-width="2" class="seam"/></svg> seam</span>
+          <span class="flex items-center gap-2"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#dc2626" stroke-width="2"/></svg> duplicated / leaking</span>
+          <span class="flex items-center gap-2"><span class="inline-block w-6 h-4 deep border border-slate-900"></span> deep module</span>
+        </div>
+      </header>
+
+      <section id="candidates" class="space-y-16">
+
+        <!-- ===================================================== -->
+        <!-- CANDIDATE A -->
+        <!-- ===================================================== -->
+        <article id="cand-a" class="space-y-6">
+          <div class="flex items-center gap-3 flex-wrap">
+            <h2 class="font-serif text-2xl">A · Collapse the Meta-command dispatch onto one decision</h2>
+            <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800">Was: Strong</span>
+            <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-600 text-white">Verdict: demoted → thin dedupe · shipped</span>
+          </div>
+
+          <!-- verdict callout -->
+          <div class="rounded-lg border-l-4 border-emerald-500 bg-emerald-50 px-5 py-4 space-y-2 text-sm">
+            <p class="text-emerald-950"><strong>The "collapse" doesn't survive the deletion test.</strong> A shared
+            <span class="mono">CommandIntent</span> is a near-1:1 relabel of <span class="mono">MetaCommand</span>: it removes
+            neither dispatcher's match. Its only load-bearing content is the policy it carries — strip that out and it's a
+            pass-through (delete it, nothing concentrates). The sync-vs-async execution split is <strong>mandated by ADR 0010</strong>
+            (the non-blocking Workbench emits Effects; <span class="mono">QueryRunner</span> is synchronous), so it cannot move
+            behind a shared seam.</p>
+            <p class="text-emerald-950"><strong>What was real:</strong> the read-only-off message had already <em>drifted</em>
+            between the two Frontends. Shipped: three <span class="mono">pub const</span> operator-message strings in
+            <span class="mono">repl.rs</span> (readonly-off, watch-in-tx, connect-aborts), referenced by both dispatchers.
+            Refusal rules stay inline; the two dispatchers stay separate by design. No intent layer, no ADR.</p>
+          </div>
+
+          <div class="mono text-sm text-slate-500">
+            cli/src/repl.rs:622 <span class="text-slate-400">dispatch_meta · 165 lines · sync</span> &nbsp;·&nbsp;
+            cli/src/workbench/update.rs:1720 <span class="text-slate-400">handle_meta · 258 lines · async</span> &nbsp;·&nbsp;
+            cli/src/repl.rs:44 <span class="text-slate-400">MetaCommand (one parser, shared)</span>
+          </div>
+
+          <details class="text-sm">
+            <summary class="cursor-pointer text-slate-500 hover:text-slate-700">Original hypothesis &amp; diagrams (superseded)</summary>
+            <div class="pt-4 space-y-4">
+            <!-- before / after -->
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 bg-white p-4">
+                <div class="label text-slate-400 mb-2">Before — one parser, two dispatchers</div>
+                <pre class="mermaid">
+flowchart TB
+  P["MetaCommand parser<br/><span style='font-size:10px'>meta_command() — shared ✓</span>"]
+  P --> R["dispatch_meta (REPL)"]
+  P --> W["handle_meta (Workbench)"]
+  subgraph Rd["repl decisions"]
+    R --> R1["preconditions"]
+    R --> R2["read-only @ connect-time msg"]
+    R --> R3[":sysinfo query loop"]
+    R --> R4[":watch refusal rule"]
+  end
+  subgraph Wd["workbench decisions"]
+    W --> W1["preconditions"]
+    W --> W2["read-only @ connect-time msg"]
+    W --> W3[":sysinfo query loop"]
+    W --> W4[":watch refusal rule"]
+  end
+  R2 -. only this drifted .-> W2
+  classDef dup stroke:#dc2626,stroke-width:1.5px,fill:#fef2f2;
+  class R2,W2 dup
+  classDef ok fill:#eef2ff,stroke:#6366f1;
+  class P ok
+                </pre>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-white p-4">
+                <div class="label text-slate-400 mb-2">Proposed (rejected) — shared intent layer</div>
+                <pre class="mermaid">
+flowchart TB
+  P["MetaCommand parser"] --> D["Command resolver → CommandIntent<br/><span style='font-size:10px'>near-1:1 relabel — fails the deletion test</span>"]
+  D --> R["REPL executor (still a full match)"]
+  D --> W["Workbench executor (still a full match)"]
+  classDef dead fill:#f1f5f9,stroke:#94a3b8,color:#64748b;
+  class D dead
+                </pre>
+              </div>
+            </div>
+            <p class="text-slate-500 text-xs">The mass that looked duplicated is mostly essential per-Frontend divergence
+            (sync write vs Effect emit; blocking <span class="mono">:watch</span> vs tick-driven; <span class="mono">:source</span>
+            meta+Cypher vs Cypher-only per ADR 0017; text vs overlay/drawer). Only the three message strings concentrate.</p>
+            </div>
+          </details>
+        </article>
+
+        <!-- ===================================================== -->
+        <!-- CANDIDATE B -->
+        <!-- ===================================================== -->
+        <article id="cand-b" class="space-y-6">
+          <div class="flex items-center gap-3 flex-wrap">
+            <h2 class="font-serif text-2xl">B · Merge the result-layout split into one module</h2>
+            <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">Was: Worth exploring</span>
+            <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-rose-600 text-white">Verdict: rejected</span>
+          </div>
+
+          <div class="rounded-lg border-l-4 border-rose-500 bg-rose-50 px-5 py-4 space-y-2 text-sm">
+            <p class="text-rose-950"><strong>The split tracks real consumer boundaries.</strong> The report assumed
+            <span class="mono">render_table</span> was internal to <span class="mono">display.rs</span> — but
+            <span class="mono">core/src/import.rs:170</span> calls it <strong>directly</strong>. An import wants a plain
+            table; it has no notion of Display mode (no <span class="mono">auto</span>, no <span class="mono">vertical</span>
+            fallback).</p>
+            <p class="text-rose-950"><strong>Deletion test runs backwards:</strong> merge <span class="mono">tabular</span>
+            into <span class="mono">display</span> and the import path must now depend on the Display-mode module just to get
+            a table — <em>worse</em> coupling. The <span class="mono">render_records</span> interface is already deep; the
+            "round-trip" is documented, deliberate reuse of the real measurement.</p>
+          </div>
+
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <div class="label text-slate-400 mb-3">Three modules, three distinct external consumers — correct factoring</div>
+            <table class="w-full text-sm">
+              <thead><tr class="text-left text-slate-400 label"><th class="py-1">module</th><th>job</th><th>external callers</th></tr></thead>
+              <tbody class="align-top">
+                <tr class="border-t border-slate-100"><td class="py-2 mono">render.rs</td><td>Value → cell text</td><td>format writers, REPL, workbench (×many)</td></tr>
+                <tr class="border-t border-slate-100"><td class="py-2 mono">tabular.rs</td><td>header+rows → table</td><td><span class="font-semibold text-rose-700">import.rs</span>, display.rs</td></tr>
+                <tr class="border-t border-slate-100"><td class="py-2 mono">display.rs</td><td>Display-mode dispatch</td><td>main.rs, workbench export</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <details class="text-sm">
+            <summary class="cursor-pointer text-slate-500 hover:text-slate-700">Original hypothesis (superseded)</summary>
+            <p class="pt-3 text-slate-500">Claimed "how a Display mode renders" bounced across three thin modules with a leaky
+            measure→decide round-trip. In fact the round-trip is documented reuse, and the three modules each have distinct
+            external callers — decomposition, not fragmentation.</p>
+          </details>
+        </article>
+
+        <!-- ===================================================== -->
+        <!-- CANDIDATE C -->
+        <!-- ===================================================== -->
+        <article id="cand-c" class="space-y-6">
+          <div class="flex items-center gap-3 flex-wrap">
+            <h2 class="font-serif text-2xl">C · Concentrate connection-target resolution</h2>
+            <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">Was: Worth exploring</span>
+            <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-rose-600 text-white">Verdict: rejected</span>
+          </div>
+
+          <div class="rounded-lg border-l-4 border-rose-500 bg-rose-50 px-5 py-4 space-y-2 text-sm">
+            <p class="text-rose-950"><strong>Two different problems, not one duplicated.</strong> Startup is a per-field
+            <em>precedence merge</em> (<span class="mono">explicit &lt; CLI &lt; profile</span>) producing
+            <span class="mono">Connection</span>. <span class="mono">:connect</span> is <em>profile-name-or-host:port</em>,
+            inheriting the current Session, producing <span class="mono">ConnectTarget</span>.</p>
+            <p class="text-rose-950">The <span class="mono">select</span> vs <span class="mono">profiles.get</span>
+            "inconsistency" is <strong>justified</strong>: <span class="mono">--profile</span> is must-be-a-profile (fatal,
+            helpful error); <span class="mono">:connect &lt;target&gt;</span> is maybe-a-profile-else-a-host (reportable).
+            The only literal overlap is a ~2-line credentials wrap with <em>different inputs</em>. Shared knowledge already
+            lives in the <span class="mono">Profile</span> struct. A unifying resolver would <em>add</em> complexity.</p>
+          </div>
+
+          <details class="text-sm">
+            <summary class="cursor-pointer text-slate-500 hover:text-slate-700">Original hypothesis (superseded)</summary>
+            <p class="pt-3 text-slate-500">Claimed a Connection profile resolved two ways with two APIs. The two paths solve
+            genuinely different resolution problems with different output types (<span class="mono">Connection</span> vs
+            <span class="mono">ConnectTarget</span>) and different argument grammars; the API difference encodes that.</p>
+          </details>
+        </article>
+
+        <!-- ===================================================== -->
+        <!-- CANDIDATE D -->
+        <!-- ===================================================== -->
+        <article id="cand-d" class="space-y-6">
+          <div class="flex items-center gap-3 flex-wrap">
+            <h2 class="font-serif text-2xl">D · Lift the two Frontend drivers out of <span class="mono text-xl">main.rs</span></h2>
+            <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-200 text-slate-700">Was: Speculative</span>
+            <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-500 text-white">Verdict: skipped</span>
+          </div>
+
+          <div class="rounded-lg border-l-4 border-slate-400 bg-slate-100 px-5 py-4 space-y-2 text-sm">
+            <p class="text-slate-700"><strong>Locality, not depth — and mis-aimed.</strong> The dispatch
+            (<span class="mono">run_interactive</span>) is ~120 lines and belongs in main. The real bulk is ~500 lines of
+            REPL <em>production adapters</em> (<span class="mono">SessionRunner</span>, <span class="mono">RustylineSource</span>,
+            <span class="mono">MgHelper</span>) sitting far from the <span class="mono">QueryRunner</span>/<span class="mono">LineSource</span>
+            seams they satisfy. Relocating them is a navigability tidy with no interface or test change.</p>
+            <p class="text-slate-700">The report's "<span class="mono">load_queries()</span> doubles FS I/O" was <strong>wrong</strong> —
+            it's two arms of a <span class="mono">match</span>; exactly one runs. Skipped: not architectural, cuts against the
+            review's own finding that the codebase is well-factored.</p>
+          </div>
+        </article>
+
+      </section>
+
+      <!-- ============ TOP RECOMMENDATION → WHAT SHIPPED ============ -->
+      <section id="top-recommendation" class="pt-4">
+        <div class="rounded-xl deep text-white p-7 space-y-3">
+          <div class="label text-indigo-300">What shipped</div>
+          <h2 class="font-serif text-2xl">A, demoted: canonicalize the shared Meta-command policy messages</h2>
+          <p class="text-slate-300 max-w-3xl">
+            The grilling's net finding: <strong>the codebase is well-architected.</strong> B and C were rejected as correct
+            factoring (the automated pass couldn't see <span class="mono text-slate-100">import.rs</span> using
+            <span class="mono text-slate-100">render_table</span>, or the two resolvers solving different problems); D is
+            locality-only. The single real issue was one <em>drifted</em> operator string.
+          </p>
+          <p class="text-slate-300 max-w-3xl">
+            Shipped: three <span class="mono text-slate-100">pub const</span> strings in
+            <span class="mono text-slate-100">repl.rs</span> (readonly-off, watch-in-tx, connect-aborts), referenced by both
+            dispatchers — the previously-divergent read-only message is now identical across Frontends. Pure hygiene, no
+            behaviour change; 442 lib tests green, clippy + lean clean. No intent layer, no new module, no ADR.
+          </p>
+        </div>
+      </section>
+
+    </main>
+  </body>
+</html>

@@ -1,0 +1,6 @@
+point_2d_cartesian	point({srid: 7203, x: 1.0, y: 2.0})
+point_2d_wgs84	point({srid: 4326, x: 1.0, y: 2.0})
+point_3d_cartesian	point({srid: 9157, x: 1.0, y: 2.0, z: 3.0})
+point_3d_wgs84	point({srid: 4979, x: 1.0, y: 2.0, z: 3.0})
+point_2d_fractional	point({srid: 4326, x: 1.5, y: 2.25})
+enum	Status::Active
