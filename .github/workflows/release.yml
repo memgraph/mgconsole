@@ -81,9 +81,102 @@ jobs:
     with:
       build-static: true
 
+  # Signs the universal macOS binary with Memgraph's Developer ID and notarizes
+  # it with Apple, so Gatekeeper lets it run without clearing the quarantine
+  # flag. Reads these repository/organization secrets:
+  #
+  #   APPLE_CSC_LINK          the "Developer ID Application" certificate and its private key,
+  #                           as a base64-encoded .p12 (the same secrets as Memgraph Lab)
+  #   APPLE_CSC_KEY_PASSWORD  the .p12's password
+  #   SIGNING_IDENTITY        optional: the certificate's name, e.g. "Memgraph Ltd (<team id>)";
+  #                           needed only when the .p12 holds more than one such identity
+  #   APPLE_ID                the Apple ID that notarizes
+  #   APPLE_ID_PASSWORD       an app-specific password for APPLE_ID
+  #   APPLE_TEAM_ID           the team id, e.g. 9CG993C54M
+  sign-macos:
+    name: Sign and notarize macOS binary
+    needs: [build-binaries]
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          sparse-checkout: |
+            .github/actions
+
+      - name: Download artifacts MacOS
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: "mgconsole MacOS universal build"
+          path: dist
+
+      - name: Check the unsigned binary
+        run: |
+          if [ ! -s dist/mgconsole ]; then echo "dist/mgconsole is missing"; exit 1; fi
+          lipo -info dist/mgconsole
+
+      # A throwaway keychain holds the certificate for this job only; it is
+      # deleted in the last step, and the runner itself is discarded anyway.
+      - name: Import the signing certificate
+        id: cert
+        uses: ./.github/actions/import-apple-certificate
+        with:
+          p12: ${{ secrets.APPLE_CSC_LINK }}
+          password: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          kind: Developer ID Application
+          identity: ${{ secrets.SIGNING_IDENTITY }}
+
+      # Signs with the hardened runtime and a secure timestamp, both of which
+      # notarization requires. codesign signs every slice of the universal
+      # binary. No entitlements: mgconsole is plain native code with OpenSSL
+      # linked statically, so the hardened runtime's defaults are enough.
+      - name: Sign
+        env:
+          IDENTITY: ${{ steps.cert.outputs.identity }}
+        run: |
+          codesign --force --options runtime --timestamp \
+            --identifier com.memgraph.mgconsole \
+            --sign "$IDENTITY" dist/mgconsole
+          codesign --verify --strict --verbose=2 dist/mgconsole
+          codesign --display --verbose=2 dist/mgconsole
+
+      # The runner is Apple silicon, so this runs the arm64 slice under the
+      # hardened runtime.
+      - name: Run the signed binary
+        run: |
+          chmod +x dist/mgconsole
+          dist/mgconsole --version
+
+      # notarytool takes a zip, not a bare binary. A bare binary can't be
+      # stapled; Gatekeeper fetches the ticket online the first time it runs.
+      - name: Zip the binary for notarization
+        run: ditto -c -k dist "$RUNNER_TEMP/mgconsole-macos.zip"
+
+      - name: Notarize
+        uses: ./.github/actions/notarize
+        with:
+          file: ${{ runner.temp }}/mgconsole-macos.zip
+          apple-id: ${{ secrets.APPLE_ID }}
+          password: ${{ secrets.APPLE_ID_PASSWORD }}
+          team-id: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Save signed mgconsole MacOS universal build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: "mgconsole MacOS universal build signed"
+          path: dist/mgconsole
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove the keychain
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security delete-keychain "$RUNNER_TEMP/apple-signing.keychain-db" || true
+
   upload-binaries:
     name: Upload binaries
-    needs: [build-binaries, build-and-push]
+    needs: [build-binaries, build-and-push, sign-macos]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -111,7 +204,7 @@ jobs:
       - name: Download artifacts MacOS
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
         with:
-          name: "mgconsole MacOS universal build"
+          name: "mgconsole MacOS universal build signed"
           path: temp-macos
 
       - name: Download artifacts Windows
