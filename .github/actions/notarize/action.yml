@@ -1,0 +1,30 @@
+name: Notarize with Apple
+description: >-
+  Submits a .zip, .pkg or .dmg to Apple's notary service, waits for the
+  verdict, and fails with Apple's log if it is not accepted. Stapling, where
+  the file type allows it, is left to the caller.
+
+inputs:
+  file:
+    description: Path of the .zip, .pkg or .dmg to notarize
+    required: true
+  apple-id:
+    description: The Apple ID that notarizes
+    required: true
+  password:
+    description: An app-specific password for the Apple ID
+    required: true
+  team-id:
+    description: The Apple Developer team id
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        FILE: ${{ inputs.file }}
+        APPLE_ID: ${{ inputs.apple-id }}
+        APPLE_ID_PASSWORD: ${{ inputs.password }}
+        APPLE_TEAM_ID: ${{ inputs.team-id }}
+      run: bash "$GITHUB_ACTION_PATH/notarize.sh"

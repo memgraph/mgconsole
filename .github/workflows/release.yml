@@ -81,9 +81,102 @@ jobs:
     with:
       build-static: true
 
+  # Signs the universal macOS binary with Memgraph's Developer ID and notarizes
+  # it with Apple, so Gatekeeper lets it run without clearing the quarantine
+  # flag. Reads these repository/organization secrets:
+  #
+  #   APPLE_CSC_LINK          the "Developer ID Application" certificate and its private key,
+  #                           as a base64-encoded .p12 (the same secrets as Memgraph Lab)
+  #   APPLE_CSC_KEY_PASSWORD  the .p12's password
+  #   SIGNING_IDENTITY        optional: the certificate's name, e.g. "Memgraph Ltd (<team id>)";
+  #                           needed only when the .p12 holds more than one such identity
+  #   APPLE_ID                the Apple ID that notarizes
+  #   APPLE_ID_PASSWORD       an app-specific password for APPLE_ID
+  #   APPLE_TEAM_ID           the team id, e.g. 9CG993C54M
+  sign-macos:
+    name: Sign and notarize macOS binary
+    needs: [build-binaries]
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          sparse-checkout: |
+            .github/actions
+
+      - name: Download artifacts MacOS
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: "mgconsole MacOS universal build"
+          path: dist
+
+      - name: Check the unsigned binary
+        run: |
+          if [ ! -s dist/mgconsole ]; then echo "dist/mgconsole is missing"; exit 1; fi
+          lipo -info dist/mgconsole
+
+      # A throwaway keychain holds the certificate for this job only; it is
+      # deleted in the last step, and the runner itself is discarded anyway.
+      - name: Import the signing certificate
+        id: cert
+        uses: ./.github/actions/import-apple-certificate
+        with:
+          p12: ${{ secrets.APPLE_CSC_LINK }}
+          password: ${{ secrets.APPLE_CSC_KEY_PASSWORD }}
+          kind: Developer ID Application
+          identity: ${{ secrets.SIGNING_IDENTITY }}
+
+      # Signs with the hardened runtime and a secure timestamp, both of which
+      # notarization requires. codesign signs every slice of the universal
+      # binary. No entitlements: mgconsole is plain native code with OpenSSL
+      # linked statically, so the hardened runtime's defaults are enough.
+      - name: Sign
+        env:
+          IDENTITY: ${{ steps.cert.outputs.identity }}
+        run: |
+          codesign --force --options runtime --timestamp \
+            --identifier com.memgraph.mgconsole \
+            --sign "$IDENTITY" dist/mgconsole
+          codesign --verify --strict --verbose=2 dist/mgconsole
+          codesign --display --verbose=2 dist/mgconsole
+
+      # The runner is Apple silicon, so this runs the arm64 slice under the
+      # hardened runtime.
+      - name: Run the signed binary
+        run: |
+          chmod +x dist/mgconsole
+          dist/mgconsole --version
+
+      # notarytool takes a zip, not a bare binary. A bare binary can't be
+      # stapled; Gatekeeper fetches the ticket online the first time it runs.
+      - name: Zip the binary for notarization
+        run: ditto -c -k dist "$RUNNER_TEMP/mgconsole-macos.zip"
+
+      - name: Notarize
+        uses: ./.github/actions/notarize
+        with:
+          file: ${{ runner.temp }}/mgconsole-macos.zip
+          apple-id: ${{ secrets.APPLE_ID }}
+          password: ${{ secrets.APPLE_ID_PASSWORD }}
+          team-id: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Save signed mgconsole MacOS universal build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: "mgconsole MacOS universal build signed"
+          path: dist/mgconsole
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove the keychain
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security delete-keychain "$RUNNER_TEMP/apple-signing.keychain-db" || true
+
   upload-binaries:
     name: Upload binaries
-    needs: [build-binaries, build-and-push]
+    needs: [build-binaries, build-and-push, sign-macos]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -111,7 +204,7 @@ jobs:
       - name: Download artifacts MacOS
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
         with:
-          name: "mgconsole MacOS universal build"
+          name: "mgconsole MacOS universal build signed"
           path: temp-macos
 
       - name: Download artifacts Windows
@@ -120,13 +213,21 @@ jobs:
           name: "mgconsole Windows build"
           path: temp-windows
 
+      - name: Download artifacts Windows ARM64
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0
+        with:
+          name: "mgconsole Windows build ARM64"
+          path: temp-windows-arm64
+
       - name: Organize binaries
         run: |
-          mkdir -p linux-x86_64 linux-aarch64 macos windows
+          mkdir -p linux-x86_64 linux-aarch64 macos windows windows-arm64
           find temp-linux-x64 -name "mgconsole" -type f | head -1 | xargs -I {} cp {} linux-x86_64/mgconsole
           find temp-linux-arm64 -name "mgconsole" -type f | head -1 | xargs -I {} cp {} linux-aarch64/mgconsole
           find temp-macos -name "mgconsole" -type f | head -1 | xargs -I {} cp {} macos/mgconsole
           find temp-windows -name "mgconsole.exe" -type f | head -1 | xargs -I {} cp {} windows/mgconsole.exe
+          find temp-windows-arm64 -name "mgconsole.exe" -type f | head -1 | xargs -I {} cp {} windows-arm64/mgconsole.exe
+          chmod +x linux-x86_64/mgconsole linux-aarch64/mgconsole macos/mgconsole windows/mgconsole.exe windows-arm64/mgconsole.exe
 
       - name: Upload binaries to S3
         env:
@@ -137,6 +238,7 @@ jobs:
           aws s3 cp linux-aarch64/mgconsole s3://${{ env.S3_BUCKET }}/${{ env.S3_BASE_PREFIX }}/linux-aarch64/mgconsole
           aws s3 cp macos/mgconsole s3://${{ env.S3_BUCKET }}/${{ env.S3_BASE_PREFIX }}/macos/mgconsole
           aws s3 cp windows/mgconsole.exe s3://${{ env.S3_BUCKET }}/${{ env.S3_BASE_PREFIX }}/windows/mgconsole.exe
+          aws s3 cp windows-arm64/mgconsole.exe s3://${{ env.S3_BUCKET }}/${{ env.S3_BASE_PREFIX }}/windows-arm64/mgconsole.exe
 
       - name: Configure Git
         run: |
@@ -149,7 +251,7 @@ jobs:
           echo "TAG=${TAG}" >> $GITHUB_ENV
           git tag $TAG
           git push origin $TAG
-  
+
       # TODO(matt): this action is archived, we should probably find a suitable replacement
       - name: Create GitHub Release
         id: create_release
@@ -168,6 +270,7 @@ jobs:
           tar -czvf mgconsole-${{ env.TAG }}-linux-aarch64.tar.gz -C linux-aarch64 mgconsole
           tar -czvf mgconsole-${{ env.TAG }}-macos.tar.gz -C macos mgconsole
           tar -czvf mgconsole-${{ env.TAG }}-windows.tar.gz -C windows mgconsole.exe
+          tar -czvf mgconsole-${{ env.TAG }}-windows-arm64.tar.gz -C windows-arm64 mgconsole.exe
 
       # TODO(matt): this action is archived, we should probably find a suitable replacement
       - name: Upload binaries to Release Linux X64
@@ -208,4 +311,14 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./mgconsole-${{ env.TAG }}-windows.tar.gz
           asset_name: mgconsole-${{ env.TAG }}-windows.tar.gz
+          asset_content_type: application/octet-stream
+
+      - name: Upload binaries to Release Windows ARM64
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5  # v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./mgconsole-${{ env.TAG }}-windows-arm64.tar.gz
+          asset_name: mgconsole-${{ env.TAG }}-windows-arm64.tar.gz
           asset_content_type: application/octet-stream

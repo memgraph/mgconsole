@@ -7,3 +7,6 @@ bin/
 # vim temporary files
 *.swp
 *.swo
+
+# editor / language server caches (clangd, neocmakelsp)
+.cache/

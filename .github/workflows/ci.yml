@@ -77,6 +77,44 @@ jobs:
           name: "mgconsole Windows build"
           path: build/src/mgconsole.exe
 
+  build_windows_arm64:
+    name: Build mgconsole on Windows ARM64
+    runs-on: windows-11-arm
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Set-up repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      # MSYS2 only ships an LLVM-based environment (clang + libc++) for ARM64.
+      - uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda  # v2.30.0
+        with:
+          msystem: CLANGARM64
+          update: true
+          install: >-
+            git base-devel
+            mingw-w64-clang-aarch64-toolchain
+            mingw-w64-clang-aarch64-cmake
+            mingw-w64-clang-aarch64-ninja
+            mingw-w64-clang-aarch64-openssl
+
+      - name: Build and install mgconsole
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release .
+          cmake --build build --parallel
+          cmake --install build
+
+      - name: Check binary architecture
+        run: |
+          file build/src/mgconsole.exe
+
+      - name: Save mgconsole Windows ARM64 build
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0
+        with:
+          name: "mgconsole Windows build ARM64"
+          path: build/src/mgconsole.exe
+
   build_apple_arm64:
     name: Build and test mgconsole on Apple ARM64
     runs-on: macos-15

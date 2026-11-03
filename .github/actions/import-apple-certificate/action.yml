@@ -1,0 +1,43 @@
+name: Import an Apple signing certificate
+description: >-
+  Imports a Developer ID certificate (.p12) into a throwaway keychain on a
+  macOS runner and finds its signing identity. Delete the keychain at the end
+  of the job with `security delete-keychain <keychain output>`.
+
+inputs:
+  p12:
+    description: The certificate and its private key, as a base64-encoded .p12
+    required: true
+  password:
+    description: The .p12's password
+    required: true
+  kind:
+    description: Which identity to look for, "Developer ID Application" or "Developer ID Installer"
+    required: true
+  identity:
+    description: >-
+      Name of the identity to require, e.g. "Memgraph Ltd (<team id>)"; the
+      "<kind>: " prefix is optional. When empty, the .p12 must hold exactly one
+      identity of that kind.
+    required: false
+    default: ""
+
+outputs:
+  identity:
+    description: The full name of the identity found, to pass to codesign or productbuild
+    value: ${{ steps.import.outputs.identity }}
+  keychain:
+    description: Path of the keychain the certificate was imported into
+    value: ${{ steps.import.outputs.keychain }}
+
+runs:
+  using: composite
+  steps:
+    - id: import
+      shell: bash
+      env:
+        P12: ${{ inputs.p12 }}
+        P12_PASSWORD: ${{ inputs.password }}
+        KIND: ${{ inputs.kind }}
+        IDENTITY: ${{ inputs.identity }}
+      run: bash "$GITHUB_ACTION_PATH/import.sh"
