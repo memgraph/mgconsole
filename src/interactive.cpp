@@ -172,6 +172,7 @@ int Run(utils::bolt::Config &bolt_config, const std::string &history, bool no_hi
   console::EchoInfo("Connected to 'memgraph://" + bolt_config.host + ":" + std::to_string(bolt_config.port) + "'");
   console::EchoInfo("Type :help for shell usage");
   console::EchoInfo("Quit the shell by typing Ctrl-D(eof) or :quit");
+  console::EchoInfo(std::string(constants::kMgAgentMessage));
 
   while (true) {
     auto query = query::GetQuery(replxx_instance);
