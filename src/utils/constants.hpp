@@ -38,7 +38,7 @@ constexpr const std::string_view kDocs =
 // Shown once when the interactive shell starts.
 constexpr const std::string_view kMgAgentMessage =
     "Try Memgraph Agent (mgagent), an AI-powered terminal assistant for Memgraph: "
-    "https://memgraph.com/download";
+    "https://memgraph.com/download#memgraph-agent";
 
 constexpr const std::string_view kCommandQuit = ":quit";
 constexpr const std::string_view kCommandHelp = ":help";
